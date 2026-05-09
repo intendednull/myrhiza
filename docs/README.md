@@ -83,7 +83,8 @@ External systems we learn from. Living documents — update on revision, archive
 
 ### Sync protocols
 
-_(empty — Willow protocol, Automerge candidates; iroh-docs covered under Iroh folder)_
+- [CRDTs (Automerge + Yjs + Loro)](prior-art/crdts/) — multi-library survey of the three production-grade open-source CRDT libraries Myrhiza could build `state-apply` convergence on top of. 13 files, ~1,640 lines. Per-library deep dives (Automerge: Rust + Ink & Switch + RGA + Peritext; Yjs: pure-JS + bus-factor 1 + YATA + largest editor ecosystem; Loro: Rust-native + Fugue + Moveable Tree + bus-factor 1 + no at-scale users). Cross-cutting files cover CRDT theory (Treedoc → Logoot → WOOT → RGA → YATA → Fugue → Eg-walker lineage), history 2006-2026, ecosystem (Notion-uses-Yjs explicitly debunked), governance (bus-factor analysis), comparisons, open problems (what no CRDT solves: schema migration, authority, validation), critiques (Kleppmann's Eg-walker pivot, Boodman/Rocicorp), and lessons (validates / avoid / borrow + recommendation matrix). All three are MIT; none ship as WASM Component Model artifacts. Consult before any spec on `state-apply` convergence semantics, deterministic-merge ABI, or schema-migration story. `[active]`
+- _(future candidates: Willow protocol, Eg-walker / diamond-types deep-dive)_
 
 ### Determinism & lockstep
 
