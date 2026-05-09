@@ -24,19 +24,34 @@ The marketing language ("post-blockchain," "infinitely scalable") oversells. The
 
 ## Contents
 
-Read in roughly this order. Each file is independent and can be skimmed standalone.
+Each file is independent and can be skimmed standalone.
 
-1. [**Architecture**](architecture.md) — conductor, cells, DNAs, zomes, source chain, DHT.
-2. [**Capabilities**](capabilities.md) — `ZomeCallCapGrant`, three access levels, comparison to WIT-typed handles.
-3. [**Determinism**](determinism.md) — what the integrity/coordinator split enforces, what it doesn't.
-4. [**Networking**](networking.md) — Kitsune2 deep dive, sim1h → sim2h → kitsune1 → kitsune2 history.
-5. [**Identity**](identity.md) — keys, source chain signing, DPKI saga, warrants.
-6. [**Browser viability**](browser.md) — why there's no native browser conductor and what they do instead.
-7. [**Distribution & versioning**](distribution.md) — hApp bundle format, ABI churn release-by-release.
-8. [**Apps shipping**](apps.md) — Relay, Acorn, Neighbourhoods, hREA, HoloFuel.
-9. [**Open problems**](open-problems.md) — what Holochain hasn't solved and probably can't structurally.
-10. [**Lessons for Myrhiza**](lessons.md) — validates / avoid / borrow — the consult-this-when-designing file.
-11. [**Glossary**](glossary.md) — DNA, zome, cell, conductor, warrant, etc.
+**Technical subsystems**
+- [**Architecture**](architecture.md) — conductor, cells, DNAs, zomes, ribosome+wasmer, lair keystore, DHT op types, admin/app websocket APIs.
+- [**Capabilities**](capabilities.md) — `ZomeCallCapGrant`, grant lifecycle, secret-exchange dance, `call_remote` wire-level, granularity ceiling.
+- [**Determinism**](determinism.md) — HDI/HDK host fn lists, `must_get_*` family, validation receipts, countersigning protocol mechanics, genesis sequence.
+- [**Networking**](networking.md) — Kitsune2 deep dive (round structure, sectors+rings, bootstrap, rate limits), sim1h → kitsune2 history.
+- [**Identity**](identity.md) — keys, lair internals, DPKI seven-year saga, warrants, encrypted entries, MLS gap.
+- [**Browser viability**](browser.md) — why there's no native browser conductor.
+- [**Distribution & versioning**](distribution.md) — manifest schemas, modifiers, bundle signing, version churn release-by-release.
+
+**Tooling, testing, ecosystem**
+- [**Tooling**](tooling.md) — `hc` CLI, scaffolder, Launcher, kangaroo/Shipyard, `@holochain/client`, holonix.
+- [**Testing**](testing.md) — Tryorama, TryCP, Sweettest, Wind Tunnel, common dev failure modes.
+- [**Apps shipping**](apps.md) — Relay, Acorn, Neighbourhoods, hREA, HoloFuel.
+- [**Ecosystem**](ecosystem.md) — Foundation, Holo Inc., Volla partnership, GitHub activity, conferences.
+
+**Project lens**
+- [**History**](history.md) — chronological narrative 2016 → 2026.
+- [**Governance & funding**](governance.md) — Foundation/Holo/Unyt structure, ICO, HOT, CAL-1.0, decision-making.
+- [**Abandoned features**](abandoned.md) — DPKI, lib3h, sim2h, mobile, light client, HoloFuel saga, cross-DNA bridging.
+- [**Open problems**](open-problems.md) — Sybil, free-rider, sharding, group identity — what Holochain hasn't solved.
+- [**Critiques**](critiques.md) — third-party + internal honest assessments. Tandfonline trilemma, Basis walk-away, "Friendly Reality Check," HoloFuel post-mortem.
+- [**Comparisons**](comparisons.md) — vs Ethereum, libp2p, SSB, Pears, Spritely OCapN, Croquet, Bluesky/Nostr, wasmCloud/Spin.
+
+**Reference**
+- [**Lessons for Myrhiza**](lessons.md) — validates / avoid / borrow — **the consult-this-when-designing file.**
+- [**Glossary**](glossary.md) — DNA, zome, cell, conductor, warrant, etc.
 
 ## How to use this prior-art doc
 
