@@ -158,7 +158,7 @@ The comparison most relevant to Myrhiza.
 
 **Where Spin is wrong for this niche:** Spin is a serverless trigger model — pure request/response, no durable per-user state, no peer transport.
 
-**The crossover Myrhiza targets:** Component Model + WIT + ocap-as-import (from wasmCloud/Spin/CM) **plus** validated source chains + DHT gossip + per-agent identity (from Holochain) **plus** CapTP-style typed object refs (from OCapN) **plus** optional reflector-replicated session VMs (from Croquet). None of the existing systems combine all four. Holochain has the best shape on state + identity but the worst shape on module format + composition; wasmCloud has the inverse.
+**The unfilled niche:** no shipping system today combines Component-Model + WIT-typed capability imports with peer-to-peer trust topology, validated source chains, and a browser-viable runtime. Holochain has state+identity but pre-CM ABI; wasmCloud has CM+WIT but cluster-only topology.
 
 ## Sources
 

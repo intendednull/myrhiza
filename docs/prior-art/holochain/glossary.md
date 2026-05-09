@@ -20,7 +20,7 @@ Holochain-specific terms used throughout this prior-art doc. Generic P2P / WASM 
 - **Membrane proof** — an app-defined credential checked at cell installation; the app's gate for who can join its DHT.
 - **Source chain** — an agent's personal hash-linked, signed, append-only log of every action they've authored in a given cell.
 - **Storage arc** — a peer's declared range of DHT addresses for which it commits to store and validate every op. Full arc = "I store everything"; partial arcs are sharding.
-- **tx5** — Holochain's WebRTC transport layer (default through 0.5, replaced by iroh as default in 0.6.1).
+- **tx5** — Holochain's WebRTC transport layer (default through 0.5; iroh added in 0.6.0 and made default in the 0.6.1-rc line).
 - **Validation callback** — a pure deterministic function in an integrity zome that takes a DHT op and returns Valid / Invalid / UnresolvedDependencies.
 - **Warrant** — a signed cryptographic proof that an agent authored an invalid op. Gossiped network-wide; recipients block the warranted author.
 - **Zome** — one WebAssembly module exporting a defined set of functions. "Integrity zome" defines data + validation; "coordinator zome" defines imperative logic.

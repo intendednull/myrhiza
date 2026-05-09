@@ -27,7 +27,7 @@ Every minor release has been a breaking release for hApps:
 | [0.2 → 0.3](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.3/) | Conductor config restructure; mobile groundwork |
 | [0.3 → 0.4](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.4) | More HDK signature changes |
 | [0.4 → 0.5](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.5/) | Kitsune2 wire-incompatible; DPKI gated; bootstrap servers changed |
-| [0.5 → 0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6) | DPKI removed entirely; default transport tx5 → iroh; `hash_blake2b` etc. removed; ChainFilter restructure; manifest format reset |
+| [0.5 → 0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6) | DPKI removed entirely; iroh added as transport (made default in 0.6.1-rc); `hash_blake2b` etc. removed; ChainFilter restructure; manifest format reset |
 
 ## No ABI stability story
 
@@ -86,6 +86,29 @@ Each `roles[*]` entry:
 
 `origin_time` and `quantum_time` were DNA modifiers in 0.4 — they parameterized the [quantised gossip](https://blog.holochain.org/quantised-gossip-optional-countersigners/) windows. **Removed in 0.5** (Kitsune2 dropped them).
 
+## Bundle binary format
+
+The on-disk `.happ`, `.dna`, `.webhapp`, and `.coordinators` files are all the same shape: **a gzip-compressed, MessagePack-serialized `mr_bundle::Bundle<M>` struct**, where `M` is one of the manifest types ([`AppManifest`](https://docs.rs/holochain_types/latest/holochain_types/app/struct.AppManifest.html), `DnaManifest`, `WebAppManifest`, `CoordinatorManifest`).
+
+There are **no magic bytes, no header, and no envelope** — just gzip-then-msgpack-then-Rust-struct. From [`mr_bundle/src/pack.rs`](https://github.com/holochain/holochain/blob/develop/crates/mr_bundle/src/pack.rs):
+
+```rust
+pub fn pack<T: Serialize>(data: &T) -> Result<Bytes> {
+    let bytes = rmp_serde::to_vec_named(data)?;          // msgpack with field names
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(&bytes)?;
+    Ok(enc.finish()?.into())
+}
+```
+
+The `Bundle<M>` struct itself has only two fields: `manifest: M` and `resources: BTreeMap<ResourceIdentifier, ResourceBytes>`. Resources are stored **inline as raw byte arrays** keyed by an opaque resource id (a hash-derived identifier the manifest generates from each declared zome path). At unpack time the deserializer rebuilds the BTreeMap and the manifest is responsible for reconciling resource IDs back to logical zome names.
+
+**The file extension is purely a marker.** `mr_bundle` records a `bundle_extension()` per manifest impl (`"happ"`, `"dna"`, `"webhapp"`, `"coordinators"`) and uses it only when writing to disk; the wire format is identical, and the conductor identifies the bundle type by which manifest variant deserializes successfully, not by the file extension. Renaming `foo.happ` to `foo.dna` produces a deserialization error, not a content-type error.
+
+**Bundles are not seekable or streamable.** `unpack` reads the entire gzip stream into a `Vec<u8>` before handing it to `rmp_serde::from_slice`, and msgpack itself requires the full byte range to decode the outer struct. Webhapps embed the UI as a tarball-of-assets resource bytes alongside the `.happ` resource bytes — same nested structure, same all-or-nothing decode.
+
+Implication: **the format is opaque to anything but a Rust client**, has no integrity envelope (no signature, no checksum slot), and forces the entire bundle into RAM at install time. For Myrhiza, a content-addressed component-archive format with a stable header (magic + version + integrity field) and per-resource offsets would be a strict upgrade.
+
 ## Modifiers as a forking primitive
 
 The DNA hash is `H(integrity_zome_wasms || network_seed || properties)`. Three implications:
@@ -138,7 +161,32 @@ The breakage list ([upgrade-0.5](https://developer.holochain.org/resources/upgra
 - JS client enums changed serialization shape from `{VariantName: data}` to `{type: "variant_name", value: data}` — touches every UI codebase.
 - `cap_secret: null` no longer accepted in `callZome`.
 
-Then **0.5 → 0.6** ([upgrade-0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6)) removed DPKI entirely, swapped tx5 → iroh as default transport, removed `hash_blake2b`, restructured ChainFilter, and reset the manifest version to `'0'`. The pattern: every minor release is a re-port. Teams responded by pinning to a single minor (Acorn stayed on 0.3 for a long stretch; hREA tracks releases; Volla apps shipped against 0.4 and have not yet been confirmed on 0.6).
+Then **0.5 → 0.6** ([upgrade-0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6)) removed DPKI entirely, added iroh as transport (made default in the 0.6.1-rc line), removed `hash_blake2b`, restructured ChainFilter, and reset the manifest version to `'0'`. The pattern: every minor release is a re-port. Teams responded by pinning to a single minor (Acorn stayed on 0.3 for a long stretch; hREA tracks releases; Volla apps shipped against 0.4 and have not yet been confirmed on 0.6).
+
+## Coordinator hot-swap via `UpdateCoordinators`
+
+Since the integrity/coordinator split landed in 0.0.144, coordinator zomes can be replaced on a running cell without forking the network or invalidating any source-chain data. The mechanism is the [`AdminRequest::UpdateCoordinators`](https://docs.rs/holochain_conductor_api/latest/holochain_conductor_api/enum.AdminRequest.html) admin call, payload-typed as `UpdateCoordinatorsPayload { cell_id: CellId, source: CoordinatorSource }` where `source` is either an inlined `CoordinatorBundle` (a `mr_bundle::Bundle<CoordinatorManifest>`) or a path to one. The 0.5+ JS client takes a `CellId` rather than a `DnaHash` so a single DNA installed under multiple cells can be updated independently.
+
+### What actually happens
+
+From [`crates/holochain/src/conductor/conductor.rs`](https://github.com/holochain/holochain/blob/develop/crates/holochain/src/conductor) (`update_coordinators`):
+
+1. Look up the cell's `RealRibosome` in the in-memory `RibosomeStore`.
+2. Mutate its `DnaFile` in place: for each incoming zome, **replace any existing coordinator zome with the same name; append if the name is new**. Integrity zomes are untouched.
+3. Persist the new WASM bytes and the updated `DnaDef` to the conductor's databases.
+4. Re-insert the ribosome into the store.
+
+The DNA hash **does not change** because integrity zomes (the only inputs to the hash, along with `network_seed` and `properties`) are untouched. The cell keeps its identity, source chain, and DHT ops.
+
+### What the docs are silent on
+
+- **No state migration hook.** No `migrate(old_zomes -> new_zomes)` callback. Coordinator code that introduces new entry types must use integrity zomes (which forks the DNA); coordinator code is, by construction, *not allowed to define new entry types*. So "schema migration" is not a coordinator-update concern by design — but a coordinator that read links by tag and now reads them by typed-link will silently see old data through the new code path. That's the app's problem.
+- **In-flight calls.** The implementation comment is candid: *"Note this isn't really concurrent safe. It would be a race condition to update the same DNA concurrently."* No documented behavior for zome calls that arrive mid-swap.
+- **Clients.** The admin API returns `CoordinatorsUpdated` once the ribosome is replaced. Existing app-websocket connections stay open; capability grants on the source chain are unchanged. **Clients do not need to reconnect**, but a client holding a `FunctionName` for a removed function will get a runtime error on next call.
+- **Rollback.** No first-class rollback. To revert, call `UpdateCoordinators` again with the previous bundle. The old WASM bytes are not retained — if you didn't keep the bundle, the rollback is not recoverable from conductor state alone.
+- **Init callbacks.** The `init` callback runs once on cell creation and is **not re-fired** by `UpdateCoordinators`. State that the new coordinator zome assumed `init` would establish must already exist (or the new code must self-bootstrap defensively).
+
+A real and useful capability — Holochain ships hot-reload of business logic that VM-platforms like Ethereum do not — but the operational story is unfinished. For Myrhiza: a hot-swap primitive is desirable, but should ship with explicit *upgrade* and *downgrade* hooks the component declares, plus a versioned-state contract checked at swap time.
 
 ## Sources
 

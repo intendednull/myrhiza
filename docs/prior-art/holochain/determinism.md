@@ -107,6 +107,45 @@ Every cell's source chain begins with three system actions in this order ([conce
 
 The `genesis_self_check(data)` callback is special because it runs **before the cell joins the network**. It cannot call `must_get_*` (no DHT access yet). Its job is purely catch-typo validation on the membrane proof: verify the proof is well-formed locally so users get an immediate error rather than waiting for network rejection. The full membrane validation runs later when peers receive the `AgentValidationPkg` op via normal DHT channels.
 
+## Error model
+
+Errors out of a zome traverse three layers: **the guest's `ExternResult<T>`**, **the host's `WasmError`**, and **the callback dispatcher's per-callback result type**. Where in the stack the error appears determines whether it's a recoverable runtime failure, a validation outcome, or a warrantable offence.
+
+### The guest contract
+
+Every `#[hdk_extern]` function must return `ExternResult<T> = Result<T, WasmError>`, where `WasmError` is a typed enum from [`holochain_wasmer_common`](https://github.com/holochain/holochain-wasmer/blob/main/crates/common/src/result.rs):
+
+```rust
+pub enum WasmErrorInner {
+    PointerMap, Memory, ErrorWhileError,         // memory-corruption class
+    Deserialize(Vec<u8>), Serialize(_),          // boundary serialization failure
+    Guest(String),                               // app raised it intentionally
+    Host(String), HostShortCircuit(Vec<u8>),     // host raised it
+    ModuleBuild|Serialize|Deserialize(String),   // wasmer compilation/cache
+    CallError(String),                           // call dispatch failed
+}
+```
+
+Apps construct these via the `wasm_error!(WasmErrorInner::Guest("..."))` macro, which automatically attaches `module_path!()` and `line!()` so error messages are locatable without leaking the build host's filesystem.
+
+### Validation is special: don't return `Err`
+
+The strong convention in the docs and HDK source ([`build/validation`](https://developer.holochain.org/build/validation/)): a `validate` callback **must not** return `Err(...)` to indicate "this op is invalid." It must return `Ok(ValidateCallbackResult::Invalid(reason))`. The three legal outcomes are `Valid`, `Invalid(String)`, `UnresolvedDependencies(Vec<AnyDhtHash>)`. An `Err` from validation is interpreted as *the validator itself crashed*, which is a different problem entirely.
+
+### What happens on a guest panic
+
+WASM guest panics surface to the host as a Wasmer trap (typically `Trap { kind: Unreachable }`). Backtraces are unavailable inside WASM. The dispatcher's response depends on which callback was running:
+
+- **Mid zome-call.** The trap propagates as `WasmErrorInner::CallError(...)` to the conductor, which returns it to the calling client over the app websocket. `CallError` is flagged `maybe_corrupt: true`, so the wasmer module instance is evicted from the cache rather than reused. No source-chain mutation persists — zome calls are wrapped in a transaction that rolls back on any non-Ok return.
+- **Mid validation.** The host uses `CallbackResult::try_from_wasm_error` to map the trap to the callback's failure variant. The op is **not marked `Invalid`** — it's left in the validation limbo as if validation had not yet completed, because a validator crash is not a verdict about the data. **No warrant is produced against the author** for a validator-side panic: warrants require an `Ok(Invalid(_))` outcome from a *successful* validation run. The peer logs the trap; other authorities running the same op may complete their validation normally.
+- **Mid `init` / `post_commit` / `genesis_self_check`.** A panic in `genesis_self_check` aborts cell creation locally. A panic in `init` rolls back any commits made by the init flow and leaves the cell in an uninitialized state; subsequent zome calls re-trigger `init`. A panic in `post_commit` is logged and discarded — `post_commit` is best-effort.
+
+### Boundary errors
+
+Deserialization failures at the host/guest boundary (`WasmErrorInner::Deserialize`) happen when a zome call's argument bytes do not decode into the expected type. These are returned to the caller, not treated as validation failures, and do not produce a warrant. The guest also surfaces `Serialize` errors when a return value doesn't round-trip; these are flagged `maybe_corrupt: false` and the wasmer instance is reused.
+
+Net effect: **the only path to a warrant is an explicit `Invalid(_)` from a deterministic, terminating validation function**. Everything else — panics, traps, deserialization errors, OOM in the host — is treated as transient or local. The right call for Sybil-resistance (you can't get warrant-blocked by a flaky validator), and a real footgun for app authors who use `Err` and are surprised that their "invalid" data still gets stored.
+
 ## Sources
 
 - [Concepts — Validation](https://developer.holochain.org/concepts/7_validation/)

@@ -14,7 +14,7 @@ This is simple and works, but it's strictly per-app: the same human user has dif
 
 **There is currently no canonical multi-device or key-rotation story.**
 
-This is the most important cautionary tale in the Holochain corpus for any new P2P runtime: shipping identity is harder than shipping the rest of the runtime. Apps were built on DPKI and are now stranded.
+Shipping identity is harder than shipping the rest of the runtime. Apps were built on DPKI and are now stranded. Full mechanics + post-mortem in the [DPKI / DeepKey: deeper post-mortem](#dpki--deepkey-deeper-post-mortem) section below.
 
 ## No built-in MLS / group key management
 

@@ -25,7 +25,7 @@ Networking has been Holochain's longest-running engineering problem.
 
 ## Transport
 
-Transport went tx5 (WebRTC, with libdatachannel C++ or pion-go backends, [tx5](https://github.com/holochain/tx5)) → iroh (default in 0.6.1, [upgrade-holochain-0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6)). Myrhiza already builds on iroh; Holochain converged on the same answer four years later.
+Transport went tx5 (WebRTC, with libdatachannel C++ or pion-go backends, [tx5](https://github.com/holochain/tx5)) → iroh (default in 0.6.1-rc, [upgrade-holochain-0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6)). Myrhiza already builds on iroh; Holochain converged on the same answer after years of homegrown transport work.
 
 ## Cost to keep in mind
 
@@ -60,7 +60,7 @@ The 0.5 release [collapsed three previously separate services into one binary](h
 
 State is **ephemeral and per-instance**: the [Running Network Infrastructure docs](https://developer.holochain.org/resources/howtos/running-network-infrastructure/) state explicitly that "the state can't be shared among instances of the bootstrap server for load-sharing." Therefore **not federated** — operators scale by running independent bootstrap servers on different URLs, and peers re-announce themselves when they reconnect to a new instance. The Holochain Foundation runs a public test instance at `https://dev-test-bootstrap2.holochain.org/` (the older `bootstrap.holo.host` / `signal.holo.host` / `turn.holo.host` triple is pre-Kitsune2). Production deployments are expected to self-host. The server keeps lists of agent infos segregated by DNA hash; an agent fetches the list, then dials peers directly over the configured transport.
 
-For **iroh** (default since 0.6.1, see [upgrade-holochain-0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6)), Holochain piggybacks on the four public **n0 relays** that ship with iroh by default (US x2, EU, Asia), configured per conductor via `network.relay_url`. Local-iroh-relay setups require enabling unencrypted relay connections in the conductor template. For the legacy **tx5** WebRTC stack, signaling and TURN run via the same `kitsune2-bootstrap-srv` binary speaking SBD.
+For **iroh** (added in 0.6.0, made default in the 0.6.1-rc line, see [upgrade-holochain-0.6](https://developer.holochain.org/resources/upgrade/upgrade-holochain-0.6)), Holochain piggybacks on the four public **n0 relays** that ship with iroh by default (US x2, EU, Asia), configured per conductor via `network.relay_url`. Local-iroh-relay setups require enabling unencrypted relay connections in the conductor template. For the legacy **tx5** WebRTC stack, signaling and TURN run via the same `kitsune2-bootstrap-srv` binary speaking SBD.
 
 ## Storage arc resizing — the unfinished story
 

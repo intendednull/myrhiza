@@ -6,7 +6,7 @@
 
 Holochain is a Rust runtime for peer-to-peer applications where each participant runs the same WebAssembly application logic locally, signs their own actions onto a personal append-only "source chain," and gossips public data into a sharded validating DHT. It is the closest architectural analog to Myrhiza in the wild: agent-symmetric, capability-mediated, WASM-hosted, no global consensus. It has been under development since 2016 and has accumulated approximately a decade of design corrections — most directly relevant to anyone building a peer-symmetric WASM runtime today.
 
-The marketing language ("post-blockchain," "infinitely scalable") oversells. The technical reality is more interesting: Holochain is a serious, slow, careful attempt to build a deterministic-validation DHT with per-app rules, and the parts that are real are very real. The parts that are still aspirational (sharding completion, free-rider resistance, light clients, mobile) have been aspirational for years.
+The marketing language ("post-blockchain," "infinitely scalable") oversells. The technical reality is more interesting: Holochain is a serious, slow, careful attempt to build a deterministic-validation DHT with per-app rules. Its working parts (per-agent source chains, integrity-zome validation, per-conversation DNA cloning, capability grants, the warrant immune system) are deployable and proven in the Volla phone preinstall. Its aspirational parts (sharding completion, free-rider resistance, light clients, browser-native conductor, multi-device identity) have been aspirational for years.
 
 ## Key facts
 
@@ -32,13 +32,15 @@ Each file is independent and can be skimmed standalone.
 - [**Determinism**](determinism.md) — HDI/HDK host fn lists, `must_get_*` family, validation receipts, countersigning protocol mechanics, genesis sequence.
 - [**Networking**](networking.md) — Kitsune2 deep dive (round structure, sectors+rings, bootstrap, rate limits), sim1h → kitsune2 history.
 - [**Identity**](identity.md) — keys, lair internals, DPKI seven-year saga, warrants, encrypted entries, MLS gap.
-- [**Browser viability**](browser.md) — why there's no native browser conductor.
 - [**Distribution & versioning**](distribution.md) — manifest schemas, modifiers, bundle signing, version churn release-by-release.
+
+(Browser viability is folded into [`open-problems.md` §8](open-problems.md#8-light-clients--browser-native-runtime) since it's a structural unsolved problem more than a subsystem.)
 
 **Tooling, testing, ecosystem**
 - [**Tooling**](tooling.md) — `hc` CLI, scaffolder, Launcher, kangaroo/Shipyard, `@holochain/client`, holonix.
 - [**Testing**](testing.md) — Tryorama, TryCP, Sweettest, Wind Tunnel, common dev failure modes.
 - [**Apps shipping**](apps.md) — Relay, Acorn, Neighbourhoods, hREA, HoloFuel.
+- [**Relay deep-dive**](relay.md) — end-to-end walkthrough: DNAs, zomes, conversation cloning, message lifecycle, encryption story.
 - [**Ecosystem**](ecosystem.md) — Foundation, Holo Inc., Volla partnership, GitHub activity, conferences.
 
 **Project lens**

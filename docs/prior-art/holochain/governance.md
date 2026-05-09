@@ -20,7 +20,7 @@ A separately registered "HOLO LTD" UK private company (#11847834) was dissolved 
 
 ### The 2018 ICO
 
-Holo Ltd. ran an "Initial Community Offering" from **March 29 to April 28, 2018**, raising **~$20.39M USD** (~30,000 ETH) at $0.0006/HOT, hitting near the $20.4M cap (soft cap €1M, hard cap €25M). 133.2B HOT were minted for the ICO out of a 177.6B max supply (~75% to ICO participants). ([CoinCarp tokenomics](https://www.coincarp.com/currencies/holo/project-info/), [CryptoRank ICO page](https://cryptorank.io/ico/holo))
+Holo Ltd. ran an "Initial Community Offering" from **March 29 to April 28, 2018**, raising **~$20.39M USD** (~30,000 ETH) at **$0.0002/HOT**, hitting near the $20.4M cap (soft cap €1M, hard cap €25M). Max supply ~177.62B HOT; circulating has since grown to essentially the full max. ([CoinCarp tokenomics](https://www.coincarp.com/currencies/holo/project-info/), [CryptoRank ICO page](https://cryptorank.io/ico/holo))
 
 The single largest funding event in the project's history. The ICO funds were directed at building the Holochain framework (the open-source side), the Holo hosting network, the HoloPort hardware, and HoloFuel.
 
@@ -28,7 +28,7 @@ The single largest funding event in the project's history. The ICO funds were di
 
 HOT is an **ERC-20 receipt token** — its purpose-of-record is to be redeemed 1:1 for HoloFuel (XHF) once HoloFuel launches on the Holo network, with redemption available "for at least six months" after launch. HOT is *not* the production currency; it is a tradeable IOU against the production currency. ([HOT vs HoloFuel — Atkinson, 2018](https://medium.com/h-o-l-o/holos-erc20-token-hot-and-mutual-credit-cryptocurrency-holo-fuel-6d8b6d3938d6))
 
-Price history high points: ICO at $0.0006; **all-time high $0.0315 on April 5, 2021** (driven by a US patent grant announcement in March 2021); ~1,064% YoY in 2021. As of 2025, several centralized exchanges (e.g. Gate) **delisted HOT** for failing updated listing criteria; HOT continues to trade but has not approached its 2021 highs.
+Price history high points: ICO at $0.0002; **all-time high $0.0315 on April 5, 2021** (driven by a US patent grant announcement in March 2021); ~1,064% YoY in 2021. As of 2025, several centralized exchanges (e.g. Gate) **delisted HOT** for failing updated listing criteria; HOT continues to trade but has not approached its 2021 highs.
 
 ### HoloPort hardware sales
 
@@ -62,8 +62,8 @@ In practice, major decisions are made by:
 
 Two recent examples illustrate the process:
 
-- **Removing DPKI (0.4 → 0.6).** DPKI/DeepKey moved behind a `unstable-*` compile-time flag in **0.4.0 (Dec 17, 2024)** as part of a broader pruning of experimental features (also: countersigning, warrants, app-level peer blocking, DHT sharding, chain-head coordination, task scheduling). In **0.6.0 (Dec 3, 2025)**, DPKI was removed from the conductor entirely, with config knobs deleted. Top-down decision communicated via dev pulses and the upgrade docs; not an open RFC.
-- **Switching default transport to iroh (0.6.1).** Default network transport changed from `tx5` to **iroh** in 0.6.1 (early 2026), trading a homegrown WebRTC-based stack for the Iroh project's QUIC + hole-punching library. Communicated via blog/Twitter; the user-visible config consequence is that a `relay_url` is now required.
+- **Removing DPKI (0.4 → 0.6).** DPKI/DeepKey moved behind a `unstable-*` compile-time flag in **0.4.0 (Dec 17, 2024)** as part of a broader pruning of experimental features (also: countersigning, warrants, app-level peer blocking, DHT sharding, chain-head coordination, task scheduling). In **0.6.0 (Nov 19, 2025)**, DPKI was removed from the conductor entirely, with config knobs deleted. Top-down decision communicated via dev pulses and the upgrade docs; not an open RFC.
+- **Switching default transport to iroh (0.6.1-rc).** Default network transport changed from `tx5` to **iroh** in 0.6.1 (still in RC as of mid-2026; latest tag `0.6.1-rc.8`, April 17, 2026), trading a homegrown WebRTC-based stack for the Iroh project's QUIC + hole-punching library. Communicated via blog/Twitter; the user-visible config consequence is that a `relay_url` is now required.
 
 Roadmap priorities are set by the core team and Foundation leadership; the public roadmap surfaces *what* is being worked on, but priorities are not put to community vote.
 

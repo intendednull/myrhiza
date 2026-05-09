@@ -27,10 +27,10 @@ A **conductor** is the long-running Rust process — it owns the keystore, hosts
 
 ## Integrity vs coordinator zomes
 
-Since 0.1, zomes are split into two flavors ([Dev Pulse 121](https://blog.holochain.org/integrity-and-coordination-part-ways/), [build/zomes](https://developer.holochain.org/build/zomes/)):
+Since 0.0.144 (June 2022; stabilized in the 0.1 line), zomes are split into two flavors ([Dev Pulse 121](https://blog.holochain.org/integrity-and-coordination-part-ways/), [build/zomes](https://developer.holochain.org/build/zomes/)):
 
 - **Integrity zomes** define entry/link types and validation callbacks. They are hashed into the DNA hash, so any change forks the network. They use the smaller `hdi` crate (deterministic subset).
-- **Coordinator zomes** hold all the imperative logic: zome calls, init callbacks, signal emitters, remote calls, scheduler hooks. They depend on the full `hdk`. Crucially, **coordinator zomes can be swapped at runtime without forking the network** — this is the upgrade story.
+- **Coordinator zomes** hold all the imperative logic: zome calls, init callbacks, signal emitters, remote calls, scheduler hooks. They depend on the full `hdk`. Crucially, **coordinator zomes can be swapped at runtime without forking the network** — this is the upgrade story. See [`distribution.md` § Coordinator hot-swap via `UpdateCoordinators`](distribution.md#coordinator-hot-swap-via-updatecoordinators) for the actual mechanism, payload shape, and the operational gaps.
 
 This split is the architectural cornerstone. Validation must be deterministic (every authority must reach the same verdict). Imperative app logic must be free to use clocks, RNG, network. Holochain enforces the separation at the zome boundary; Myrhiza expresses the same thing at the WIT-interface boundary via component profiles (`state-apply` vs `state-propose`/`interaction`/`behavior`).
 
@@ -56,7 +56,7 @@ Every action a cell takes is appended to its **source chain**, a hash-linked, ag
 
 A single commit fans out into multiple op types — `StoreEntry`, `StoreRecord`, `RegisterAgentActivity`, `RegisterUpdate`, `RegisterDelete`, link ops — each routed to a different basis hash and validated by a different authority set. This decomposition lets different parts of one logical action be authoritatively verified by different overlapping neighborhoods.
 
-The networking layer is **Kitsune2** (data/gossip layer) over **iroh** (transport, default since 0.6.1) or **tx5** (WebRTC transport, the 0.5 default). See [`networking.md`](networking.md) for the gossip protocol and history.
+The networking layer is **Kitsune2** (data/gossip layer) over **iroh** (transport, added in 0.6.0, default in the 0.6.1-rc line) or **tx5** (WebRTC transport, the 0.5 default). See [`networking.md`](networking.md) for the gossip protocol and history.
 
 ## The ribosome and Wasmer integration
 
@@ -125,6 +125,31 @@ zome fn invoked
 - `lair_keystore` — the executable + sqlcipher backend.
 
 The boundary lair enforces: **private keys never leave the keystore**. All signing, encrypting, decrypting happens inside lair; conductors get back ciphertexts/signatures, never raw keys. A compromised conductor process or zome cannot exfiltrate the agent identity even if it gains arbitrary memory access — lair lives in a separate address space (in IPC mode).
+
+### Lair IPC wire protocol
+
+The protocol over the Unix domain socket / Windows named pipe is **not** msgpack-RPC and **not** Noise — it's a custom libsodium-based handshake plus an authenticated-encryption stream carrying msgpack-serialized request/response objects. From [`lair_keystore_api/src/sodium_secretstream.rs`](https://github.com/holochain/lair/blob/main/crates/lair_keystore_api/src/sodium_secretstream.rs):
+
+**Connection URL.** `unix:///path/to/socket?k=<base64-server-pub-key>` on Linux/macOS, `named-pipe:\\.\pipe\<name>?k=<base64-server-pub-key>` on Windows. The server's X25519 public key is **embedded in the URL** (`k=` query param) — the conductor pins server identity by URL, no PKI involved.
+
+**Handshake** (server-authenticated, no client identity):
+
+1. Client generates ephemeral X25519 cbox + kx keypairs.
+2. Client sends `xsalsa_seal(eph_cbox_pub || eph_kx_pub)` (96 bytes) to the server using the server's public key from the URL — only the holder of the matching server private key can decrypt.
+3. Server decrypts, generates its own ephemeral kx pubkey, seals it back to the client's ephemeral cbox key (64 bytes).
+4. Both sides derive `(rx_key, tx_key)` from `crypto_kx::client_session_keys` over the ephemeral kx pubkeys.
+5. Each direction initializes a libsodium **`secretstream`** (XChaCha20-Poly1305) keyed by its tx key, sending a 24-byte header.
+
+**Framing.** A trivial 2-byte little-endian length prefix per encrypted record, with a hard `MAX_FRAME = 8 KiB` cap (oversized messages return `FrameOverflow`). All framing happens *outside* the cipher; libsodium's secretstream provides the AEAD over each frame.
+
+**Payload encoding.** Inside the encrypted stream: `rmp_serde::Serializer::with_struct_map()` — MessagePack with named struct fields (same dialect as `mr_bundle`). Every message is a `LairApiEnum` variant: `Hello`, `Unlock`, `NewSeed`, `SignByPubKey`, `GetEntry`, etc. Requests carry an `Arc<str>` `msg_id` (nanoid) for response correlation; responses echo it back.
+
+**Authentication flow** (after the handshake):
+
+1. `LairApiReqHello { nonce: 32 random bytes }` → server returns `LairApiResHello { name, version, server_pub_key, hello_sig }` where `hello_sig` is an Ed25519 signature over the nonce by the *same* key that the URL pinned. The client verifies and rejects on mismatch.
+2. `LairApiReqUnlock { passphrase: SecretData }` → the passphrase is argon2id-hashed against the database key; the connection moves to "unlocked" state and may now issue `SignByPubKey`, `NewSeed`, etc.
+
+Two failure modes worth noting: (a) version-mismatch is silent unless the client opts in via `exact_client_server_version_match`; (b) the 8 KiB frame cap means any payload larger than ~8 KB needs application-level chunking — relevant for batch operations that rmp_serde-encode to anything substantial.
 
 ## Conductor admin vs app websocket APIs
 

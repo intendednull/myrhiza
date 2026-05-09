@@ -17,7 +17,7 @@ Holo's pitch since 2018: a marketplace where **hosts** (running HoloPort hardwar
 
 **HoloFuel (XHF)** — mutual-credit currency. Audited and launched Q2 2024 ([buyholo news](https://www.buyholo.net/en/learn/news)). HoloFuel is the network-internal currency.
 
-**HOT** — ERC-20 IOU sold in the 2018 ICO at $0.0006/token, intended to swap 1:1 for HoloFuel once mainnet hosting launched. The HOT→XHF swap window opened in 2024.
+**HOT** — ERC-20 IOU sold in the 2018 ICO at $0.0002/token, intended to swap 1:1 for HoloFuel once mainnet hosting launched. The HOT→XHF swap window opened in 2024.
 
 **Hosting status, May 2026.** Full hosting still has not launched at the scale promised in 2018. Holo announced ([Year in Review 2025](https://holo.host/blog/2025-year-in-review-the-year-we-built-the-edge-XqpCNKmMRVh/)) that they're using **HOT** (not HoloFuel) as the payment token for the initial hosting launch because "the counter-signature feature could not pass the required quality tests" required for HoloFuel. A static-site hosting product was the targeted Q3 2025 milestone; per the buyholo news tracker it is in beta as of late 2025 / early 2026. **The original "host any hApp for end users via the open web" vision has not shipped in eight years.**
 
@@ -32,7 +32,7 @@ Both run on Holochain 0.4 and were built using p2p Shipyard tooling. Commercial 
 
 ## Funding history
 
-- **2018 ICO** — $20,388,500 raised between March 29 – April 28, 2018 at $0.0006/HOT, 133.2B tokens minted ([cryptorank](https://cryptorank.io/ico/holo)). Funded HoloPort hardware, HoloFuel R&D, and the Holochain core rewrite from Go (`holochain-proto`) to Rust.
+- **2018 ICO** — $20,388,500 raised between March 29 – April 28, 2018 at $0.0002/HOT, max supply ~177.62B ([cryptorank](https://cryptorank.io/ico/holo), [coincarp](https://www.coincarp.com/currencies/holo/project-info/)). Funded HoloPort hardware, HoloFuel R&D, and the Holochain core rewrite from Go (`holochain-proto`) to Rust.
 - No subsequent priced round at the company level is publicly listed (Crunchbase/Pitchbook profiles show 2018 as the funded event).
 - **Operational funding 2020–2026** appears to come from HOT treasury sales, HoloPort hardware sales, and grants. The Foundation does not publicly publish a treasury balance.
 - **Grants outbound:** small-grant programs occasionally announced via blog (Sensemaker grants, hackathon prizes).

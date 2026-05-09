@@ -44,11 +44,37 @@ Apps that span multiple DNAs (e.g. a chat app that wants to bridge to a project-
 
 ## 8. Light clients / browser-native runtime
 
-Roadmap item since 2019, still not shipped. See [`browser.md`](browser.md).
+Roadmap item since 2019 ([WASM Conductor and Light Client groundwork](https://blog.holochain.org/the-groundwork-for-the-wasm-conductor-and-light-client/)), still not shipped. The conductor is a Rust process; UIs are HTML+JS connecting via WebSocket from a Tauri-Mobile or Electron desktop wrapper using [`@holochain/client`](https://github.com/holochain/holochain-client-js). The standard distribution is the Holochain Launcher (Tauri-based) or Kangaroo / [p2p Shipyard](https://blog.holochain.org/happs-spotlight-relay/) wrapping per-hApp.
+
+A full conductor wants long-running native sockets, persistent storage, libsodium, an out-of-process keystore — the browser has none natively, and a WASM port would have to replace each. Each replacement is its own subproject. Holo's pivot to an HTTP "Web Bridge" (Q1 2025) sidesteps the problem: web users hit a hosted node over HTTP rather than running a conductor.
+
+**Why this matters for Myrhiza.** Holochain's runtime predates the Component Model. It compiles guest WASM with a Holochain-specific ABI (`hdk` macros + JSON-bincode wire format). That ABI was not designed for browser embedding and was not designed for guest-language pluralism. Myrhiza's bet on Component Model + jco lets you ship the same components to a native iroh runtime and to a browser jco-compiled JS shim **without re-architecting**. Holochain is bolting that on after 6+ years; you can have it as a first-class invariant.
+
+**Lesson:** browser viability is a load-bearing requirement, not a roadmap item. Once an ABI exists with N apps depending on it, retrofitting browser viability becomes a multi-year project that competes with every other improvement.
 
 ## 9. Identity / key rotation
 
 DPKI removed in 0.6; replacement TBD. See [`identity.md`](identity.md).
+
+## 10. No formal verification
+
+Holochain does **no formal verification or model-checking of its core algorithms**. Searches across the [holochain monorepo](https://github.com/holochain/holochain) and [lair](https://github.com/holochain/lair) turn up zero references to TLA+, Coq, Isabelle/HOL, Lean, [Kani](https://github.com/model-checking/kani), or [Loom](https://github.com/tokio-rs/loom). No specifications outside the implementation, no machine-checked proofs of validation correctness, gossip convergence, countersigning atomicity, or warrant propagation. The "strong eventual consistency" claim in [`concepts/7_validation`](https://developer.holochain.org/concepts/7_validation/) is asserted, not proven.
+
+Correctness assurance is **entirely empirical**:
+
+- **Sweettest** ([crates/sweettest](https://github.com/holochain/holochain/tree/develop/crates/sweettest)) — Rust integration harness that spins up multi-conductor topologies and asserts behavior. Standard unit/integration testing.
+- **[Wind Tunnel](https://github.com/holochain/wind-tunnel)** — distributed performance and load-testing framework, 23 scenarios as of 2025. Wind Tunnel measures performance, *not* correctness.
+- **[Least Authority audit](https://leastauthority.com/blog/audit-of-holochain-lair-keystore/)** of lair-keystore — manual code review, no formal artifacts.
+
+Adjacent academic work exists but has not been applied to Holochain. The 2017 OOPSLA paper [Verifying Strong Eventual Consistency in Distributed Systems](https://arxiv.org/abs/1707.01747) (Gomes et al., Isabelle/HOL framework for CRDT convergence proofs) is the closest match for the kind of guarantee Holochain claims; nothing analogous has been done for the Holochain validation/gossip stack.
+
+What it would take to add it:
+
+- A **TLA+ specification** of the gossip + validation + warrant state machine — feasible scope for a dedicated formalist, weeks not years.
+- **Loom-based concurrency tests** of the conductor's workflow triggers and the lair IPC handshake — these are pure-Rust, single-process subsystems and would benefit immediately. (The conductor's own comment in `update_coordinators` — *"this isn't really concurrent safe"* — is the kind of statement Loom would either confirm or refute.)
+- A **Kani model** of the source-chain commit pipeline up to the wasmer boundary, proving no-double-commit and prev-action-link invariants under arbitrary scheduling.
+
+None of this is on a public roadmap. For Myrhiza, this is a gap to *not* repeat: the core state machines (state-apply ordering, component link integrity, capability-token check) are bounded enough to specify in TLA+ from day one, and Loom is essentially free to adopt for any Rust runtime.
 
 ## Implications for Myrhiza
 
