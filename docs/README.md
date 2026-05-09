@@ -68,6 +68,7 @@ External systems we learn from. Living documents — update on revision, archive
 
 - [Holochain](prior-art/holochain/) — peer-symmetric Rust runtime hosting WASM apps with deterministic-validation DHT. Closest architectural neighbor; consult when designing capabilities, determinism, networking, or identity. `[active]`
 - [Spritely Goblins / OCapN](prior-art/spritely-ocapn/) — distributed object-capability runtime + cross-implementation network protocol (with Agoric, MetaMask, Cap'n Proto). Closest semantic neighbor on capability discipline; consult when designing the cap layer, distributed GC, sturdyrefs, promise pipelining, or netlayer abstraction. `[active]`
+- [Agoric / Endo / SwingSet](prior-art/agoric-endo/) — production-hardened ocap + deterministic-replay JavaScript runtime; Cosmos chain since 2022-10-27, MetaMask Snaps in production at scale. Cousin to Spritely on the E lineage; the load-bearing reference for our `state-apply` purity, vat-snapshot/replay, computron metering, and the bundle-hash story. Consult before any spec on determinism, component upgrade, distributed GC, or app bundling. `[active]`
 
 ### Networking substrate
 
