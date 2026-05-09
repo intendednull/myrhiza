@@ -39,7 +39,7 @@ Each file is independent and can be skimmed standalone.
 
 **Project lens**
 - [**History**](history.md) — chronological narrative 1973 (Hewitt actor model) → KeyKOS → E (1997) → Sandstorm (2014) → Spritely (2018) → OCapN (2022) → 2026.
-- [**Critiques**](critiques.md) — third-party + internal honest assessments. E never crossed 100 users; OCapN pre-spec drift; Cloudflare Cap'n Web ships in production while Spritely doesn't.
+- [**Critiques**](critiques.md) — third-party + internal honest assessments. E never reached real adoption; OCapN pre-spec drift; Cloudflare Cap'n Web ships in production while Spritely doesn't.
 - [**Comparisons**](comparisons.md) — vs Holochain, Erlang/BEAM, Akka/Pekko, Cap'n Proto, Endo/Agoric, Component Model + WIT, Croquet, Tahoe-LAFS.
 - [**Open problems**](open-problems.md) — discovery, Sybil, durability, performance, adoption, real-time co-presence, recovery, formal verification, cyclic GC, mass revocation.
 

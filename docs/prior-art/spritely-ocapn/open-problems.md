@@ -28,7 +28,7 @@ For an application like real-time analytics, a high-frequency message bus, or a 
 
 ## 5. Adoption funnel — what would unlock production?
 
-E never crossed 100 users in its lifetime ([Wikipedia](https://en.wikipedia.org/wiki/E_(programming_language))). Spritely is a generation later, with better tooling, a better host language story (Guile + Hoot), and grant funding. As of 2026 there is no flagship Spritely app at scale. Demos exist; production does not.
+E never reached meaningful adoption as an open-source language ([Wikipedia](https://en.wikipedia.org/wiki/E_(programming_language))). Spritely is a generation later, with better tooling, a better host language story (Guile + Hoot), and grant funding. As of 2026 there is no flagship Spritely app at scale. Demos exist; production does not.
 
 The structural reasons:
 

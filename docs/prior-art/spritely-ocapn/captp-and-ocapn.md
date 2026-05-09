@@ -36,11 +36,13 @@ ocapn://<designator>.<transport>/s/<swiss-num>?hint1=value1
 - The **transport** is a symbol naming the netlayer (`onion`, `tcp-tls`, `libp2p`, `uds`, `websocket`, `prelay`).
 - The **swiss-num** is an unguessable string identifying one specific object on that machine.
 
-In Syrup encoding the same data is a record `<ocapn-sturdyref <ocapn-peer transport designator hints> swiss-num>`. The [Spritely whitepaper](https://files.spritely.institute/papers/spritely-core.html) and a real example URL ([Bovid blog](https://blog.bovid.space/conceptual-intro-to-spritely-goblins.html)):
+In Syrup encoding the same data is a record `<ocapn-sturdyref <ocapn-peer transport designator hints> swiss-num>`. An older example URL form (pre-current-draft, surfaced in [a third-party intro](https://blog.bovid.space/conceptual-intro-to-spritely-goblins.html)) used a flatter shape:
 
 ```
 ocapn:s.onion.wy46gxdweyqn5m7ntzwlxinhdia2jjanlsh37gxklwhfec7yxqr4k3qd:8080/78PukR-2EKkr2bmvVfG0RcNCsiNQEvWJgz1MDKAeQb8
 ```
+
+The OCapN [Locators draft](https://github.com/ocapn/ocapn/blob/main/draft-specifications/Locators.md) is the canonical reference; the URL grammar has not yet stabilized.
 
 The **swiss-num** matters for capability discipline: because it's unguessable (sufficient entropy, treated as a secret), holding the URL is *itself* the capability to bootstrap a connection to that object. There's no separate ACL check. Sturdyref → live ref happens via the bootstrap object's `fetch(swiss-num)` method, returning a fresh import in the imports table.
 

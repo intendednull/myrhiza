@@ -93,13 +93,13 @@ By end of 2023, OCapN draft specifications for **CapTP**, **Netlayers**, and **L
 
 **September 10, 2025** — **Shepherd × Goblins update** demoed three-vat fleet orchestration: a Carol-the-DevOps actor controlling web servers on machines A and B, all three running Shepherd-on-Goblins, all three communicating over OCapN ([Shepherd × Goblins](https://spritely.institute/news/shepherd-goblins-update.html)).
 
-Subsequent 0.17.0 (improved persistence with Bloblin store) and 0.18.0 ("sleepy actors" — actors that swap to disk under a configurable caching policy and are revived on message receipt) shipped through late 2025 ([Goblins 0.17.0](https://spritely.institute/news/spritely-goblins-v0-17-0-persistence-is-better-than-ever.html), [Goblins 0.18.0](https://spritely.institute/news/spritely-goblins-v0-18-0-sleepy-actors.html)).
+Subsequent 0.17.0 (improved persistence with Bloblin store, October 2025) and 0.18.0 ("sleepy actors" — actors that swap to disk under a configurable caching policy and are revived on message receipt, April 2026) shipped across the late-2025/early-2026 window ([Goblins 0.17.0](https://spritely.institute/news/spritely-goblins-v0-17-0-persistence-is-better-than-ever.html), [Goblins 0.18.0](https://spritely.institute/news/spritely-goblins-v0-18-0-sleepy-actors.html)).
 
 By end of 2025: OCapN draft specs (CapTP, Netlayers, Locators) had matured in the [ocapn/ocapn repo](https://github.com/ocapn/ocapn); a Haskell implementation by Alexander Bondarenko had been added; both Spritely Goblins implementations passed the cross-implementation test suite; and Agoric's Endo and MetaMask's Snaps were the most heavily-deployed CapTP-family code in production.
 
 ## 2026 — Current state (May 2026)
 
-Spritely Goblins remains pre-1.0 (Guile is canonical, Racket maintained). OCapN remains pre-standardization but has functional drafts and a working multi-implementation interop test suite. Hoot is past 0.8 with full Goblins-in-browser support. The Distributed System Daemons / Shepherd-on-Goblins work is the leading edge of "Spritely as serious distributed-systems infrastructure" rather than only "social-web research."
+Spritely Goblins remains pre-1.0 (Guile is canonical at v0.18.0, Racket maintained at v0.12.x). OCapN remains pre-standardization but has functional drafts and a working multi-implementation interop test suite. Hoot is at 0.7.0 (October 2025) with Goblins-in-browser support. The Distributed System Daemons / Shepherd-on-Goblins work is the leading edge of "Spritely as serious distributed-systems infrastructure" rather than only "social-web research."
 
 The headline story of the Spritely lineage is intact: a continuous theoretical-and-implementation thread from Hewitt 1973 → KeyKOS → Miller's E (1997) → *Robust Composition* (2006) → Cap'n Proto / Sandstorm (2014) → Goblins (2018) → OCapN multi-vendor standardization (2022+). Spritely's specific contribution is reviving the E vocabulary in working open-source code, generalizing CapTP's transport ("VatTP") into pluggable **netlayers**, and getting Agoric, MetaMask, and Cap'n Proto to the same table to formalize a shared protocol.
 

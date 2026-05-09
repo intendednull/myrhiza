@@ -4,19 +4,19 @@ A consolidation of substantive third-party and internal critiques of Spritely Go
 
 ## Research-grade adoption
 
-Goblins is described in its own community forum as "very early," with cautionary advice against using it for anything "production-facing" quite yet (community.spritely.institute, 2025). The Goblins demo chat application is named with the explicit caveat "(emphasis on demo)" in the repo description (`spritely/racket-goblin-chat`, Codeberg). The user-facing artifacts — Goblin Chat, Goblinville (Lisp Game Jam 2025 multiplayer demo), Mandy (ActivityPub-on-Goblins), GoblinShare — are all sub-100-user demos, not production deployments.
+Goblins is described in its own community forum as "very early," with cautionary advice against using it for anything "production-facing" quite yet (community.spritely.institute, 2025). The Goblins demo chat application is named with the explicit caveat "(emphasis on demo)" in the repo description (`spritely/racket-goblin-chat`, Codeberg). The user-facing artifacts — Goblin Chat, Goblinville (Lisp Game Jam 2025 multiplayer demo), Mandy (ActivityPub-on-Goblins), Brassica Chat, Cirkoban — are all sub-100-user demos, not production deployments.
 
 The closest thing to a "real" deployment Spritely itself names is the GNU Shepherd port: porting Guix's init system to use Goblins. The institute itself frames this prospectively — "this project will constitute the single largest real-world deployment of Spritely code to date" (Spritely Institute NLnet grant announcement, December 2023). That sentence, read straight, says the largest real deployment is *not yet shipped*; it is a grant deliverable.
 
 LWN's February 2024 review is the cleanest outsider summary: Spritely is in "early stages" with "a long way to go," only Goblins among planned ecosystem components actually exists, NAT traversal is unimplemented, and OCapN is "not yet a standard and is subject to change" ([LWN](https://lwn.net/Articles/960912/)). EFF's 2023 framing is similar: "Spritely is worth keeping an eye on" — not "use Spritely today."
 
-The E lineage matters here. CapTP is not new. E (Miller, Bornstein, Crockford, Morningstar, Electric Communities, 1997) demonstrated capability-secure distributed objects 28 years before this writing. Wikipedia's E entry, citing the project's own retrospective: "As an open source language, E never attracted more than 100 users to the community." That is the comparison group Goblins should be measured against, not blockchain projects with VC marketing budgets.
+The E lineage matters here. CapTP is not new. E (Miller, Bornstein, Crockford, Morningstar, Electric Communities, 1997) demonstrated capability-secure distributed objects 28 years before this writing. By community accounts E never reached a meaningful active-user community as an open-source language — Mark Miller continued the work conceptually through Caja, SES, and Endo at Agoric, but no E-the-language ecosystem grew. That is the comparison group Goblins should be measured against, not blockchain projects with VC marketing budgets.
 
 ## Language fragmentation — which dialect is real?
 
 There are at least four implementations of Goblins / CapTP / OCapN, none of which is canonical for everyone:
 
-- **Guile Goblins.** Spritely's primary implementation since the v0.10 unification announcement (Spritely Institute, January 2023). v0.18 ("Sleepy actors") shipped 2025.
+- **Guile Goblins.** Spritely's primary implementation since the v0.10 unification announcement (Spritely Institute, January 2023). v0.18 ("Sleepy actors") shipped April 2026.
 - **Racket Goblins.** Maintained for OCapN compatibility, but no longer the primary target. Spritely's own announcement: "the Guile version is considered the canonical version now."
 - **Hoot-on-WASM.** Goblins compiled to WASM 3.0 (GC + tail calls) for browser deployment. Released in v0.15.0, January 2025. Requires Wasm GC + tail-call extensions; Safari "is not expected to work properly at this time" (goblin-chat README).
 - **Agoric `@endo/captp`.** Independent JavaScript CapTP, used in production by Agoric mainnet smart contracts and MetaMask plugin systems. Compatible-in-principle but not yet wire-compatible with Spritely until OCapN standardization completes.
@@ -51,7 +51,7 @@ The implication: the *protocol* (OCapN) is portable in principle; the *ecosystem
 
 ## Mark Miller's E never shipped at scale — is Goblins different?
 
-E shipped a working capability-secure distributed object system in 1997. It influenced JavaScript (via Crockford and Miller on TC39), it influenced Cap'n Proto, it influenced Agoric. As a deployed system used by end users, E never crossed 100 users. The honest critique of Spritely is structural: it is the same idea, by the same intellectual lineage, with mostly the same people, on different host languages, 25+ years later. The substrate is better (Wasm GC, modern crypto, NLnet funding); the open question is whether it now succeeds where E did not.
+E shipped a working capability-secure distributed object system in 1997. It influenced JavaScript (via Crockford and Miller on TC39), it influenced Cap'n Proto, it influenced Agoric. As a deployed system used by end users, E never reached meaningful adoption — the language ecosystem stalled even as the ideas seeded later projects. The honest critique of Spritely is structural: it is the same idea, by the same intellectual lineage, with mostly the same people, on different host languages, 25+ years later. The substrate is better (Wasm GC, modern crypto, NLnet funding); the open question is whether it now succeeds where E did not.
 
 Adjacent evidence: the *capability-secure RPC* idea has finally crossed into mass production — but via Cloudflare Workers RPC (Cap'n Web), not Spritely. Cloudflare's blog: "Workers RPC is built on Cap'n Proto RPC, which in turn is based on CapTP." That is the lineage shipping. The Spritely flavor remains research-grade.
 
@@ -79,7 +79,7 @@ HN discussion threads on Goblins releases are mostly supportive. The substantive
 - [LWN, *A Spritely distributed-computing library*](https://lwn.net/Articles/960912/)
 - [EFF, *Meet Spritely and Veilid*](https://www.eff.org/deeplinks/2023/12/meet-spritely-and-veilid)
 - [OCapN repo (pre-spec status)](https://github.com/ocapn/ocapn)
-- [E (programming language) — Wikipedia (history, ~100 users)](https://en.wikipedia.org/wiki/E_(programming_language))
+- [E (programming language) — Wikipedia](https://en.wikipedia.org/wiki/E_(programming_language))
 - [Sandstorm "Joining Cloudflare"](https://sandstorm.io/news/2017-03-13-joining-cloudflare)
 - [Cloudflare *Cap'n Web*](https://blog.cloudflare.com/capnweb-javascript-rpc-library/)
 - [Cloudflare *Workers RPC*](https://blog.cloudflare.com/javascript-native-rpc/)
