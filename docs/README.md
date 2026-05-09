@@ -76,7 +76,8 @@ External systems we learn from. Living documents — update on revision, archive
 
 ### WASM platforms
 
-_(empty — wasmCloud, Spin, Extism candidates)_
+- [WASM Component Model](prior-art/wasm-component-model/) — Bytecode-Alliance-stewarded substrate Myrhiza is committing to as foundation: the Component Model spec + WIT IDL + Canonical ABI + Wasmtime reference runtime + tooling (wasm-tools, wit-bindgen, cargo-component, jco, componentize-js, componentize-py, wac, wkg). 15 files, ~2,650 lines. WASI 0.2.11 stable; preview3 in RC since 2026-01. **Load-bearing dependency**; consult before any spec on kernel-import/host-capability surface, ABI/canonical-lift-lower, component bundling, browser viability, or determinism. `[active]`
+- _(future candidates: wasmCloud, Spin, Extism — production CM runtimes built on Wasmtime substrate)_
 
 ### Sync protocols
 
