@@ -1,0 +1,12 @@
+/target
+
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
+.worktrees/
+.dev/
+
+__pycache__/
+*.pyc
+node_modules/
