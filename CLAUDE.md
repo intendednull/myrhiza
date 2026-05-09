@@ -51,6 +51,15 @@ The runtime distinguishes four component profiles. Determinism rules differ by p
 
 Pre-check is mechanically the same WASM function as `state-apply`, called by the kernel in dry-run mode. Not a convention.
 
+## Prior Art
+
+The corpus under `docs/prior-art/` is researched, dated, and load-bearing for spec authoring. When brainstorming a spec, writing a plan, or reviewing code that touches a researched area, invoke `using-prior-art` to surface relevant folders, extend with online research, and flag worth-promoting findings. Prior-art is a launchpad, not a destination — the corpus is a snapshot; current state needs verification.
+
+When a spec consults prior-art, cite folder + section (`prior-art/mls/lessons.md §3`), name the runner-up paradigm if a choice was made, and flag remaining gaps.
+
+Producer-side workflow: `researching-prior-art` skill (builds new folders).
+Consumer-side workflow: `using-prior-art` skill.
+
 ## Build & Test
 
 ```bash
