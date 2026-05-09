@@ -10,6 +10,7 @@ For build/test/dev commands and project framing, see [`../CLAUDE.md`](../CLAUDE.
 - **[Plans](plans/)** — how we get from current code to the target.
 - **[Reports](reports/)** — one-shot investigations of our own codebase (audits, post-mortems).
 - **[Prior art](prior-art/)** — deep-dive studies on external systems we learn from.
+- **[References](references/)** — curated indices of papers + talks anchoring a topic. Single-file; no deep-dive (that's `prior-art/`).
 
 ## Status tags
 
@@ -59,6 +60,12 @@ _(empty)_
 *(test tiers, harnesses, dev workflow)*
 
 _(empty)_
+
+## References
+
+Curated indices of papers + talks anchoring a topic. Single-file; companion to `prior-art/` deep dives.
+
+- [Local-first + foundational references](references/local-first.md) — anchor index of papers and talks for Myrhiza's design space: Local-First essay (Kleppmann et al. 2019), Mark Miller's *Robust Composition* thesis (2006), Hewitt actor model (1973), Lamport time/ordering (1978), Shapiro CRDT survey (2011), Smith/Kay et al. Croquet (2003), Kleppmann move-tree (2021), Gentle & Kleppmann Eg-walker (2024), YATA (2016), Peritext (2022), Fugue (2023), RFC 9420 MLS, Cremers ETK 2025, Lin Clark Component Model talks. Reading order for new Myrhiza spec authors. `[active]`
 
 ## Prior art
 
