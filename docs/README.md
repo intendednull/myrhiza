@@ -40,7 +40,7 @@ _(empty)_
 
 *(keys, MLS, capability custody, peer auth)*
 
-_(empty)_
+- [MLS / OpenMLS](prior-art/mls/) — IETF Standards Track group key agreement protocol (RFC 9420, July 2023) plus OpenMLS Rust implementation (`openmls 0.8.1`, MIT). 13 files, ~1,560 lines. CGKA-based; O(log N) on member updates; FS + PCS; production-shipping at Wire (RFC 9420 GA April 2025), Webex (on draft, migrating), Discord DAVE (RFC 9420, A/V-only since Sept 2024), Google RCS UP 3.0 (limited rollout 2026). NOT used by Apple iMessage (uses PQ3), WhatsApp, Signal, or Matrix. Surfaces critical Cremers ETK 2025 finding (MLS fails FCGKA with EUF-CMA-only signatures like ECDSA — published-RFC-level flaw; use Ed25519 not ECDSA). OpenMLS does not ship as a WASM Component Model artifact; Myrhiza will need to author the WIT contract for `MlsGroup` operations. The reference cryptographic primitive if Myrhiza grows multi-party room-shaped capabilities (channels, group state-apply, multi-party caps with rotating membership). Consult before any spec on group caps, multi-party auth, or post-quantum migration. `[active]`
 
 ### App distribution
 
