@@ -80,7 +80,7 @@ The kitsune1 → kitsune2 transition was **wire-incompatible by design** ([upgra
 
 ## Implications for Myrhiza
 
-- **iroh is the right transport.** Validates the PR choice. Saves 4 years.
+- **iroh is the right transport.** Validates the PR choice; the multi-year homegrown-transport detour is the cost worth quoting.
 - **Don't build a custom signaling/switchboard as a "temporary" dev shortcut.** sim2h became culturally entrenched and slowed the real P2P work for a year+. iroh gives you NAT traversal + relays as a real solution from day 0.
 - **Decide the sharding model up front.** Either commit to "every node holds everything" with explicit scale ceiling, or commit to a sharding model and load-test it from MVP. Don't ship "we'll figure it out later."
 - **Wire compatibility is a load-bearing product surface.** Plan dual-stack windows for transport changes, or accept that every change forks every network. Holochain has done both; the latter is painful.

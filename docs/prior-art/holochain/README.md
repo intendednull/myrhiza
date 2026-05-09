@@ -60,3 +60,5 @@ Each file is independent and can be skimmed standalone.
 Designing a Myrhiza feature with overlap to Holochain? Start with [**lessons**](lessons.md) for the action-oriented summary, then drop into the relevant subsystem file for depth. The architecture and glossary files are for orienting newcomers; the lessons and open-problems files are for shaping decisions.
 
 Doc lives, not snapshot — bump the date in this file's header on every meaningful update. Add new findings to whichever subsystem file owns them, and surface the consequence in [`lessons.md`](lessons.md).
+
+**Framing disclosure.** These docs are written from a Component-Model-as-foundation stance — most "Implications for Myrhiza" sub-sections frame Holochain's pre-CM choices as the trap to avoid. That bias is load-bearing for the design conversation Myrhiza is having today, but a future reader auditing whether *Component Model itself* is the right primitive should weigh the corpus accordingly: it's a learn-from-Holochain-into-CM artifact, not a neutral catalog.

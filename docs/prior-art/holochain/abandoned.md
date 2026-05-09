@@ -96,7 +96,7 @@ This file is a non-exhaustive timeline. Each entry: what it was, when it was att
 
 **Why dropped.** The conductor-config approach didn't scale to the RSM model where DNAs are dynamically installable. Cross-DNA calls now go through the same `call` host function as local zome calls but addressed by `CellId`.
 
-**Replacement.** `call(CellId, zome, fn, payload)` and `call_remote` for cross-network. No runtime-level "this app is composed of DNAs A+B" primitive — composition is by app-level convention. See [open-problems.md §7](open-problems.md).
+**Replacement.** `call(CellId, zome, fn, payload)` and `call_remote` for cross-network. No runtime-level "this app is composed of DNAs A+B" primitive — composition is by app-level convention. See [open-problems.md §7](open-problems.md#7-cross-dna-discovery-and-group-identity).
 
 ## Holo Host (the hosting business)
 
