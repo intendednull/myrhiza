@@ -1,11 +1,13 @@
 ---
 name: researching-prior-art
-description: Use when adding a new system to docs/prior-art/. Drives a 7-stage workflow — competitor scan, structured overview, deep-dive fan-out, review, polish, second review, framing disclosure — that produces ~10–20 file folder of reference material future readers can consult when making design decisions.
+description: Use when documenting an external project at docs/prior-art/<system>/. Drives a 7-stage workflow — landscape scan, structured overview, deep-dive fan-out, review, polish, second review, framing disclosure — that produces a ~10–20 file folder of reference material future readers can consult.
 ---
 
 # Researching prior art
 
-For when Myrhiza needs to learn from an external system before adopting or rejecting its patterns. Output is a `docs/prior-art/<system>/` folder of focused, cross-linked reference files. Process is parallel-agent-heavy because depth matters more than speed.
+For when we need to capture an external project as durable reference material. The project might be a competitor we want to learn from, an integration target we're about to build on, a dependency we want a deep mental model of, a sibling design-space neighbor, or just something the team will keep referring to. Output is a `docs/prior-art/<system>/` folder of focused, cross-linked reference files. Process is parallel-agent-heavy because depth matters more than speed.
+
+The skill is **not about competitive analysis**. It's about producing high-quality documentation of an existing project, written from our perspective, so future humans + agents can consult it instead of redoing the research.
 
 ## Required skills
 
@@ -15,30 +17,30 @@ For when Myrhiza needs to learn from an external system before adopting or rejec
 
 ## When to use
 
-- Adding a new external system to `docs/prior-art/`.
-- Doing a periodic refresh of an existing prior-art doc whose subject system has shipped major releases since the last update.
+- Adding a new external project to `docs/prior-art/` (competitor, integration target, dependency, design-space neighbor — relationship doesn't matter).
+- Doing a periodic refresh of an existing prior-art doc whose subject project has shipped major releases since the last update.
 
 ## When NOT to use
 
 - One-shot research questions ("how does X work?"). Use `docs/reports/` instead.
 - Internal codebase audits. That's `general-audit`-shaped work.
-- A system that hasn't been validated as relevant. Run the **competitor scan** stage first; if the system isn't a real neighbor, don't invest.
+- Project we've decided not to invest in tracking. The **landscape scan** stage exists to validate the investment — if a project doesn't merit a folder, capture findings as a `docs/reports/` entry instead.
 
 ## Workflow
 
 Seven stages. Each stage is a checkpoint — verify completion before moving on.
 
-### Stage 1: Competitor scan (validates relevance)
+### Stage 1: Landscape scan (validates investment)
 
-Before committing to a deep dive, confirm the system is actually a closest-neighbor and not an adjacent-but-distant project. Dispatch 3 parallel `general-purpose` agents:
+Before committing to a full deep dive, place the project in its design-space neighborhood. The goal is twofold: confirm the project warrants a long-form folder, and surface adjacent systems we might want folders for next. Dispatch 3 parallel `general-purpose` agents:
 
-- **Closest neighbors** — direct competitors, what they actually are today.
-- **Adjacent stacks** — sister projects, integration targets, library-not-runtime layers.
-- **Platform layer** — common substrate (e.g. WASM Component Model, libp2p, ocap-CapTP).
+- **Closest neighbors** — projects sharing the most architectural DNA. What each is *today*, not what their marketing says.
+- **Adjacent stacks** — sister projects, integration targets, library-not-runtime layers, complementary tools.
+- **Substrate layer** — common foundations (e.g. WASM Component Model, libp2p, ocap-CapTP, Ed25519, CRDTs) the project sits on or relates to.
 
-Each agent: ~600 words, table format, cite source URLs inline. Synthesize into a one-paragraph verdict naming the closest competitor + the empty niche Myrhiza targets.
+Each agent: ~600 words, table format, cite source URLs inline. Synthesize into a one-paragraph verdict that names where the project sits and lists adjacent projects worth queueing for their own folders later.
 
-**Stop condition:** verdict identifies a single clear closest neighbor. If multiple systems tie, deep-dive the strongest first; defer the others.
+**Stop condition:** verdict places the project clearly, OR you decide the project isn't worth a folder (in which case land findings as a `docs/reports/` doc and stop). Skip this stage if the user has already named the target project explicitly and adjacency placement is obvious.
 
 ### Stage 2: Structured overview (one big file)
 
@@ -132,15 +134,17 @@ Apply local text fixes inline:
 
 Dispatch a second fresh reviewer. Brief includes the polish-pass changelog. Should return **ship now**.
 
-Add a one-paragraph **framing disclosure** to README.md's `## How to use` section. Every prior-art doc is written from a "Myrhiza-design-bet-as-foundation" stance and the lessons reflect that bias. State it explicitly so future readers auditing the bet itself know to weigh accordingly:
+Add a one-paragraph **framing disclosure** to README.md's `## How to use` section. The corpus is written from whatever stance Myrhiza is currently committed to (Component-Model-as-foundation, P2P-only, etc.). The "Implications for Myrhiza" sub-sections reflect that bias by design. State it explicitly so future readers auditing the design bet itself know the corpus is not a neutral catalog:
 
 ```markdown
-**Framing disclosure.** These docs are written from a <Myrhiza-bet>-as-foundation
+**Framing disclosure.** These docs are written from a <Myrhiza-stance>
 stance — most "Implications for Myrhiza" sub-sections frame <System>'s choices
-through that lens. Future readers auditing whether <Myrhiza-bet> is itself the
+through that lens. Future readers auditing whether <Myrhiza-stance> is itself the
 right primitive should weigh the corpus accordingly: it's a learn-from-<System>-
-into-<Myrhiza-bet> artifact, not a neutral catalog.
+into-<Myrhiza-stance> artifact, not a neutral catalog.
 ```
+
+The disclosure pattern applies whether the project is a competitor, an integration target, or a neighbor — because the lessons file always reads the project through Myrhiza's current design commitments. Be explicit about that.
 
 Commit. Move on.
 
@@ -172,3 +176,4 @@ After each prior-art deep-dive, append a `## Lessons` section at the bottom of t
 <!-- Append `- YYYY-MM-DD — lesson` entries below. Keep each under ~3 lines. -->
 
 - 2026-05-08 — First execution on Holochain. The 6-agent stage-4 fan-out + worked-example stage-6 agent (Relay deep-dive) was the single biggest quality-mover. Framing disclosure was added in stage 7 after a reviewer flagged the corpus as "not neutral." Don't skip it.
+- 2026-05-08 — Second execution on Spritely Goblins / OCapN. Smaller scope (research-grade, no Volla-equivalent flagship app) ⇒ folded the two-stage overview-then-fan-out approach into a single 4-agent fan-out that produced ~12 files directly. Worked-example stage was skipped because no shipping app at scale exists; that's an honest gap rather than a failure to fill it. Frame "no flagship" itself as the lesson in the lessons.md file.

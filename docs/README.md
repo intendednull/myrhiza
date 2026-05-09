@@ -67,6 +67,7 @@ External systems we learn from. Living documents — update on revision, archive
 ### P2P runtimes
 
 - [Holochain](prior-art/holochain/) — peer-symmetric Rust runtime hosting WASM apps with deterministic-validation DHT. Closest architectural neighbor; consult when designing capabilities, determinism, networking, or identity. `[active]`
+- [Spritely Goblins / OCapN](prior-art/spritely-ocapn/) — distributed object-capability runtime + cross-implementation network protocol (with Agoric, MetaMask, Cap'n Proto). Closest semantic neighbor on capability discipline; consult when designing the cap layer, distributed GC, sturdyrefs, promise pipelining, or netlayer abstraction. `[active]`
 
 ### WASM platforms
 
