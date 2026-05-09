@@ -7,7 +7,7 @@ description: Use when documenting an external project at docs/prior-art/<system>
 
 For when we need to capture an external project as durable reference material. The project might be a competitor we want to learn from, an integration target we're about to build on, a dependency we want a deep mental model of, a sibling design-space neighbor, or just something the team will keep referring to. Output is a `docs/prior-art/<system>/` folder of focused, cross-linked reference files. Process is parallel-agent-heavy because depth matters more than speed.
 
-The skill is **not about competitive analysis**. It's about producing high-quality documentation of an existing project, written from our perspective, so future humans + agents can consult it instead of redoing the research.
+The skill is **not about competitive analysis**. It's about producing high-quality reference documentation of an existing project, written from our perspective, so future humans + agents can consult it when designing specs instead of redoing the research. **A load-bearing dependency we will hard-bake against deserves a folder *more*, not less, than a competitor** — the closer the project is to our build surface, the more our future spec authors will need a curated, version-pinned, in-tree reading. "Upstream docs already cover it" is not a valid skip reason for a dependency we are about to commit to.
 
 ## Required skills
 
@@ -18,6 +18,7 @@ The skill is **not about competitive analysis**. It's about producing high-quali
 ## When to use
 
 - Adding a new external project to `docs/prior-art/` (competitor, integration target, dependency, design-space neighbor — relationship doesn't matter).
+- A load-bearing dependency we are about to commit to (e.g. picked transport library, picked CRDT library, picked persistence engine). Build a folder *before* writing specs that depend on it, not after.
 - Doing a periodic refresh of an existing prior-art doc whose subject project has shipped major releases since the last update.
 
 ## When NOT to use
@@ -25,6 +26,8 @@ The skill is **not about competitive analysis**. It's about producing high-quali
 - One-shot research questions ("how does X work?"). Use `docs/reports/` instead.
 - Internal codebase audits. That's `general-audit`-shaped work.
 - Project we've decided not to invest in tracking. The **landscape scan** stage exists to validate the investment — if a project doesn't merit a folder, capture findings as a `docs/reports/` entry instead.
+
+**Common misjudgement to avoid:** dismissing a load-bearing dependency as "just a library we depend on, not prior art." That framing is wrong — the more we depend on something, the more its design choices, version churn, and gotchas will leak into our specs, and the more our future spec authors will need a curated reading. Treat hard dependencies as priority-1 prior-art targets, not as "out of scope."
 
 ## Workflow
 
@@ -39,6 +42,8 @@ Before committing to a full deep dive, place the project in its design-space nei
 - **Substrate layer** — common foundations (e.g. WASM Component Model, libp2p, ocap-CapTP, Ed25519, CRDTs) the project sits on or relates to.
 
 Each agent: ~600 words, table format, cite source URLs inline. Synthesize into a one-paragraph verdict that names where the project sits and lists adjacent projects worth queueing for their own folders later.
+
+When agents return "skip folder" verdicts, scrutinize the reason. Valid skip reasons: project is dead/abandoned, project pivoted out of relevant scope, lessons subsumed by an already-documented neighbor. **Invalid skip reasons:** "library we'll depend on, not prior art" (this is *exactly* a folder-worthy target — see "Common misjudgement to avoid" above), "upstream docs are good" (folders capture *our* synthesis + version-pinning, not a tutorial duplication), "narrow technical scope" (small folders are fine).
 
 **Stop condition:** verdict places the project clearly, OR you decide the project isn't worth a folder (in which case land findings as a `docs/reports/` doc and stop). Skip this stage if the user has already named the target project explicitly and adjacency placement is obvious.
 
@@ -177,3 +182,4 @@ After each prior-art deep-dive, append a `## Lessons` section at the bottom of t
 
 - 2026-05-08 — First execution on Holochain. The 6-agent stage-4 fan-out + worked-example stage-6 agent (Relay deep-dive) was the single biggest quality-mover. Framing disclosure was added in stage 7 after a reviewer flagged the corpus as "not neutral." Don't skip it.
 - 2026-05-08 — Second execution on Spritely Goblins / OCapN. Smaller scope (research-grade, no Volla-equivalent flagship app) ⇒ folded the two-stage overview-then-fan-out approach into a single 4-agent fan-out that produced ~12 files directly. Worked-example stage was skipped because no shipping app at scale exists; that's an honest gap rather than a failure to fill it. Frame "no flagship" itself as the lesson in the lessons.md file.
+- 2026-05-08 — Stage-1 scoping bias: agents have a tendency to dismiss load-bearing dependencies (transport libs, persistence libs, crypto libs) as "not prior art, just libraries we'll use." This is wrong — those are exactly the targets future spec authors most need a curated, version-pinned reading on. Skill intro + Stage 1 + "Common misjudgement" updated to call this out explicitly. Watch for the same bias on next execution.

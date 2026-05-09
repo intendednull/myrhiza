@@ -69,13 +69,17 @@ External systems we learn from. Living documents — update on revision, archive
 - [Holochain](prior-art/holochain/) — peer-symmetric Rust runtime hosting WASM apps with deterministic-validation DHT. Closest architectural neighbor; consult when designing capabilities, determinism, networking, or identity. `[active]`
 - [Spritely Goblins / OCapN](prior-art/spritely-ocapn/) — distributed object-capability runtime + cross-implementation network protocol (with Agoric, MetaMask, Cap'n Proto). Closest semantic neighbor on capability discipline; consult when designing the cap layer, distributed GC, sturdyrefs, promise pipelining, or netlayer abstraction. `[active]`
 
+### Networking substrate
+
+- [Iroh](prior-art/iroh/) — Rust P2P stack from Number 0: dial-by-pubkey QUIC, content-addressed blobs, NAT traversal via DERP-derived relays. **Load-bearing dependency** Myrhiza is committing to as transport substrate; consult before any kernel-network-cap, app-bundle-distribution, or peer-identity spec. `[active]`
+
 ### WASM platforms
 
 _(empty — wasmCloud, Spin, Extism candidates)_
 
 ### Sync protocols
 
-_(empty — Willow protocol, Automerge, iroh-docs candidates)_
+_(empty — Willow protocol, Automerge candidates; iroh-docs covered under Iroh folder)_
 
 ### Determinism & lockstep
 
