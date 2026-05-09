@@ -77,7 +77,8 @@ External systems we learn from. Living documents — update on revision, archive
 ### WASM platforms
 
 - [WASM Component Model](prior-art/wasm-component-model/) — Bytecode-Alliance-stewarded substrate Myrhiza is committing to as foundation: the Component Model spec + WIT IDL + Canonical ABI + Wasmtime reference runtime + tooling (wasm-tools, wit-bindgen, cargo-component, jco, componentize-js, componentize-py, wac, wkg). 15 files, ~2,650 lines. WASI 0.2.11 stable; preview3 in RC since 2026-01. **Load-bearing dependency**; consult before any spec on kernel-import/host-capability surface, ABI/canonical-lift-lower, component bundling, browser viability, or determinism. `[active]`
-- _(future candidates: wasmCloud, Spin, Extism — production CM runtimes built on Wasmtime substrate)_
+- [wasmCloud](prior-art/wasmcloud/) — CNCF-Incubating production CM runtime built on Wasmtime; mid-pivot from v1 lattice-on-NATS to v2 K8s-native (`v2.0.0` 2026-03-22). 15 files, ~2,260 lines. Closest existing-art for Myrhiza's kernel-mediated capability model — the **v1 architecture** (capability providers + link definitions + wadm) is more relevant precedent than v2's K8s pivot. wRPC (BA-stewarded) is the cross-host RPC layer. Cosmonic Inc primary commercial steward; pivoted 2025-07 to "Cosmonic Control" K8s control plane. Consult before specs on host plugins, capability registration, link-revocation semantics, or component-bundle deployment. `[active]`
+- _(future candidates: Spin, Extism — production CM runtimes built on Wasmtime substrate)_
 
 ### Sync protocols
 
