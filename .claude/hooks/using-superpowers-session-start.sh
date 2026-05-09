@@ -20,7 +20,7 @@ if [ ! -f "$SKILL_PATH" ]; then
     exit 0
 fi
 
-if [ "${WILLOW_SKIP_VENDORED_SKILLS:-}" = "1" ]; then
+if [ "${MYRHIZA_SKIP_VENDORED_SKILLS:-}" = "1" ]; then
     exit 0
 fi
 

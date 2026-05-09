@@ -1,13 +1,13 @@
 ---
-name: organizing-willow-docs
-description: Conventions for adding, naming, and organizing specs, plans, and reports in docs/. Use when creating a new spec/plan/report, modifying the docs structure (adding a feature area, splitting into nested folder, superseding a doc), or reorganizing the catalog. Mirrors docs/README.md and docs/specs/2026-05-07-docs-organization-design.md.
+name: organizing-docs
+description: Conventions for adding, naming, and organizing specs, plans, and reports in docs/. Use when creating a new spec/plan/report, modifying the docs structure (adding a feature area, splitting into nested folder, superseding a doc), or reorganizing the catalog. Mirrors docs/README.md.
 ---
 
-# Organizing Willow docs
+# Organizing docs
 
-Project-local skill mirroring the cemented conventions for the `docs/` tree.
+Project-local skill for the cemented conventions of the `docs/` tree.
 
-**Source of truth:** [`docs/README.md`](../../../docs/README.md) (master index, self-documenting) and [`docs/specs/2026-05-07-docs-organization-design.md`](../../../docs/specs/2026-05-07-docs-organization-design.md) (the design spec). If this skill ever drifts from those files, the README and spec are right. Update this skill in the same commit when conventions change.
+**Source of truth:** [`docs/README.md`](../../../docs/README.md) (master index, self-documenting). If this skill ever drifts from that file, the README is right. Update this skill in the same commit when conventions change.
 
 ## When to use this skill
 
@@ -37,10 +37,10 @@ Implications:
 
 | Type | Pattern | Example |
 |---|---|---|
-| Spec | `docs/specs/YYYY-MM-DD-<kebab>-design.md` | `2026-05-07-docs-organization-design.md` |
-| Multi-file spec | `docs/specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-04-19-ui-design/README.md` |
-| Plan | `docs/plans/YYYY-MM-DD-<kebab>.md` (no `-design`) | `2026-04-21-e2e-test-architecture.md` |
-| Report | `docs/reports/YYYY-MM-DD-<kebab>.md` | `2026-04-13-test-audit.md` |
+| Spec | `docs/specs/YYYY-MM-DD-<kebab>-design.md` | `2026-05-08-component-abi-design.md` |
+| Multi-file spec | `docs/specs/YYYY-MM-DD-<kebab>/README.md` + children | `2026-05-08-runtime-overview/README.md` |
+| Plan | `docs/plans/YYYY-MM-DD-<kebab>.md` (no `-design`) | `2026-05-08-component-abi.md` |
+| Report | `docs/reports/YYYY-MM-DD-<kebab>.md` | `2026-05-08-wasm-host-audit.md` |
 
 The date is **when the doc was written**, not the implementation target. The `-design.md` suffix on specs is what visually distinguishes specs from plans in `ls` output. Plans omit it.
 
@@ -77,7 +77,7 @@ Rules:
 - Children are facets of one design, not phase numbers. Phases imply ordering; children do not.
 - Maximum one level deep. If a child needs its own children, promote it to a top-level spec.
 
-Multiple independent documents that share a topic are flat siblings, not children — example: `docs/plans/2026-04-20-ui-phase-1a-desktop-shell.md`, `…1b-mobile-shell.md`, etc. Each ships independently.
+Multiple independent documents that share a topic are flat siblings, not children — each ships independently.
 
 ## Adding a new spec, plan, or report
 
@@ -88,11 +88,11 @@ Multiple independent documents that share a topic are flat siblings, not childre
     ```markdown
     - [Title](specs/YYYY-MM-DD-name-design.md) — 5–15 word summary. `[draft]`
     ```
-5. **Pick the area.** State & Authority, Networking & Sync, Identity/Crypto/Trust, Messaging, Workers & Actors, Web UI & UX, Agent / MCP, Testing, or Process & Tooling. If a doc spans areas, file it under its primary area.
+5. **Pick the area.** Use the catalog's existing `### ` headers in `docs/README.md`. If a doc spans areas, file it under its primary area. If no existing area fits, see "Modifying the structure" below.
 6. **Commit the doc and the README entry together.** The catalog must not lag the file.
 
 ## Modifying the structure
 
-- **Adding a feature area:** rare. Adds an `### ` header to the catalog plus the area name to step 5 above. Update the spec at `docs/specs/2026-05-07-docs-organization-design.md` and this skill in the same commit.
+- **Adding a feature area:** rare. Adds an `### ` header to the catalog. Update this skill in the same commit if the wording in step 5 above needs to change.
 - **Promoting a spec to a nested folder:** rename `<topic>-design.md` → `<topic>/README.md`. Children are added later as kebab-case files (no date). Update the catalog entry to point at the folder's `README.md`.
 - **Superseding a doc:** add `**Supersedes:**` to the new doc's header and `[superseded]` plus a link to the successor in the old doc's catalog entry. Do NOT delete the old doc.
