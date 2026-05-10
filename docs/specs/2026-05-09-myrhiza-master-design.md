@@ -252,17 +252,20 @@ commitment.
 | `host.random(bytes)` | denied | permitted | permitted | permitted |
 | `host.broadcast(topic, payload)` | denied | denied (kernel handles) | permitted | permitted |
 | `host.subscribe(topic) -> handle` | denied | denied | permitted | permitted |
-| `host.kv.{get,put,delete,list-prefix}` | denied | denied | permitted | permitted |
+| `host.kv.get(handle, key)` | denied | denied | permitted | permitted |
+| `host.kv.put(handle, key, val)` | denied | denied | permitted | permitted |
+| `host.kv.delete(handle, key)` | denied | denied | permitted | permitted |
+| `host.kv.list-prefix(handle, prefix)` | denied | denied | permitted | permitted |
 | `host.user-prompt(prompt) -> response` | denied | denied | permitted | denied |
 | `host.seal(handle, plaintext)` | denied | capability-gated | denied | capability-gated |
 | `host.open(handle, ciphertext)` | denied | denied | capability-gated | capability-gated |
 | `host.can-open(handle) -> bool` | denied | denied | permitted | denied |
 | `host.x25519-ecdh(scope, peer-pubkey)` | denied | denied | denied | capability-gated |
 | `host.hkdf-derive(input, info, length)` | denied | denied | denied | capability-gated |
-| `host.aead-seal(key, nonce-handle, plaintext, ad)` | denied | denied | denied | capability-gated |
-| `host.aead-open(key, nonce, ciphertext, ad)` | denied | denied | denied | capability-gated |
+| `host.aead-seal(key, nonce-handle, plaintext, ad)` | denied | denied | per-call gated | per-call gated |
+| `host.aead-open(key, nonce, ciphertext, ad)` | denied | denied | per-call gated | per-call gated |
 | `host.timer.{schedule,cancel}` | denied | denied | denied | permitted |
-| `host.http.request(req) -> token` | denied | denied | denied | capability-gated |
+| `host.http.request(req) -> token` | denied | denied | denied | per-call gated |
 | `host.clipboard.write(text)` | denied | denied | per-call gated | denied |
 | `host.file-picker.show()` | denied | denied | per-call gated | denied |
 | `host.navigation.top-level(url)` | denied | denied | per-call gated | denied |
@@ -348,19 +351,61 @@ ephemeral idle thresholds, display ordering hints).
 
 ### 4.2 Sync protocol
 
-`HeadsSummary`-style delta exchange. A peer's `HeadsSummary` is the
-compact (author → seq + hash) map of its DAG. Peers exchange
-summaries; the side with newer events streams missing events to the
-side with older events.
+`HeadsSummary`-style delta exchange. The protocol is normative at
+v1:
+
+```wit
+record heads-summary {
+    // Compact per-author DAG-tip vector. Sorted by author pubkey
+    // bytes for canonical encoding.
+    authors: list<author-head>,
+    // Kernel-version skew detection (§19): peer's Wasmtime fuel-table
+    // major version. Mismatch surfaces "kernel out of date" warning.
+    kernel-fuel-table-version: u32,
+}
+
+record author-head {
+    author-pubkey: list<u8>,
+    seq: u64,
+    hash: list<u8>,                 // EventHash of head event
+}
+
+// Wire protocol:
+// 1. Peer A sends HeadsSummary to peer B.
+// 2. B compares author-by-author:
+//    - For each author A_i in B's local but not in A's summary:
+//      B is ahead; send events.
+//    - For each author A_i in A's summary with seq > B's local:
+//      A is ahead; B requests missing events via heads-request.
+//    - For each author A_i with same seq but different hash:
+//      Equivocation detected (§4.4.1) — flag and continue.
+// 3. Repeat exchange until both sides converge on identical
+//    HeadsSummary.
+record heads-request {
+    requested-events: list<event-request>,
+}
+
+record event-request {
+    author-pubkey: list<u8>,
+    from-seq: u64,                  // inclusive
+    to-seq: u64,                    // inclusive
+}
+```
+
+`HeadsSummary` is also used on the **revocation topic** (§10.7) for
+backfill of missed revocations on peer start. Same protocol shape;
+revocation-event-shaped payloads instead of app events.
 
 Out-of-order delivery is buffered in a `PendingBuffer` with two
 eviction policies (independent): age-based (default 1 hour TTL) and
 capacity-based (default 10,000 entries with per-author sub-cap of
 `max_entries / 50` to thwart Sybil-shaped flooding).
 
-Snapshots are cached materialization; they are not authoritative.
-Bootstrap = fetch a snapshot at known event hash, then catch up by
-replaying events past that hash.
+**Snapshots are out of v1 scope** (per §19 Project-shape v2). v1
+bootstrap is full-event-log replay from genesis. A peer joining a
+topic for the first time fetches all events via HeadsSummary
+delta exchange and replays through state-apply. Snapshot support
+ships in v2 as the `myrhiza-state-snapshot-cache` module.
 
 ### 4.3 Cross-peer convergence proof
 
@@ -553,6 +598,15 @@ IdentityScope. The genesis event's `seq=1`, `prev=EventHash::ZERO`,
 `deps=[]`. The kernel verifies the genesis event's `seed` matches
 the topic_id formula's `app_instance_seed`; mismatch = invalid topic.
 
+**Seed injection flow**: when a state-propose component returns
+a candidate `Genesis` payload, the kernel **injects** the 32-byte
+seed from `host.random` BEFORE pre-check runs. State-propose does
+not supply the seed (any propose-supplied seed value is overwritten
+by the kernel); pre-check sees the candidate event with seed already
+set; only after pre-check passes does the kernel sign and broadcast.
+This prevents apps from deliberately picking colliding seeds across
+instances.
+
 **Topic-ID in invitations**: out-of-band invitations to join an
 existing app instance MUST carry the full `topic_id` (and the
 `app_bundle_hash` for kernel-version verification), not just the
@@ -619,6 +673,14 @@ differ, the receiving peer either has not yet materialized to that
 anchor (sync-lag, ignore message), has already materialized past
 (catch up via HeadsSummary), or is on a different equivocation
 branch (§4.4.1; flag separately, do not treat as drift).
+
+**Drift-message signing scope**: drift-messages are signed by the
+emitting peer under its peer-scoped IdentityScope (the peer's
+long-term identity, NOT a per-instance scope). This anchors digest
+claims to verifiable peer identities; peers cannot anonymously
+publish fake drift-messages. Drift-message rate is capped at 1
+message per (peer, topic) per minute at the gossip layer, with a
+1024-message-per-day per-peer cap to bound DoS surface.
 
 **Trigger**: digest emission anchored to canonical topo-sort index
 modulo N (default N=1024 events; tunable per-app via manifest §10.2).
@@ -783,17 +845,47 @@ expose its contents to state-apply.
 ### 5.3 Fuel and resource limits
 
 Instruction-count fuel budget per state-apply invocation. Running
-out terminates uniformly across peers. Default values are deferred
-to a determinism-enforcement child spec; they should be generous
-enough that legitimate apps do not hit the limit and tight enough
-that adversarial apps cannot DoS the kernel.
+out terminates uniformly across peers.
 
-Pre-check (§4.4) shares state-apply's fuel budget per invocation.
-Whether pre-check has its own per-event budget separate from apply
-is an open child-spec question.
+**v1 normative defaults** (must be pinned at master-spec level
+because cross-peer fuel determinism depends on every peer running the
+same fuel-cost-table AND the same per-invocation budget):
 
-Memory caps per component instance are also enforced. Defaults
-deferred.
+- **state-apply per-event fuel budget**: 10,000,000 (10M) Wasmtime
+  fuel units per `apply()` call. Sufficient for ~10^6 typical
+  instructions on Wasmtime LTS reference fuel-cost-table.
+- **state-propose per-event fuel budget**: 50,000,000 (50M) units
+  (5x apply; loose-determinism profile may use complex logic).
+- **Memory cap per component instance**: 64 MB.
+- **Maximum event payload size**: 1 MB.
+- **Maximum DAG deps array size**: 64.
+
+**Pre-check shares apply's per-event fuel budget**. Pre-check fuel
+exhaustion = pre-check fail-closed (event not signed). The shared
+budget intentionally penalizes apps with expensive validation logic
+— pre-check + apply combined cannot exceed 10M units, so apps
+designing expensive checks see the cost on the originating peer
+first.
+
+**Why these defaults at master-spec level**: deferring to a child
+spec means two kernel implementations could pick different defaults,
+and convergence diverges at fuel exhaustion (peer A applies, peer B
+traps; peer A advances state, peer B doesn't). The defaults MUST be
+the same across all v1 implementations. Future kernel majors may
+revise defaults; doing so is a kernel-major version bump.
+
+**Per-host-call fuel costs**:
+- `host.hash(bytes)` — `n * 5` units where n is byte-length (BLAKE3
+  reference cost).
+- `host.verify-signature(...)` — 5,000 units (Ed25519 verify cost).
+- `host.verify-payload-mac(...)` — 1,000 units (MAC verify).
+- `host.install-key(...)` — 100 units.
+- `host.now-hlc-from-event(...)` — 50 units.
+- `host.log(level, msg)` — `100 + n` units.
+
+These are calibrated for the Wasmtime LTS reference fuel-cost-table.
+Bumping Wasmtime LTS may require recalibration as a kernel major
+bump (per §14.2).
 
 ### 5.4 Encoding for state-digest
 
@@ -935,6 +1027,26 @@ Apps using behaviors for limited tasks (e.g. auto-moderation) should
 declare a tight `behavior` variant set so a compromised behavior
 cannot author admin-class events.
 
+**v1 default for `[author-policy]`**: deny-by-default. Apps that
+omit `[author-policy]` may NOT use `host.author-event` at all under
+non-state-propose profiles (i.e. `behavior` profile cannot author
+events without explicit policy). Apps that explicitly set
+`policy = "permissive"` opt out (any profile may author any variant)
+— useful for simple apps where the cost of variant enumeration
+outweighs the security benefit.
+
+This makes defense-in-depth the default and forces app authors to
+*think* about which variants behaviors should be allowed to author,
+rather than getting authorization-bypass-by-omission.
+
+**State-apply re-validation**: every peer's state-apply re-checks
+`(calling-profile, payload-variant)` against the manifest's author-
+policy at apply time, not just at originator-side propose. Since
+the manifest is content-hash-pinned via `app_bundle_hash`, every
+peer materializing the topic shares the same author-policy. A
+compromised originator that bypassed local pre-check still fails
+remote apply, and the event is rejected from convergence.
+
 **Cremers ETK 2025 enforcement is structural**: the kernel does not
 expose any signing API that takes an algorithm parameter.
 `host.author-event` always uses Ed25519 (RFC 8032 strict). Manifest
@@ -953,7 +1065,11 @@ through the kernel surface.
 
 **Cremers ETK 2025 constraint**: `long-term` MUST use Ed25519 (which
 is SUF-CMA secure). ECDSA is EUF-CMA only and fails MLS FCGKA security.
-This applies even to non-MLS scopes for forward compatibility.
+This applies even to non-MLS scopes for forward compatibility. (For
+context: Cremers et al. 2025 "End-to-end Tree-based Key agreement"
+showed MLS implementations using EUF-CMA-only signatures break
+Forward-Compromise Group Key Agreement security; SUF-CMA is the
+stricter property Ed25519 provides. See `prior-art/mls/critiques.md`.)
 
 ### 6.3 Direction for deferred items
 
@@ -1066,8 +1182,10 @@ choice) are the unit of explicit capability transfer. Apps pass
 scoped handles to modules to grant fine-grained access:
 
 ```wit
-// app passes only this private channel handle to module M
-let channel-handle = host.create-private-channel();
+// (Illustrative pseudocode. The actual API for creating private
+// channels is defined in the kernel WIT package; the example below
+// shows the pattern, not the exact host import name.)
+let channel-handle = host.create-private-channel();  // illustrative
 my-module.process(channel-handle);
 ```
 
@@ -1337,7 +1455,10 @@ state-digest-format = "bincode-1.3"  # the only v1 value; future opt-in
 "host.author-event" = true
 "host.broadcast" = true
 "host.subscribe" = true
-"host.kv" = true
+"host.kv.get" = true
+"host.kv.put" = true
+"host.kv.delete" = true
+"host.kv.list-prefix" = true
 
 [capabilities.ui-surfaces]
 "ui:panel" = true
@@ -1349,7 +1470,14 @@ state-digest-format = "bincode-1.3"  # the only v1 value; future opt-in
 "host.file-picker.show" = false
 "host.navigation.top-level" = false
 "host.push.register" = false
-"host.http.request" = []           # array of allowed origin patterns; empty = denied
+"host.aead-seal" = []              # list of key-handle namespaces app may seal under;
+                                   # per-call gated to specific keys
+"host.aead-open" = []               # same shape
+"host.http.request" = []           # array of RFC 6454 exact origins (scheme + host + port);
+                                   # empty = denied. v1 does NOT support glob/wildcard
+                                   # patterns (subdomain-injection attack class). Future
+                                   # kernel minor may add suffix-wildcard support behind
+                                   # an explicit opt-in.
 
 [capabilities.deterministic-helpers]
 # state-apply may bind these; always permitted for that profile, listed
@@ -1437,14 +1565,35 @@ the app was built against; cross-major peers cannot subscribe to
 the same topic).
 
 **TOML canonicalization for signature**: the manifest signature
-(below) is computed over a canonical encoding of the manifest body.
-Canonicalization rules:
-- Tables sorted by key alphabetically.
-- `[[modules.dep]]` arrays sorted by `content-hash` alphabetically.
-- Strings UTF-8 normalized (NFC).
-- Numbers in canonical decimal form (no leading zeros, no `+`).
-- The `[signature]` block is excluded from the body when computing
-  the signature.
+(below) is computed NOT over the TOML text itself but over a
+**canonical bincode 1.3.x encoding** of the parsed manifest's
+typed structure. This eliminates TOML-encoder-library drift entirely.
+
+Canonical-encoding rules:
+- Parse manifest with `toml_edit 0.22.x` (pinned at v1; bumping is
+  a kernel minor version bump if-and-only-if the encoder is not
+  involved in canonical signature computation; otherwise major).
+- Convert to typed manifest struct (defined in `myrhiza-manifest`
+  WIT package).
+- Encode struct via the same bincode 1.3.x + Options chain pinned
+  in §5.4.
+- BLAKE3 the encoded bytes → `manifest_canonical_hash`.
+- Author signs `manifest_canonical_hash + content_hash + version
+  + author_pubkey`.
+
+The TOML text is the human-readable representation; the canonical
+encoding is the byte-stable signature target. This means apps may
+freely re-format their TOML (whitespace, comments, key order) without
+breaking the signature, as long as the parsed struct is unchanged.
+
+`[[modules.dep]]` array in the parsed struct is sorted by
+`content-hash` alphabetically before encoding (canonical order).
+Strings are UTF-8 NFC-normalized at struct-construction time.
+Numbers are canonical i64/u64 binary encoding via bincode.
+
+The `[signature]` block is excluded from the body when computing
+the signature (the signature signs the body, which by definition
+does not contain itself).
 
 Quoted dotted keys are required for capability identifiers containing
 dots: `"host.author-event" = true` (unquoted `host.author-event = true`
@@ -1591,7 +1740,7 @@ revoked-at = "2026-05-09T12:34:56Z"
 
 **Distribution mechanism (v1 commitment):**
 
-- Revocations propagate via iroh-blobs gossip on a **per-author
+- Revocations propagate via iroh-gossip on a **per-author
   revocation topic** computed as
   `topic_id = BLAKE3("myrhiza/revocations/v1" | author_pubkey)`.
 - Every peer that has ever installed an app or module signed by
@@ -1623,10 +1772,16 @@ revoked-at = "2026-05-09T12:34:56Z"
   observed `revocation-seq` per author and rejects revocations with
   lower or equal seq. Single-key compromise can therefore at-most
   publish one revocation per (author, seq); a flood of fake
-  revocations under the same seq is structurally impossible. Users
-  may pin a specific bundle hash (decline revocation); the kernel
-  surfaces pinning prominently when an author's revocation sequence
-  jumps abnormally fast.
+  revocations under the same seq is structurally impossible.
+  **Maximum seq jump**: the kernel rejects any revocation whose seq
+  exceeds `last_observed_seq + MAX_REVOCATION_JUMP` (default 1024
+  per author per 24-hour window). This prevents a compromised key
+  from publishing seq=`u64::MAX` and bricking the author's
+  revocation channel. If the legitimate author needs to revoke many
+  bundles fast, they may publish at most 1024 revocations per
+  24-hour window. Users may pin a specific bundle hash (decline
+  revocation); the kernel surfaces pinning prominently when an
+  author's revocation sequence jumps abnormally fast.
 
 **Subscription enumeration risk**: a relay observing revocation
 topic subscriptions can enumerate which peers ever installed software
@@ -1664,11 +1819,24 @@ warnings) but the kernel does not block third-party modules.
 
 **Initial allowlist members** (provisional; pinned at v1 ship time):
 - The Myrhiza project's primary release-signing pubkey.
-- A 2-of-3 threshold-signature scheme of three backup pubkeys held
-  offline by separate maintainers, for recovery from primary
-  compromise. Threshold signature is verified by the kernel as a
-  composite signature; any single backup compromise does not allow
-  rotation.
+- Three backup pubkeys held offline by separate maintainers, used
+  for **community-attested rotation** of the primary key. Rotation
+  procedure: the new primary pubkey is announced via three separate
+  channels (project website / community forums / signed posts under
+  maintainer identities), and an emergency kernel binary update
+  carries the new allowlist. The backups are not used as a
+  cryptographic threshold signature in v1 — proper threshold-Ed25519
+  schemes (e.g. FROST-Ed25519 IETF draft) are not yet RFC-stable
+  and adding their verification logic to the kernel TCB at v1 is
+  premature. Future kernel majors may adopt FROST-Ed25519 once it
+  reaches RFC.
+
+**v1 rotation is policy + emergency-update, not cryptographic
+threshold.** This is honest about what the maintainer ceremony
+actually provides. The threat model assumes that compromising the
+primary key requires also compromising the kernel-update channel
+(§10.10) for an attacker to land malicious modules — defense in
+depth via separate trust roots, not via threshold cryptography.
 
 ### 10.10 Kernel binary distribution and authentication
 
@@ -1956,10 +2124,28 @@ the prompt directly**, not via the UI app. This is required because:
 - **Native**: kernel renders prompts via OS-native modal dialog
   primitives (Cocoa, GTK, WinUI). The UI app cannot draw over OS-
   native modals. Engineering effort: per-platform; budget for v1.
-- **Browser**: kernel injects an iframe at z-index above the UI app's
-  rendering area. The iframe origin is controlled by the kernel
-  (data-URL with kernel-rendered HTML). The UI app cannot postMessage
-  into this iframe nor read from it.
+- **Browser**: the **UI app itself runs in a sandboxed iframe whose
+  parent is the kernel-controlled origin** (NOT the other way around).
+  The kernel renders chrome (toolbar, install prompts, high-value-op
+  approvals) in the parent context; the UI app inhabits the child
+  iframe with `sandbox="allow-scripts"` (no `allow-same-origin`,
+  no `allow-top-navigation`, no `allow-popups`). The UI app cannot
+  reach the parent's DOM, cannot postMessage into kernel-controlled
+  surfaces unless the parent explicitly opens a postMessage channel,
+  cannot manipulate z-index of parent's chrome.
+
+  **Why parent = kernel, not child**: z-index alone is not a security
+  boundary. A child iframe is an OS-enforced isolation: scripts in
+  the child cannot reach the parent's window object, cannot fake
+  approval clicks for parent-rendered controls, cannot adjust their
+  own z-index above the parent. This is the standard pattern used
+  by browser extensions for protected UI; we adopt it.
+
+  Concrete: kernel ships as an HTTPS-served origin (e.g.
+  `https://kernel.localhost`). The UI app loads as
+  `<iframe sandbox="allow-scripts" src="https://app-{hash}.kernel.localhost">`.
+  High-value-op approval prompts render in the parent context; the
+  iframe cannot draw over them.
 
 The kernel-controlled surface is **kernel TCB**, not part of any UI
 app. App authors do not customize it; the kernel ships a fixed
@@ -2020,7 +2206,12 @@ in the desktop app.
 
 **Wasmtime version pin**: v1 commits to **Wasmtime LTS** (the next
 LTS release available at v1 ship time, expected to be v48 at end-of-
-2026 per Wasmtime's 12-month LTS cadence). LTS is mandatory because:
+2026 per Wasmtime's 12-month LTS cadence). **Bumping Wasmtime LTS
+is a kernel MAJOR version bump**, not minor — fuel-cost-table
+shifts between Wasmtime majors are convergence-breaking per §10.2's
+ABI versioning rule (deterministic-helper additions are major;
+fuel-cost recalibration falls in the same convergence-breaking
+class). LTS is mandatory because:
 
 - **Cross-peer fuel determinism requires identical fuel-cost tables.**
   Cranelift's per-instruction fuel costs may shift between Wasmtime
@@ -2038,6 +2229,14 @@ Mid-cadence Wasmtime majors (non-LTS) MAY be supported by the kernel
 build but are not the canonical fuel-determinism reference. Operators
 running mixed Wasmtime versions accept the convergence-divergence
 risk; the canonical reference is LTS.
+
+**Apps cannot interoperate across kernel-major boundaries.** App
+`manifest.toml` declares `kernel-major`; topic IDs include the
+kernel-major in the `app_bundle_hash` derivation, so peers running
+different kernel-majors cannot subscribe to the same topic.
+Kernel-major-bump rollouts therefore split the network — apps must
+re-publish with the new kernel-major, and users must update kernels
+before re-joining.
 
 ### 14.3 jco browser
 
@@ -2121,8 +2320,8 @@ Two minimal apps coexisting in the same kernel.
 - State: `{ value: u64 }`
 - Events: `Increment(by: i32)`, `Decrement(by: i32)`, `Reset`
 - Permission gate on `Reset` (admin only).
-- Optional behavior component: `auto-reset-at-midnight` running on a
-  designated peer (acceptance criterion #6).
+- v1.1 behavior component: `auto-reset-at-midnight` running on a
+  designated peer (acceptance criterion #6; v1.1 stretch per §15.1).
 
 **Poll app**:
 - State: `{ options: Vec<String>, votes: Map<peer, option_index>,
