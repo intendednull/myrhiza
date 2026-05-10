@@ -26,6 +26,12 @@ use myrhiza_manifest::{
 use myrhiza_types::{EventHash, canonical_bincode};
 use thiserror::Error;
 
+/// The kernel-major value this build of the runtime implements. The
+/// install gate rejects any manifest declaring a different major per
+/// distribution.md §10.5: a major-bump is a hard ABI change, not a
+/// soft kernel-minor extension. Plan A pins `KERNEL_MAJOR_V1 = 1`.
+const KERNEL_MAJOR_V1: u32 = 1;
+
 /// Locator for an on-disk bundle. Plan A reads bundles from local
 /// directories; plan B fetches them via iroh-blobs and materializes
 /// them under a temp dir before passing them through this struct.
@@ -47,9 +53,13 @@ pub enum InstallError {
     /// Reading a bundle file from disk failed.
     #[error("io error reading bundle: {0}")]
     Io(#[from] std::io::Error),
-    /// Decoding the canonical-bincode-encoded manifest failed.
+    /// Decoding the canonical-bincode-encoded manifest failed. Carries
+    /// the underlying message as a `String` so `bincode::Error` does
+    /// not leak into the public API (kernel callers should not need to
+    /// match against bincode's error variants — install errors are
+    /// terminal).
     #[error("bincode decode error reading manifest: {0}")]
-    Bincode(#[from] bincode::Error),
+    Decode(String),
     /// Manifest text-form parse error (reserved for future TOML-on-disk
     /// support; plan A consumes canonical bincode only).
     #[error("manifest parse error: {0}")]
@@ -57,6 +67,13 @@ pub enum InstallError {
     /// Manifest is missing the signature section.
     #[error("manifest is missing the signature section")]
     MissingSignature,
+    /// Manifest declares a `kernel-major` this runtime does not
+    /// implement. Plan A implements `kernel-major = 1`; a manifest
+    /// declaring any other major is rejected at install per
+    /// distribution.md §10.5 (major-bumps are hard ABI changes).
+    /// Carries the manifest-declared value for diagnostic surfaces.
+    #[error("incompatible kernel major: manifest declares {0}, this runtime implements 1")]
+    IncompatibleKernelMajor(u32),
     /// Ed25519 signature verification failed (covers tampered content
     /// and tampered manifest body alike, since the signing target
     /// commits to both).
@@ -102,7 +119,9 @@ impl InstallFlow {
     /// # Errors
     ///
     /// Returns [`InstallError::Io`] if a bundle file cannot be read,
-    /// [`InstallError::Bincode`] if the manifest fails to decode,
+    /// [`InstallError::Decode`] if the manifest fails to decode,
+    /// [`InstallError::IncompatibleKernelMajor`] if the manifest declares
+    /// a `kernel-major` other than the one this runtime implements,
     /// [`InstallError::MissingSignature`] if the manifest is unsigned,
     /// [`InstallError::ComponentMissing`] if the manifest references a
     /// component file that is absent, [`InstallError::AuthorPubkeyDecode`]
@@ -112,8 +131,20 @@ impl InstallFlow {
     /// `signing_target_bytes` commits to the component's content hash).
     pub fn load(&self, addr: &BundleAddress) -> Result<LoadedBundle, InstallError> {
         let manifest_bytes = std::fs::read(addr.bundle_dir.join(&addr.manifest_path))?;
-        let mut manifest: Manifest = canonical_bincode().deserialize(&manifest_bytes)?;
+        let mut manifest: Manifest = canonical_bincode()
+            .deserialize(&manifest_bytes)
+            .map_err(|e| InstallError::Decode(e.to_string()))?;
         manifest.canonicalize();
+
+        // Reject incompatible kernel-major up front per distribution.md
+        // §10.5. Done before signature verify so a v2-major manifest
+        // never reaches the crypto path — keeps the error surface
+        // honest about *why* a bundle was rejected.
+        if manifest.abi.kernel_major != KERNEL_MAJOR_V1 {
+            return Err(InstallError::IncompatibleKernelMajor(
+                manifest.abi.kernel_major,
+            ));
+        }
 
         let signature: Signature = manifest
             .signature
@@ -266,6 +297,35 @@ mod tests {
         let flow = InstallFlow::new();
         let err = flow.load(&addr).expect_err("tampered must reject");
         assert!(matches!(err, InstallError::Signature(_)));
+    }
+
+    #[test]
+    fn rejects_incompatible_kernel_major() {
+        let tmp = TempDir::new().unwrap();
+        let (addr, _) = write_fixture_bundle(tmp.path());
+        // Re-decode, bump kernel-major to a value this runtime does
+        // not implement (2 — reserved for the next ABI break), and
+        // re-serialize. The signature is over the v1 signed body, so
+        // it would no longer verify either; the kernel-major gate must
+        // fire *before* the signature check so the error surface
+        // attributes the rejection correctly.
+        let mut m: Manifest = canonical_bincode()
+            .deserialize(&std::fs::read(tmp.path().join("manifest.bincode")).unwrap())
+            .unwrap();
+        m.abi.kernel_major = 2;
+        std::fs::write(
+            tmp.path().join("manifest.bincode"),
+            canonical_bincode().serialize(&m).unwrap(),
+        )
+        .unwrap();
+        let flow = InstallFlow::new();
+        let err = flow
+            .load(&addr)
+            .expect_err("kernel-major mismatch must reject");
+        match err {
+            InstallError::IncompatibleKernelMajor(v) => assert_eq!(v, 2),
+            other => panic!("expected IncompatibleKernelMajor(2), got {other:?}"),
+        }
     }
 
     #[test]

@@ -222,11 +222,22 @@ fn parse_hvo(doc: &DocumentMut) -> Result<HighValueOps, ParseError> {
         if !known_capability(k) {
             return Err(ParseError::UnknownCapability(k.into()));
         }
+        // Strict bool parse: silently coercing `"yes"` / `1` to `false`
+        // would let a manifest typo flip a high-value-op declaration
+        // closed without a parse error. Per distribution.md §10.2, HVO
+        // entries are load-bearing for user-prompt decisions; reject
+        // non-bool values rather than defaulting.
+        let require_bool = |v: &toml_edit::Item, cap: &str| -> Result<bool, ParseError> {
+            v.as_bool().ok_or_else(|| ParseError::InvalidValue {
+                field: "capabilities.high-value-ops",
+                detail: format!("expected bool for {cap}"),
+            })
+        };
         match k {
-            "host.clipboard.write" => hvo.clipboard_write = v.as_bool().unwrap_or(false),
-            "host.file-picker.show" => hvo.file_picker_show = v.as_bool().unwrap_or(false),
-            "host.navigation.top-level" => hvo.navigation_top_level = v.as_bool().unwrap_or(false),
-            "host.push.register" => hvo.push_register = v.as_bool().unwrap_or(false),
+            "host.clipboard.write" => hvo.clipboard_write = require_bool(v, k)?,
+            "host.file-picker.show" => hvo.file_picker_show = require_bool(v, k)?,
+            "host.navigation.top-level" => hvo.navigation_top_level = require_bool(v, k)?,
+            "host.push.register" => hvo.push_register = require_bool(v, k)?,
             "host.aead-seal" => hvo.aead_seal = parse_str_array(v)?,
             "host.aead-open" => hvo.aead_open = parse_str_array(v)?,
             "host.http.request" => hvo.http_request = parse_str_array(v)?,
@@ -442,6 +453,53 @@ state-apply = "components/state-apply.wasm"
             err.to_string().contains("host.invented-by-app"),
             "error must name the offending capability: {err}"
         );
+    }
+
+    #[test]
+    fn parse_rejects_non_bool_high_value_op() {
+        // `clipboard.write = "yes"` previously silently coerced to
+        // `false` via `.as_bool().unwrap_or(false)`. After the strict-
+        // parse fix it must surface as `InvalidValue` so a manifest
+        // typo cannot flip a high-value-op declaration closed without
+        // a parse error.
+        let toml = r#"
+[app]
+name = "x"
+version = "0.1.0"
+description = "x"
+author-pubkey = "wpub-author1xxx"
+author-identity-class = "third-party"
+
+[abi]
+kernel-major = 1
+kernel-minor-min = 0
+state-digest-format = "bincode-1.3"
+
+[capabilities.host-imports]
+
+[capabilities.high-value-ops]
+"host.clipboard.write" = "yes"
+
+[determinism]
+allow-floats = false
+
+[determinism.drift-detection]
+interval-events = 1024
+
+[components]
+state-apply = "components/state-apply.wasm"
+"#;
+        let err = parse_manifest(toml).expect_err("non-bool HVO must surface InvalidValue");
+        match err {
+            ParseError::InvalidValue { field, detail } => {
+                assert_eq!(field, "capabilities.high-value-ops");
+                assert!(
+                    detail.contains("host.clipboard.write"),
+                    "detail must name offending key: {detail}"
+                );
+            }
+            other => panic!("expected InvalidValue, got {other:?}"),
+        }
     }
 
     #[test]
