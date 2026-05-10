@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 /// [convergence.md §4.1].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct EventHash(#[serde(with = "serde_bytes_32")] [u8; 32]);
+pub struct EventHash(#[serde(with = "crate::hash::serde_bytes_32_pub")] [u8; 32]);
 
 /// 32-byte BLAKE3 hash of a bundle's content+manifest pair.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct BundleHash(#[serde(with = "serde_bytes_32")] [u8; 32]);
+pub struct BundleHash(#[serde(with = "crate::hash::serde_bytes_32_pub")] [u8; 32]);
 
-mod serde_bytes_32 {
+pub(crate) mod serde_bytes_32_pub {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     pub fn serialize<S: Serializer>(b: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
         serde_bytes::Bytes::new(b).serialize(s)

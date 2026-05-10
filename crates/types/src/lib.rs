@@ -11,3 +11,8 @@ pub use hash::{BundleHash, EventHash};
 
 pub mod hlc;
 pub use hlc::Hlc;
+
+pub mod author;
+pub mod topic;
+pub use author::AuthorPubkey;
+pub use topic::Topic;
