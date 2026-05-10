@@ -16,3 +16,6 @@ pub mod author;
 pub mod topic;
 pub use author::AuthorPubkey;
 pub use topic::Topic;
+
+pub mod identity;
+pub use identity::{CallingProfile, IdentityScope, InstanceBinding, InstanceKind};
