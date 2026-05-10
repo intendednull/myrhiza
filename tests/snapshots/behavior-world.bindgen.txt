@@ -16,7 +16,7 @@ world behavior {
       type key-handle = key-handle
       type log-level = log-level
       func hash(bytes: list<u8>) -> list<u8>
-      func install-key(handle: borrow<key-handle>, sealed-distribution-blob: list<u8>)
+      func install-key(handle: own<key-handle>, sealed-distribution-blob: list<u8>)
       func log(level: log-level, msg: string)
       func now-hlc-from-event(event-bytes: list<u8>) -> hlc
       func verify-payload-mac(envelope: list<u8>, handle: borrow<key-handle>) -> bool

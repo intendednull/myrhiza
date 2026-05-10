@@ -27,7 +27,7 @@ interface host-deterministic {
     /// deterministic state surface. Returns unit deliberately —
     /// "this peer can decrypt" would peer-locally branch state-apply.
     /// Fuel cost: 100.
-    install-key: func(handle: borrow<key-handle>, sealed-distribution-blob: list<u8>);
+    install-key: func(handle: key-handle, sealed-distribution-blob: list<u8>);
 
     /// Pure decoder over canonical event bytes; extracts the HLC
     /// signed into the envelope by the originator.
