@@ -17,6 +17,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:373
 
 ## convergence.md §4
+- crates/kernel/src/state_apply.rs:213
 - crates/types/src/event.rs:192
 
 ## convergence.md §4.3
@@ -27,6 +28,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:245
 
 ## determinism.md §5.1
+- crates/kernel/src/state_apply.rs:213
 - crates/wasmtime-backend/src/gating.rs:255
 - crates/wasmtime-backend/src/gating.rs:394
 
@@ -41,6 +43,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## determinism.md §5.4
 - crates/kernel/src/digest.rs:70
+- crates/kernel/src/state_apply.rs:213
 
 ## distribution.md §10.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:3

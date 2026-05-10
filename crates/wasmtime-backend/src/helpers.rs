@@ -49,6 +49,15 @@ pub fn host_verify_signature_impl(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool
 /// `wasmtime::Error`, which traps the guest call. There is no silent
 /// "zeroed Hlc" path: the WIT return type is `hlc` (no option/result),
 /// so non-canonical input MUST fail loudly.
+///
+/// **Contract with `state-apply.apply`**: per determinism.md §5.4,
+/// `event-bytes` is the FULL canonical Event envelope — the same
+/// bytes the kernel passes as the `event` argument to the guest's
+/// `apply(prior_state, event)` call. The intended call pattern is
+/// "guest forwards the same `event` slice it received as the helper
+/// argument," so two peers that received the same wire bytes always
+/// extract the same HLC. The kernel-side contract pin lives in
+/// `crates/kernel/src/state_apply.rs::tests::apply_event_envelope_round_trip_decodes_hlc`.
 #[must_use]
 pub fn host_now_hlc_from_event_impl(event_bytes: &[u8]) -> Option<Hlc> {
     let event: myrhiza_types::Event = myrhiza_types::decode_canonical(event_bytes).ok()?;
