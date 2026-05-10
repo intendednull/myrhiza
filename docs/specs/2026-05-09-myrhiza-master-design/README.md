@@ -180,7 +180,11 @@ For new contributors:
 18. **[risks.md](risks.md)** — open questions / accepted risks.
 19. **[implementation.md](implementation.md)** — critical-path outline
     handed off to writing-plans.
-20. **[sources.md](sources.md)** — references.
+20. **[verification.md](verification.md)** — testing pipeline:
+    tier layout, spec-coverage matrix, WIT/ABI freeze, resource-cap
+    regression, determinism property tests, reproducible fixtures,
+    cross-platform CI matrix.
+21. **[sources.md](sources.md)** — references.
 
 ## Cross-section anchor convention
 
