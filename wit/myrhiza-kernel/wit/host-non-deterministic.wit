@@ -1,0 +1,23 @@
+package myrhiza:kernel@1.0.0;
+
+/// Non-deterministic imports. Forbidden in state-apply.
+interface host-non-deterministic {
+    use types.{identity-scope, hlc, key-handle};
+
+    /// Peer-local hybrid logical clock. Named `now-hlc` to avoid
+    /// shadowing the `hlc` type imported from `types`.
+    now-hlc: func() -> hlc;
+
+    /// Cryptographic randomness.
+    random: func(bytes: u32) -> list<u8>;
+
+    /// Author an event under the given identity scope. Kernel
+    /// structurally validates the payload against the app's WIT
+    /// contract, looks up the private key, signs canonical encoding,
+    /// and returns the signature. Per identity.md §6.1.
+    author-event: func(scope: identity-scope, event-payload: list<u8>) -> list<u8>;
+
+    /// Block on user prompt response. UI app's surface (not kernel-
+    /// controlled chrome).
+    user-prompt: func(prompt: string) -> string;
+}
