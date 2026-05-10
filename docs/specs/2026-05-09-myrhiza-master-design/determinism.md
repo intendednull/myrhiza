@@ -138,6 +138,16 @@ expose its contents to state-apply.
   wide-arithmetic proposals at v1. Each is pinned off explicitly in
   the engine config so a future Wasmtime LTS bump cannot silently
   flip a default and shift the deterministic accept set.
+- **Cranelift opt-level pinned to `Speed`**. Wasmtime 36's default
+  matches, but opt-level participates in instruction selection —
+  constant folding can elide trap sites, and register-allocation
+  ordering can shift the in-bytecode position of a faulting
+  instruction. A future LTS that flips the default to
+  `SpeedAndSize`, or a peer building with a non-default
+  `WASMTIME_OPT_LEVEL` env override that filters into `Config`
+  construction, would silently shift trap boundaries on pathological
+  components. The pin closes that divergence window; bumping the
+  level is a kernel-major version bump.
 
 The exhaustive feature-pin discipline lives in
 `crates/wasmtime-backend/src/engine.rs::deterministic_config`; every

@@ -244,6 +244,17 @@ pub struct WasmtimeBackend {
 ///   in case a future host or cap admits a float-typed input/output.
 /// - `consume_fuel` — required for the fuel-bounded execution gate.
 /// - `wasm_component_model` — we only ever load components.
+///
+/// Pinned (codegen):
+/// - `cranelift_opt_level=Speed` — wasmtime 36's default also happens
+///   to be `Speed`, but opt-level participates in cranelift's
+///   instruction-selection pipeline (constant folding can elide trap
+///   sites, register allocation order can shift fault-instruction
+///   positions). A future LTS bump that flips the default to
+///   `SpeedAndSize` (or any peer building with a non-default
+///   `WASMTIME_OPT_LEVEL` env override that filters into Config
+///   construction) would shift trap boundaries in pathological
+///   components. Pinning here closes that silent divergence window.
 #[must_use]
 pub fn deterministic_config() -> Config {
     let mut config = Config::new();
@@ -269,7 +280,11 @@ pub fn deterministic_config() -> Config {
         // Correctness.
         .cranelift_nan_canonicalization(true)
         .consume_fuel(true)
-        .wasm_component_model(true);
+        .wasm_component_model(true)
+        // Codegen pin — defaults match today, but opt-level
+        // participates in trap-site placement so pin to close the
+        // cross-LTS / env-override divergence window.
+        .cranelift_opt_level(wasmtime::OptLevel::Speed);
     config
 }
 
