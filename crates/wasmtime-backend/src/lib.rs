@@ -17,6 +17,7 @@ pub use engine::{HostState, STATE_APPLY_FUEL_BUDGET, STATE_APPLY_MEMORY_CAP, Was
 pub use float_ban::{scan_component_for_floats, scan_core_module_for_floats};
 pub use gating::{
     state_apply_ambient_set, state_apply_bound_imports, validate_state_apply_manifest,
+    wire_state_apply_linker,
 };
 pub use helpers::{
     LogLevel, LogSink, host_hash_impl, host_now_hlc_from_event_impl, host_verify_signature_impl,
