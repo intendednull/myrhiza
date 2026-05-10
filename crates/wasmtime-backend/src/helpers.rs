@@ -39,13 +39,19 @@ pub fn host_verify_signature_impl(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool
 /// `host.now-hlc-from-event(event-bytes)` decodes the HLC out of a
 /// canonical event envelope. Pure decoder per determinism.md §5.1.
 ///
-/// Returns `None` if `event_bytes` is not a valid canonical-bincode
-/// encoding of [`myrhiza_types::Event`].
+/// Strict canonical decode: returns `None` if `event_bytes` is not the
+/// exact canonical-bincode encoding of [`myrhiza_types::Event`]. This
+/// rejects trailing garbage and any non-canonical encoding that two
+/// honest peers might disagree on — which would otherwise be a
+/// convergence-divergence vector inside `state-apply`.
+///
+/// The wasmtime binding (see `gating.rs`) maps `None` to a
+/// `wasmtime::Error`, which traps the guest call. There is no silent
+/// "zeroed Hlc" path: the WIT return type is `hlc` (no option/result),
+/// so non-canonical input MUST fail loudly.
 #[must_use]
 pub fn host_now_hlc_from_event_impl(event_bytes: &[u8]) -> Option<Hlc> {
-    use bincode::Options;
-    use myrhiza_types::canonical_bincode;
-    let event: myrhiza_types::Event = canonical_bincode().deserialize(event_bytes).ok()?;
+    let event: myrhiza_types::Event = myrhiza_types::decode_canonical(event_bytes).ok()?;
     Some(event.hlc)
 }
 
@@ -108,6 +114,53 @@ mod tests {
         let a = host_hash_impl(b"hello");
         let b = host_hash_impl(b"hello");
         assert_eq!(a, b);
+    }
+
+    fn sample_event() -> myrhiza_types::Event {
+        use std::collections::BTreeSet;
+        myrhiza_types::Event {
+            author: myrhiza_types::AuthorPubkey::from_bytes([1; 32]),
+            seq: 1,
+            prev: myrhiza_types::EventHash::ZERO,
+            deps: BTreeSet::new(),
+            hlc: Hlc {
+                wall_ms: 1_700_000_000_000,
+                logical: 0,
+            },
+            payload: vec![0x01, 0x02, 0x03],
+            signature: [0xFF; 64],
+        }
+    }
+
+    #[test]
+    fn host_now_hlc_accepts_canonical_event_bytes() {
+        use bincode::Options;
+        use myrhiza_types::canonical_bincode;
+        let event = sample_event();
+        let bytes = canonical_bincode().serialize(&event).unwrap();
+        let hlc = host_now_hlc_from_event_impl(&bytes).expect("canonical event bytes must decode");
+        assert_eq!(hlc, event.hlc);
+    }
+
+    #[test]
+    fn host_now_hlc_rejects_non_canonical_event_bytes() {
+        use bincode::Options;
+        use myrhiza_types::canonical_bincode;
+        let event = sample_event();
+        let mut bytes = canonical_bincode().serialize(&event).unwrap();
+        bytes.push(0); // trailing garbage — non-canonical
+        let result = host_now_hlc_from_event_impl(&bytes);
+        assert!(
+            result.is_none(),
+            "non-canonical event bytes must be rejected (got Some(hlc))"
+        );
+    }
+
+    #[test]
+    fn host_now_hlc_rejects_malformed_event_bytes() {
+        // Wholly malformed bytes — cannot decode at all.
+        let bytes = vec![0xFFu8; 8];
+        assert!(host_now_hlc_from_event_impl(&bytes).is_none());
     }
 
     #[test]
