@@ -345,6 +345,16 @@ pub struct WasmtimeBackend {
 ///   `WASMTIME_OPT_LEVEL` env override that filters into Config
 ///   construction) would shift trap boundaries in pathological
 ///   components. Pinning here closes that silent divergence window.
+/// - `strategy=Cranelift` — wasmtime's `Strategy::Auto` default
+///   prefers Cranelift when the `cranelift` cargo feature is present,
+///   which the workspace currently enables. A future workspace edit
+///   dropping the `cranelift` cargo feature (or adding a Pulley-only
+///   browser path that's not properly cargo-feature-isolated) would
+///   silently switch the codegen backend, producing a different
+///   trap-instruction set and potentially different trap boundaries.
+///   Explicitly pinning the strategy defends in depth: the engine
+///   either compiles with Cranelift or fails to construct, never
+///   falling through to a different backend by default.
 #[must_use]
 pub fn deterministic_config() -> Config {
     let mut config = Config::new();
@@ -374,7 +384,12 @@ pub fn deterministic_config() -> Config {
         // Codegen pin — defaults match today, but opt-level
         // participates in trap-site placement so pin to close the
         // cross-LTS / env-override divergence window.
-        .cranelift_opt_level(wasmtime::OptLevel::Speed);
+        .cranelift_opt_level(wasmtime::OptLevel::Speed)
+        // Strategy pin — defends against a future workspace edit
+        // dropping the `cranelift` cargo feature or adding a non-
+        // Cranelift backend; Strategy::Auto would silently switch,
+        // shifting the trap-instruction set across peers.
+        .strategy(wasmtime::Strategy::Cranelift);
     config
 }
 

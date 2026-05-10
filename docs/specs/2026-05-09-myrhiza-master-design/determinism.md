@@ -148,6 +148,17 @@ expose its contents to state-apply.
   construction, would silently shift trap boundaries on pathological
   components. The pin closes that divergence window; bumping the
   level is a kernel-major version bump.
+- **Codegen strategy pinned to `Cranelift`**. Wasmtime's default is
+  `Strategy::Auto`, which prefers Cranelift when the `cranelift`
+  cargo feature is present (the workspace currently enables it). A
+  future workspace edit dropping the `cranelift` cargo feature, or
+  adding a Pulley- or Winch-only browser path that is not properly
+  cargo-feature-isolated, would silently switch backends and produce
+  a different trap-instruction set / different trap boundaries.
+  Explicitly pinning the strategy defends in depth: the engine
+  either compiles with Cranelift or fails to construct, never
+  falling through to a different backend by default. Switching the
+  backend is a kernel-major version bump.
 
 The exhaustive feature-pin discipline lives in
 `crates/wasmtime-backend/src/engine.rs::deterministic_config`; every
