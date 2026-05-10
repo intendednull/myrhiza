@@ -20,6 +20,7 @@ wasmtime = { workspace = true, features = ["component-model", "cranelift", "runt
 wasmparser = "0.236"
 blake3.workspace = true
 ed25519-dalek.workspace = true
+bincode.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 hex.workspace = true

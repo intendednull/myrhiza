@@ -714,6 +714,7 @@ name = "myrhiza-wasmtime-backend"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "blake3",
  "ed25519-dalek",
  "hex",
