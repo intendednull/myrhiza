@@ -45,9 +45,15 @@ pub enum BackendError {
     /// for state-apply are rejected at install per determinism.md §5.1.
     #[error("capability {0:?} declared but deferred to plan B")]
     DeferredToPlanB(String),
-    /// State-apply WASM contains a banned float instruction.
+    /// State-apply WASM contains a banned float instruction. Carries
+    /// the scanner's diagnostic message (op name plus location). The
+    /// concrete shape is owned `String` rather than a `&'static str`
+    /// because the float-ban scanner produces dynamic messages
+    /// (e.g. embedded in nested core modules); leaking each into a
+    /// `'static` reference would accumulate per-failure allocations
+    /// for the lifetime of the backend.
     #[error("float-ban lint: component contains banned instruction {0}")]
-    BannedInstruction(&'static str),
+    BannedInstruction(String),
     /// Fuel exhaustion or other trap during apply.
     #[error("trap during apply: {0}")]
     Trap(String),

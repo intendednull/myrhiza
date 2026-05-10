@@ -77,10 +77,18 @@ pub fn parse_manifest(input: &str) -> Result<Manifest, ParseError> {
     Ok(m)
 }
 
-fn require<'a>(doc: &'a DocumentMut, table: &str) -> Result<&'a toml_edit::Table, ParseError> {
+/// Look up a top-level table by name. `table` is `&'static str` so the
+/// missing-field diagnostic can embed the literal directly into
+/// `ParseError::MissingField` without leaking a heap allocation. Every
+/// caller passes a string literal — the manifest schema's table set is
+/// closed.
+fn require<'a>(
+    doc: &'a DocumentMut,
+    table: &'static str,
+) -> Result<&'a toml_edit::Table, ParseError> {
     doc.get(table)
         .and_then(|i| i.as_table())
-        .ok_or(ParseError::MissingField(static_str(table)))
+        .ok_or(ParseError::MissingField(table))
 }
 
 fn require_str<'a>(t: &'a toml_edit::Table, key: &'static str) -> Result<&'a str, ParseError> {
@@ -93,16 +101,6 @@ fn require_int(t: &toml_edit::Table, key: &'static str) -> Result<i64, ParseErro
     t.get(key)
         .and_then(toml_edit::Item::as_integer)
         .ok_or(ParseError::MissingField(key))
-}
-
-/// Leak a manifest field name so it can be embedded in a `'static` error.
-///
-/// Cardinality is bounded by the manifest schema (one allocation per
-/// distinct missing-section name encountered in this process), so the
-/// leak is acceptable.
-#[allow(clippy::disallowed_methods)]
-fn static_str(s: &str) -> &'static str {
-    Box::leak(s.to_string().into_boxed_str())
 }
 
 fn parse_app(doc: &DocumentMut) -> Result<AppSection, ParseError> {

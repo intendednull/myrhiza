@@ -256,7 +256,7 @@ impl Backend for WasmtimeBackend {
 
         // 2. Float-ban lint — reject the component up front if any
         //    function body uses an f32/f64/SIMD-float instruction.
-        scan_component_for_floats(component_bytes).map_err(banned_instruction_from_string)?;
+        scan_component_for_floats(component_bytes).map_err(BackendError::BannedInstruction)?;
 
         // 3. Compute the bound import set (manifest ∩ ambient).
         let bound_imports = state_apply_bound_imports(manifest);
@@ -299,18 +299,6 @@ impl Backend for WasmtimeBackend {
         let instance = StateApplyInstance::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
     }
-}
-
-/// Wrap a dynamic float-ban error string into [`BackendError::BannedInstruction`].
-///
-/// `BackendError::BannedInstruction` carries a `&'static str`; the
-/// scan returns an owned `String`. We leak the string into a
-/// `'static` reference. Cardinality is bounded — at most one banned
-/// op per component scan — so the leak is a non-issue for the
-/// lifetime of a backend (one leak per failed manifest gating).
-fn banned_instruction_from_string(s: String) -> BackendError {
-    let leaked: &'static str = Box::leak(s.into_boxed_str());
-    BackendError::BannedInstruction(leaked)
 }
 
 #[cfg(test)]

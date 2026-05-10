@@ -87,11 +87,20 @@ impl LogSink {
     }
 
     /// Drain accumulated log entries. Host-side only.
+    ///
+    /// Recovers from a poisoned mutex via `into_inner()` rather than
+    /// dropping log entries on the floor. A poisoned `entries` mutex
+    /// means a `record` panicked mid-push — the existing entries are
+    /// still well-formed (`Vec` is exception-safe through `push`), so
+    /// returning them is preferable to silently swallowing diagnostic
+    /// output. The peer-local sink is not part of state-digest, so
+    /// surfacing the partial log has no convergence implications.
     pub fn drain(&self) -> Vec<(LogLevel, String)> {
-        self.entries
+        let mut guard = self
+            .entries
             .lock()
-            .map(|mut g| std::mem::take(&mut *g))
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *guard)
     }
 }
 
