@@ -187,6 +187,14 @@ pub fn wire_state_apply_linker(
 
     // host.log is always available to state-apply per
     // determinism.md §5.1 (output-only sink; not part of state-digest).
+    // The bound set computed by `state_apply_bound_imports` always
+    // injects "host.log"; the assert locks that invariant so a future
+    // refactor that drops the unconditional insertion fails fast in
+    // debug builds rather than silently regressing always-on logging.
+    debug_assert!(
+        bound_imports.contains("host.log"),
+        "host.log must be in bound_imports — state_apply_bound_imports always injects it",
+    );
     iface
         .func_wrap(
             "log",
@@ -244,6 +252,14 @@ mod tests {
     use super::*;
     use myrhiza_manifest::vocabulary::CapabilityClass;
 
+    /// Covers: determinism.md §5.1, capabilities.md §7.1
+    ///
+    /// The state-apply ambient set is the deterministic-helper subset
+    /// per architecture.md §3.5 / determinism.md §5.1; this test
+    /// verifies every member of the ambient set is in fact classified
+    /// as a `DeterministicHelper` in the vocabulary, locking the
+    /// "ambient set = deterministic helpers, nothing else" invariant
+    /// that capabilities.md §7.1 builds on.
     #[test]
     fn state_apply_ambient_is_only_deterministic_helpers() {
         let ambient = state_apply_ambient_set();
@@ -373,6 +389,34 @@ mod tests {
             .deterministic_helpers
             .insert("host.log".into(), true);
         validate_state_apply_manifest(&m).expect("helper-set-only must validate");
+    }
+
+    /// Covers: determinism.md §5.1, capabilities.md §7.1
+    ///
+    /// `host.log` is always-on for state-apply per determinism.md §5.1
+    /// — manifests need not (and historically did not) declare it. The
+    /// `state_apply_bound_imports` function unconditionally inserts it
+    /// even when the manifest omits both `host_imports` and
+    /// `deterministic_helpers` entries for it. This test locks that
+    /// behavior so a future refactor that drops the unconditional
+    /// insertion (or makes log declaration mandatory) fails fast.
+    #[test]
+    fn manifest_omitting_host_log_still_binds_it() {
+        let m = sample_state_apply_manifest();
+        // Pre-condition: the manifest declares neither host_imports
+        // nor deterministic_helpers entries for host.log.
+        assert!(!m.capabilities.host_imports.contains_key("host.log"));
+        assert!(
+            !m.capabilities
+                .deterministic_helpers
+                .contains_key("host.log")
+        );
+
+        let bound = state_apply_bound_imports(&m);
+        assert!(
+            bound.contains("host.log"),
+            "host.log must be bound even when manifest omits it (always-on per §5.1): {bound:?}"
+        );
     }
 
     fn sample_state_apply_manifest() -> myrhiza_manifest::schema::Manifest {

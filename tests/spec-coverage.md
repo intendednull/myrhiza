@@ -11,40 +11,55 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## architecture.md §3.5
 - crates/wasmtime-backend/tests/wit_freeze.rs:3
 
+## capabilities.md §7.1
+- crates/wasmtime-backend/src/gating.rs:255
+- crates/wasmtime-backend/src/gating.rs:394
+
 ## capabilities.md §7.2
-- crates/kernel/tests/acceptance.rs:156
-- crates/kernel/tests/acceptance.rs:352
+- crates/kernel/tests/acceptance.rs:157
+- crates/kernel/tests/acceptance.rs:373
 
 ## convergence.md §4 — genesis events MUST encode `prev` as
 - crates/types/src/event.rs:192
 
+## convergence.md §4.3
+- crates/kernel/src/digest.rs:70
+
 ## convergence.md §4.4
-- crates/kernel/tests/acceptance.rs:107
-- crates/kernel/tests/acceptance.rs:244
+- crates/kernel/tests/acceptance.rs:108
+- crates/kernel/tests/acceptance.rs:245
+
+## determinism.md §5.1
+- crates/wasmtime-backend/src/gating.rs:255
+- crates/wasmtime-backend/src/gating.rs:394
 
 ## determinism.md §5.2 (banned features)
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
 ## determinism.md §5.2
-- crates/kernel/tests/acceptance.rs:317
+- crates/kernel/tests/acceptance.rs:338
 
 ## determinism.md §5.3
-- crates/kernel/tests/acceptance.rs:279
+- crates/kernel/tests/acceptance.rs:300
 - crates/types/tests/limits_shadow.rs:3
+
+## determinism.md §5.4
+- crates/kernel/src/digest.rs:70
 
 ## distribution.md §10.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:3
 
 ## distribution.md §10.5
-- crates/kernel/tests/acceptance.rs:352
+- crates/kernel/tests/acceptance.rs:373
+- crates/kernel/tests/acceptance.rs:85
 
 ## mvp.md §15.1
-- crates/kernel/tests/acceptance.rs:107
-- crates/kernel/tests/acceptance.rs:156
-- crates/kernel/tests/acceptance.rs:244
-- crates/kernel/tests/acceptance.rs:279
-- crates/kernel/tests/acceptance.rs:317
-- crates/kernel/tests/acceptance.rs:352
+- crates/kernel/tests/acceptance.rs:108
+- crates/kernel/tests/acceptance.rs:157
+- crates/kernel/tests/acceptance.rs:245
+- crates/kernel/tests/acceptance.rs:300
+- crates/kernel/tests/acceptance.rs:338
+- crates/kernel/tests/acceptance.rs:373
 - crates/kernel/tests/acceptance.rs:85
 
 ## verification.md §22.1

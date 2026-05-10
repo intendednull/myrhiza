@@ -67,6 +67,15 @@ mod tests {
     use super::*;
     use myrhiza_types::EventHash;
 
+    /// Covers: determinism.md §5.4, convergence.md §4.3
+    ///
+    /// `state-digest` output bytes — encoded by the app per
+    /// determinism.md §5.4 (bincode-1.3 fixed-int / big-endian) — are
+    /// consumed by the kernel's digest emitter and hashed with BLAKE3
+    /// for cross-peer convergence verification. The emitter records
+    /// `(event_index, BLAKE3(digest_bytes))` tuples; this test locks
+    /// the per-event observation contract so plan B's modulo-cadence
+    /// gate has a stable shape to wire into.
     #[test]
     fn emitter_records_per_event_digest() {
         let mut emitter = DigestEmitter::new(1024);

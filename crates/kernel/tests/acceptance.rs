@@ -82,10 +82,11 @@ fn build_signed_counter_bundle() -> (myrhiza_test_utils::bundle::TestBundle, Bun
     (test_bundle, addr)
 }
 
-/// Covers: mvp.md §15.1, verification.md §22.1
+/// Covers: mvp.md §15.1, verification.md §22.1, distribution.md §10.5
 ///
 /// Plan-A criterion #1 part 1: kernel loads a signed bundle, verifies
 /// the Ed25519 signature, returns the manifest + component bytes.
+/// Exercises the install flow per distribution.md §10.5.
 #[test]
 fn kernel_loads_signed_bundle() {
     let (_bundle, addr) = build_signed_counter_bundle();
@@ -274,6 +275,26 @@ fn pre_check_returns_reject_and_does_not_commit() {
     // the kernel discards it either way, but the contract is that
     // pre-check on Reject returns no useful state.
     assert!(result.candidate_state.is_empty());
+
+    // §22.5 pre-check / apply agreement invariant: the same
+    // `(prior_state, event)` pair must produce the same verdict
+    // through `apply` as through `pre_check`. Pre-check is
+    // mechanically the same WASM `apply` call run in dry-run mode
+    // (per architecture.md §3.5 / determinism.md §5.1) — if the
+    // verdicts diverge, a state-apply is non-deterministic and
+    // cross-peer convergence is at risk. Asserting both paths return
+    // `Reject("not allowed")` documents that contract.
+    let apply_result = handle.apply(b"", b"any-event").expect("apply OK");
+    match apply_result.outcome {
+        ApplyOutcome::Rejected(reason) => {
+            assert_eq!(reason, "not allowed");
+        }
+        ApplyOutcome::Accepted => {
+            panic!(
+                "pre-check / apply agreement: apply must reject when pre-check rejected the same input"
+            );
+        }
+    }
 }
 
 /// Covers: determinism.md §5.3, mvp.md §15.1

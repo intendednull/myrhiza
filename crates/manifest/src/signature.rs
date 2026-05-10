@@ -117,12 +117,16 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_non_strict_signature() {
-        // verify_strict catches signatures with non-canonical s.
-        // We assert that the API used is verify_strict by checking
-        // that the implementation does NOT compile if you swap to
-        // verify(). This test exercises the API contract; the
-        // adversarial vector test lands in plan B's crypto fuzz.
+    fn verify_strict_accepts_canonical_signature() {
+        // The body asserts the strict path *accepts* a canonical
+        // signature — i.e. the API contract that `verify_strict` is
+        // wired up correctly and a well-formed signature passes.
+        // The previous name (`verify_rejects_non_strict_signature`)
+        // mis-described what the body checks; renamed for honesty.
+        //
+        // note: malleable s-value adversarial vector lands in plan B
+        // (crypto fuzz harness with curated non-canonical s-values
+        // that `verify_strict` must reject and `verify` would accept).
         let sk = SigningKey::from_bytes(&[7u8; 32]);
         let pk_bytes: [u8; 32] = sk.verifying_key().to_bytes();
         let sig = sk.sign(b"msg");
