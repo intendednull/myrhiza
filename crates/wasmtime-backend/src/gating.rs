@@ -82,9 +82,7 @@ pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
                 // check is needed.
             }
             Some(_) => {
-                return Err(BackendError::UnauthorizedImport {
-                    imported: cap.clone(),
-                });
+                return Err(BackendError::UnauthorizedImport(cap.clone()));
             }
         }
     }
@@ -313,7 +311,7 @@ mod tests {
             .insert("host.broadcast".into(), true);
         let res = validate_state_apply_manifest(&m);
         assert!(
-            matches!(res, Err(BackendError::UnauthorizedImport { .. })),
+            matches!(res, Err(BackendError::UnauthorizedImport(_))),
             "non-det import must be rejected as unauthorized: {res:?}"
         );
     }

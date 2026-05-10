@@ -25,6 +25,99 @@ use crate::gating::{
 use crate::helpers::LogSink;
 use crate::instance::StateApplyInstance;
 
+/// WIT instance name for the deterministic-helper interface bound to
+/// state-apply per architecture.md §3.5. Pre-walking the component's
+/// imports against this name is how we deterministically attribute
+/// `UnauthorizedImport` errors before reaching the linker (which
+/// otherwise surfaces those failures as a string-typed
+/// `wasmtime::Error`).
+const HOST_DETERMINISTIC_INSTANCE: &str = "myrhiza:kernel/host-deterministic@1.0.0";
+
+/// WIT instance name for the shared types interface. The state-apply
+/// world `use`s `verdict` / `hlc` / `key-handle` / `log-level` from
+/// this interface, which surfaces as a top-level component import of
+/// the types instance. It carries no executable functions — only type
+/// definitions and resource declarations — so the pre-walk treats it
+/// as an always-available types-only instance rather than a
+/// capability surface.
+const SHARED_TYPES_INSTANCE: &str = "myrhiza:kernel/types@1.0.0";
+
+/// `host.log` is unconditionally bound on state-apply per
+/// determinism.md §5.1 — the manifest does not need to declare it. The
+/// pre-walk treats it as always-on so a manifest that omits it doesn't
+/// cause a spurious `UnauthorizedImport`.
+fn is_always_on_helper(cap: &str) -> bool {
+    cap == "host.log"
+}
+
+/// Walk the component's top-level instance imports against
+/// `bound_imports` (the manifest-allowed subset of the deterministic
+/// helper ambient set, plus the always-on `host.log`). Returns
+/// [`BackendError::UnauthorizedImport`] for the first import that the
+/// state-apply ambient set does not provide.
+///
+/// This pre-walk replaces the previous string-match fallback in
+/// [`StateApplyInstance::instantiate`]: by enumerating
+/// [`wasmtime::component::Component::component_type().imports()`]
+/// before linker construction we can attribute capability rejections
+/// deterministically without depending on the wording of wasmtime's
+/// link-error messages.
+///
+/// Two kinds of unauthorized imports surface:
+/// 1. An unknown WIT instance (anything other than
+///    `myrhiza:kernel/host-deterministic@1.0.0`). The error carries the
+///    full versioned WIT instance name so logs are unambiguous.
+/// 2. A known-instance function whose vocabulary-mapped name
+///    (`host.<wit-fn-name>`) is not in `bound_imports` and is not the
+///    always-on helper (`host.log`). The error carries the
+///    vocabulary-style name `host.<fn-name>` to match the manifest's
+///    declaration vocabulary.
+fn prewalk_state_apply_imports(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+) -> Result<(), BackendError> {
+    use wasmtime::component::types::ComponentItem;
+
+    let component_type = component.component_type();
+    for (import_name, item) in component_type.imports(engine) {
+        // The shared `types` instance carries only type definitions
+        // (verdict, hlc, key-handle, log-level) — no callable
+        // functions — so it's always permitted. Components that `use
+        // types.{...}` in their world surface this as a top-level
+        // import; rejecting it would block every legitimate
+        // state-apply component.
+        if import_name == SHARED_TYPES_INSTANCE {
+            continue;
+        }
+        if import_name != HOST_DETERMINISTIC_INSTANCE {
+            // Any non-`host-deterministic` instance is outside the
+            // state-apply ambient set per architecture.md §3.5.
+            return Err(BackendError::UnauthorizedImport(import_name.into()));
+        }
+        // Walk the functions inside the deterministic-helper instance.
+        // Only `ComponentInstance` carries function-typed exports we
+        // can iterate; other shapes (functions, types, resources at
+        // the top level) are not produced by the state-apply WIT
+        // world, but we treat them defensively as unauthorized.
+        let ComponentItem::ComponentInstance(inst) = item else {
+            return Err(BackendError::UnauthorizedImport(import_name.into()));
+        };
+        for (fn_name, fn_item) in inst.exports(engine) {
+            // Resource and type re-exports inside the instance aren't
+            // function imports the linker needs to bind — skip them.
+            if !matches!(fn_item, ComponentItem::ComponentFunc(_)) {
+                continue;
+            }
+            let cap = format!("host.{fn_name}");
+            if !bound_imports.contains(&cap) && !is_always_on_helper(&cap) {
+                return Err(BackendError::UnauthorizedImport(cap));
+            }
+        }
+    }
+    Ok(())
+}
+
 wasmtime::component::bindgen!({
     path: "../../wit/myrhiza-kernel/wit",
     world: "state-apply",
@@ -172,11 +265,17 @@ impl Backend for WasmtimeBackend {
         let component = Component::from_binary(&self.engine, component_bytes)
             .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
 
-        // 5. Build the linker, binding ONLY the allowed imports.
+        // 5. Pre-walk component imports against the bound set so
+        //    unauthorized imports surface as a typed
+        //    `BackendError::UnauthorizedImport` instead of relying on
+        //    the wording of the linker's instantiation error.
+        prewalk_state_apply_imports(&self.engine, &component, &bound_imports)?;
+
+        // 6. Build the linker, binding ONLY the allowed imports.
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         wire_state_apply_linker(&mut linker, &bound_imports)?;
 
-        // 6. Build the store with fuel budget + memory cap per
+        // 7. Build the store with fuel budget + memory cap per
         //    determinism.md §5.3.
         let host_state = HostState {
             log_sink: Arc::new(LogSink::default()),
@@ -196,7 +295,7 @@ impl Backend for WasmtimeBackend {
         // surfaces as a trap in typed function calls.
         store.limiter(|s| &mut s.limits);
 
-        // 7. Instantiate via the bindgen-generated `StateApply` type.
+        // 8. Instantiate via the bindgen-generated `StateApply` type.
         let instance = StateApplyInstance::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
     }

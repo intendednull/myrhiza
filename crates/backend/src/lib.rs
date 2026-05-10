@@ -17,15 +17,27 @@ pub enum BackendError {
     /// Component bytes failed to decode or instantiate.
     #[error("component instantiation failed: {0}")]
     Instantiation(String),
-    /// Component imported a host import its manifest does not declare.
-    #[error("capability check failed: component imports {imported} not in manifest grants")]
-    UnauthorizedImport {
-        /// Name of the offending import.
-        imported: String,
-    },
+    /// Component imported a host import its manifest does not declare,
+    /// or the component imports an instance the state-apply ambient set
+    /// does not provide. Carries the offending import name (vocabulary-
+    /// style `host.X` for unknown functions on the deterministic-helper
+    /// instance, or the WIT instance name for unknown instances).
+    #[error("capability check failed: component imports {0:?} not in manifest grants")]
+    UnauthorizedImport(String),
     /// Component imported a function not in the v1 vocabulary.
     #[error("component imports unknown capability: {0}")]
     UnknownImport(String),
+    /// State-apply call exhausted its fuel budget per determinism.md §5.3.
+    /// Distinguished from a generic trap so the kernel can surface
+    /// "compute budget exceeded" rather than a generic instantiation
+    /// failure.
+    #[error("fuel exhausted during state-apply call")]
+    FuelExhausted,
+    /// State-apply call exceeded its 64 MB memory cap per determinism.md §5.3.
+    /// Distinguished from a generic trap so the kernel can surface
+    /// "memory cap exceeded" rather than a generic instantiation failure.
+    #[error("memory cap exceeded during state-apply call")]
+    MemoryExhausted,
     /// Capability is registered in the v1 vocabulary but its
     /// state-apply binding is deferred to plan B (e.g. `host.install-key`,
     /// `host.verify-payload-mac` — both require the `key-handle` resource

@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use myrhiza_backend::Backend;
+use myrhiza_backend::{Backend, BackendError};
 use myrhiza_kernel::{ApplyOutcome, BundleAddress, InstallFlow, StateApplyHandle};
 use myrhiza_test_utils::bundle::write_bundle;
 use myrhiza_test_utils::manifest::{
@@ -189,13 +189,17 @@ fn capability_gating_rejects_non_deterministic_import() {
         panic!("over-importer must be rejected at link time");
     };
 
-    let msg = err.to_string();
+    // Typed verdict categorization per Task 7 of plan
+    // 2026-05-10-foundation-review-fixes: the engine pre-walks the
+    // component's imports against the bound set before reaching the
+    // linker, so an unauthorized import surfaces as
+    // `BackendError::UnauthorizedImport(_)` deterministically. The
+    // previous substring assertion (`host-non-deterministic` / `random` /
+    // `import` / `unknown`) was load-bearing on wasmtime's link-error
+    // wording — fragile across LTS bumps.
     assert!(
-        msg.contains("host-non-deterministic")
-            || msg.contains("random")
-            || msg.contains("import")
-            || msg.contains("unknown"),
-        "rejection error must mention the missing import; got: {msg}"
+        matches!(err, BackendError::UnauthorizedImport(_)),
+        "over-importer must surface UnauthorizedImport; got: {err:?}"
     );
 }
 
@@ -276,11 +280,14 @@ fn pre_check_returns_reject_and_does_not_commit() {
 ///
 /// Fuel exhaustion: the kernel sets a 10M-unit fuel budget per
 /// `apply` call. A state-apply that spins forever must trap when
-/// fuel is exhausted. The error must mention "fuel" or "trap" so
-/// callers can categorize the failure as compute-budget rather than
-/// a user-defined reject.
+/// fuel is exhausted, and the failure must surface as the typed
+/// [`BackendError::FuelExhausted`] variant (Task 7 of the foundation
+/// review fixes plan) so callers can categorize it as
+/// compute-budget rather than a generic trap or user reject.
 #[test]
 fn fuel_exhaustion_traps_apply() {
+    use myrhiza_kernel::ApplyError;
+
     let (_bundle, addr) = build_signed_bundle_for("infinite-loop", 17);
 
     let flow = InstallFlow::new();
@@ -295,10 +302,15 @@ fn fuel_exhaustion_traps_apply() {
     let Err(err) = handle.apply(b"", b"any-event") else {
         panic!("infinite-loop must trap on fuel exhaustion");
     };
-    let msg = err.to_string();
+    // ApplyError::Backend wraps the underlying BackendError; downcast
+    // is via the existing `From<BackendError>` impl. The typed-variant
+    // assertion replaces the previous `msg.contains("fuel"|"trap")`
+    // substring check, which depended on wasmtime's `Trap::OutOfFuel`
+    // Display impl wording.
+    let ApplyError::Backend(backend_err) = err;
     assert!(
-        msg.contains("fuel") || msg.contains("trap"),
-        "fuel-exhaustion error should mention fuel/trap; got: {msg}"
+        matches!(backend_err, BackendError::FuelExhausted),
+        "fuel exhaustion must surface as BackendError::FuelExhausted; got: {backend_err:?}"
     );
 }
 
@@ -327,13 +339,12 @@ fn float_banned_fixture_rejected_at_install() {
     let Err(err) = backend.instantiate_state_apply(&component_bytes, &manifest) else {
         panic!("float-banned fixture must be rejected at install");
     };
-    let msg = err.to_string();
-    let lower = msg.to_lowercase();
+    // Typed verdict categorization per Task 7: the float-ban scanner
+    // surfaces `BackendError::BannedInstruction(_)` directly, so we
+    // assert the variant rather than substring-matching the formatted
+    // error message.
     assert!(
-        lower.contains("float")
-            || lower.contains("f32")
-            || lower.contains("f64")
-            || lower.contains("banned"),
-        "float-ban error should mention float/f32/f64/banned; got: {msg}"
+        matches!(err, BackendError::BannedInstruction(_)),
+        "float-ban must surface BannedInstruction; got: {err:?}"
     );
 }
