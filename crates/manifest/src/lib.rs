@@ -25,3 +25,6 @@ pub use canonical::{
     DOMAIN_SEP, length_prefix_concat, manifest_canonical_hash, signed_body_bytes,
     signing_target_bytes,
 };
+
+pub mod signature;
+pub use signature::{SignatureError, verify_signature};
