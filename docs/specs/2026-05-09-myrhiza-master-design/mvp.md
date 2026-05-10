@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — MVP
 
-# MVP
 
 ## 15. MVP
 
@@ -16,7 +15,7 @@
 2. The component applies events deterministically; multiple peers
    running the same component bytes converge to the same state hash
    (verified via `state-digest`). Convergence is guaranteed only
-   among non-equivocating authors per §4.4.1.
+   among non-equivocating authors per [convergence.md](convergence.md) §4.4.1.
 3. A UI app loads an interaction component for that state, projects
    a view, submits a command, observes the resulting state change.
 4. A second app instance (different state component, different
@@ -143,10 +142,10 @@ surprises on the browser path.
 (SDK macros, e2e tests, jco backend can overlap with later kernel
 work), realistic: **24-32 weeks**.
 
-(Note: the §20 implementation outline lists 24 numbered items at a
-finer granularity than this 18-item critical-path list — §20 is the
+(Note: the [implementation.md](implementation.md) §20 implementation outline lists 24 numbered items at a
+finer granularity than this 18-item critical-path list — [implementation.md](implementation.md) §20 is the
 detailed engineering plan; §15.5 is the schedule rollup. The numbers
-are not contradictory; §20 splits some items here into multiple
+are not contradictory; [implementation.md](implementation.md) §20 splits some items here into multiple
 engineering steps for sequencing clarity.)
 
 **v1 reduced-scope fallback**: if 24-32 weeks proves untenable, the
@@ -160,7 +159,7 @@ schedule:
 - **Defer behavior profile + criterion #6 to v1.1** (~1-2 wk savings).
   Already named as v1.1 candidate.
 - **Defer per-call gating to v1.1** (~2 wk savings). Manifest
-  intersection (§7.2) and resource handles (§7.4) preserved; per-call
+  intersection ([capabilities.md](capabilities.md) §7.2) and resource handles ([capabilities.md](capabilities.md) §7.4) preserved; per-call
   gates added later. Risk: gap window during which clipboard, file
   picker, etc. operate at module boundary, not per-call.
 
@@ -171,6 +170,6 @@ test stage, defer to v1.5 path. Otherwise hold dual-stack at v1.
 **Out of v1 by design**: maintenance modules (zero ship); MLS module;
 multi-device flow; scaling solutions; topic-ID rotation through dumb
 relays; cross-app authority composition; bundle revocation distribution
-beyond the per-author topic mechanism in §10.7.
+beyond the per-author topic mechanism in [distribution.md](distribution.md) §10.7.
 
 

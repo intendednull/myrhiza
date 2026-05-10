@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Implementation outline
 
-# Implementation outline (handed off to writing-plans)
 
 ## 20. Implementation outline (handed off to writing-plans)
 
@@ -21,7 +20,7 @@ from the start, not retrofitted):
 3. **State-digest format pin** (decision step): commit `bincode 1.3.x`
    with default config; sorted-collection discipline doc.
 4. **WIT package authoring**: state-apply, state-propose, interaction,
-   behavior worlds; canonical kernel host import surface (per §3.5).
+   behavior worlds; canonical kernel host import surface (per [architecture.md](architecture.md) §3.5).
 5. **Manifest schema implementation + capability vocabulary**:
    TOML parser; capability vocabulary registry; v1-mandatory
    high-value-op list; signature verification.
@@ -46,7 +45,7 @@ from the start, not retrofitted):
     hkdf-sha256, blake3).
 14. **Bundle distribution + signing**: Ed25519 over canonical
     manifest+content+version+pubkey encoding; iroh-blobs publication
-    and fetch; revocation topic auto-subscribe per §10.7.
+    and fetch; revocation topic auto-subscribe per [distribution.md](distribution.md) §10.7.
 15. **Counter app**: state-apply, propose, interaction, manifest.
 16. **Poll app**: same shape.
 17. **State-tier tests** for both apps.

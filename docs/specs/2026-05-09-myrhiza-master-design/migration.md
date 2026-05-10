@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Willow migration
 
-# Migration: Willow → Myrhiza
 
 ## 16. Migration: Willow → Myrhiza
 
@@ -28,33 +27,33 @@ permission concerns use Myrhiza primitives + modules
 
 **Architectural pieces enabling mechanical migration**:
 
-- **Event-log shape (§4)** matches Willow's per-author Merkle DAG
+- **Event-log shape ([convergence.md](convergence.md) §4)** matches Willow's per-author Merkle DAG
   almost 1:1. Willow's `EventDag`, `materialize`, `HeadsSummary`,
   `PendingBuffer` map directly to Myrhiza primitives. Willow's existing
   event log is replayable through a chat-shaped `state-apply` WASM
   component. The `EventKind` enum (Willow's hard-coded chat
   semantics) becomes the chat-app's `state-apply` payload variant —
   no kernel work required.
-- **Identity (§6)**: Willow's Ed25519 user keys reuse as
+- **Identity ([identity.md](identity.md) §6)**: Willow's Ed25519 user keys reuse as
   `IdentityScope.long-term`. Existing chat servers become app
-  instances; existing channel topic IDs translate via §4.6 formula
+  instances; existing channel topic IDs translate via [convergence.md](convergence.md) §4.6 formula
   with the chat-app's bundle hash + an instance seed derived from
   the existing server identity.
-- **Permission model (§7)**: Willow's permission tiers (Owner,
+- **Permission model ([capabilities.md](capabilities.md) §7)**: Willow's permission tiers (Owner,
   Admin, SyncProvider, etc.) become a `myrhiza-permission-governance`
   module that the chat app declares as a dep. Authority logic stays
   in app territory; the kernel hosts.
-- **Encryption (§9)**: Willow's `seal_content` channel-key encryption
+- **Encryption ([crypto.md](crypto.md) §9)**: Willow's `seal_content` channel-key encryption
   becomes a `myrhiza-crypto-channel-key` module. Future MLS adoption
   is a module swap.
-- **Browser parity (§14)**: dual-stack at v1 means Willow's existing
+- **Browser parity ([browser-native.md](browser-native.md) §14)**: dual-stack at v1 means Willow's existing
   Leptos web UI translates directly. The `myrhiza-ui-leptos` UI app
   is the Leptos client adapted to host other apps' interaction
   components.
-- **Worker pattern (§12)**: Willow's `replay`, `storage`, `relay`
+- **Worker pattern ([maintenance.md](maintenance.md) §12)**: Willow's `replay`, `storage`, `relay`
   binaries become maintenance modules. The deployment shape (operator-
   run peers configured with all maintenance modules) is preserved
-  (§12.4).
+  ([maintenance.md](maintenance.md) §12.4).
 
 **Migration timing**: target v1 (browser available from v1 ship).
 Migration is *mechanical given the architecture above* — Willow's

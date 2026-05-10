@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Maintenance and participation
 
-# Maintenance and participation
 
 ## 12. Maintenance and participation
 
@@ -27,7 +26,7 @@ Maintenance work is encapsulated in **maintenance-shaped modules**
 - Replay buffer (recent-events cache for fast catch-up).
 
 Maintenance modules use the standard module-ecosystem distribution +
-signing + capability gating mechanism (§10, §7).
+signing + capability gating mechanism ([distribution.md](distribution.md) §10, [capabilities.md](capabilities.md) §7).
 
 ### 12.3 Default client behavior
 

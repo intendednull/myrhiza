@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — UI
 
-# UI: framework, not app substrate
 
 ## 13. UI: framework, not app substrate
 
@@ -35,7 +34,7 @@ master spec acknowledges:
 - The default UI app is privileged. It is in the TCB for its own
   chrome and DOM.
 - The default UI app is **not** in the TCB for arbitrary callers'
-  intents — but only because per-call gating (§7.3) protects against
+  intents — but only because per-call gating ([capabilities.md](capabilities.md) §7.3) protects against
   caller social engineering at the **kernel** boundary, NOT inside
   the UI app's render path.
 
@@ -85,7 +84,7 @@ the prompt directly**, not via the UI app. This is required because:
 
 The kernel-controlled surface is **kernel TCB**, not part of any UI
 app. App authors do not customize it; the kernel ships a fixed
-prompt format with the visual hash icon (§10.5) for author identity.
+prompt format with the visual hash icon ([distribution.md](distribution.md) §10.5) for author identity.
 
 **`host.user-prompt(prompt) -> response`** for non-privileged intent
 prompts MAY use the UI app's surface. The UI app is in the TCB for

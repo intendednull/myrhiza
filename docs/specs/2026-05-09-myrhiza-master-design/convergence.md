@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Convergence and state-apply
 
-# Convergence and state-apply
 
 ## 4. Convergence and state-apply
 
@@ -74,7 +73,7 @@ record event-request {
 }
 ```
 
-`HeadsSummary` is also used on the **revocation topic** (§10.7) for
+`HeadsSummary` is also used on the **revocation topic** ([distribution.md](distribution.md) §10.7) for
 backfill of missed revocations on peer start. Same protocol shape;
 revocation-event-shaped payloads instead of app events.
 
@@ -83,7 +82,7 @@ eviction policies (independent): age-based (default 1 hour TTL) and
 capacity-based (default 10,000 entries with per-author sub-cap of
 `max_entries / 50` to thwart Sybil-shaped flooding).
 
-**Snapshots are out of v1 scope** (per §19 Project-shape v2). v1
+**Snapshots are out of v1 scope** (per [risks.md](risks.md) §19 Project-shape v2). v1
 bootstrap is full-event-log replay from genesis. A peer joining a
 topic for the first time fetches all events via HeadsSummary
 delta exchange and replays through state-apply. Snapshot support
@@ -101,7 +100,7 @@ surface as bugs.
 padding, `HashMap` iteration order would diverge trivially across
 peers. App-canonical digest is the load-bearing piece; format is
 **pinned at v1 to bincode 1.3.x** with explicit Options chain (see
-§5.4). Future kernel majors may add format opt-ins (e.g. postcard
+[determinism.md](determinism.md) §5.4). Future kernel majors may add format opt-ins (e.g. postcard
 via manifest declaration); v1 commits one format.
 
 ### 4.4 Pre-check unification
@@ -204,7 +203,7 @@ include:
   or replay CPU.
 - **Cooperative pinning** via maintenance modules. Persister modules
   store full history; consumers fetch snapshots; per-peer storage
-  drops dramatically. Requires participation-enforcement (§12.5).
+  drops dramatically. Requires participation-enforcement ([maintenance.md](maintenance.md) §12.5).
 - **Read-replica through a separate channel**. Read-heavy apps
   materialize from log on dedicated peers (operator-deployed or
   social-graph-elected) and gossip materialized state directly.
@@ -229,10 +228,10 @@ Don't speculatively ship sharding before the bottleneck is real.
 - §1 Source-chain semantics (already aligned: per-author Merkle DAG
   IS source-chain shape)
 - §2 DHT op decomposition (informs v2 sharding direction)
-- §3 Warrants (bad-author signaling — see §4.4.1 future direction)
+- [architecture.md](architecture.md) §3 Warrants (bad-author signaling — see §4.4.1 future direction)
 - §4 Countersigning (multi-author atomic events — relevant for
   governance modules; deferred)
-- §6 Membrane proofs (capability-bound app entry — relevant for
+- [identity.md](identity.md) §6 Membrane proofs (capability-bound app entry — relevant for
   participation primitive; informs `myrhiza-permission-rbac`)
 
 ### 4.6 Topic identity
@@ -254,7 +253,7 @@ topic_id = BLAKE3(
 
 Where:
 - `app_bundle_hash` is the iroh-blobs content hash of the app's
-  bundle (§10). Different versions of the same app have different
+  bundle ([distribution.md](distribution.md) §10). Different versions of the same app have different
   bundle hashes; topics under different versions do not collide.
 - `app_instance_seed` is a 32-byte random value chosen at app-instance
   creation time. Two installations of the same app create different
@@ -268,7 +267,7 @@ Where:
 - The `"myrhiza/topic/v1"` domain separator prevents cross-protocol
   collision and lets future kernel versions evolve the formula.
 
-**Per-app namespace property** (acceptance criterion #4 in §15.1):
+**Per-app namespace property** (acceptance criterion #4 in [mvp.md](mvp.md) §15.1):
 since `app_bundle_hash` and `app_instance_seed` differ between any
 two coexisting app instances, their topic IDs cannot collide. Events
 from app instance X cannot leak into app instance Y's gossip subscription.
@@ -323,7 +322,7 @@ deferred to relay-and-rotation child spec.
 
 ### 4.7 Cross-peer drift detection (TUTTI-shaped)
 
-Strict state-apply purity (§3.1) gives convergence-by-construction,
+Strict state-apply purity ([architecture.md](architecture.md) §3.1) gives convergence-by-construction,
 but does not protect against bugs in the state-apply implementation
 itself, in the kernel's helper-set implementation, or in serialization
 edge cases. **v1 ships runtime drift detection** modeled on Croquet's
@@ -365,7 +364,7 @@ message per (peer, topic) per minute at the gossip layer, with a
 1024-message-per-day per-peer cap to bound DoS surface.
 
 **Trigger**: digest emission anchored to canonical topo-sort index
-modulo N (default N=1024 events; tunable per-app via manifest §10.2).
+modulo N (default N=1024 events; tunable per-app via manifest [distribution.md](distribution.md) §10.2).
 **Wall-clock-driven backstop disabled at v1** — using time-based
 emission would inject peer-local non-determinism into gossip cadence
 (observable as side-channel of peer-local clock state). Future

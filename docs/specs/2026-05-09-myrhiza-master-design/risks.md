@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Open questions and accepted risks
 
-# Open questions / accepted risks
 
 ## 19. Open questions / accepted risks
 
@@ -27,7 +26,7 @@ disagree on fuel exhaustion outcomes. v1 mitigation: kernel announces
 its Wasmtime fuel-table version in HeadsSummary; if peers detect
 mismatch, the older peer surfaces a "kernel out of date; upgrade
 recommended for convergence guarantee" warning. Active divergence
-from kernel-version-skew is treated by drift detection (§4.7) as a
+from kernel-version-skew is treated by drift detection ([convergence.md](convergence.md) §4.7) as a
 flagged event with a specific "kernel-version-skew" reason rather
 than generic "convergence drift."
 
@@ -49,7 +48,7 @@ v1 audit blocker.
   group sizes before committing the `myrhiza-crypto-mls` module**
   to canonical. Reopen the kernel-baked-MLS option if module path
   doesn't make budget.
-- **Wasmtime overhead figure honesty**: §14.5 cites ~2-5% overhead
+- **Wasmtime overhead figure honesty**: [browser-native.md](browser-native.md) §14.5 cites ~2-5% overhead
   for Wasmtime vs native code. This is the steady-state straight-
   line numeric figure. Hot-path state-apply with frequent host-import
   crossings (signature verify, hash, payload-MAC verify) sees higher
@@ -70,15 +69,15 @@ v1 audit blocker.
   Mitigation: counter + poll MVP exercises this path early; commit
   to early benchmarking on Safari iOS specifically.
 - **Wasmtime version churn**: Cranelift fuel cost tables may shift
-  between Wasmtime majors. Mitigated by Wasmtime LTS pin (§14.2).
+  between Wasmtime majors. Mitigated by Wasmtime LTS pin ([browser-native.md](browser-native.md) §14.2).
   LTS bump is a kernel MAJOR version bump (convergence-breaking;
-  see §14.2).
+  see [browser-native.md](browser-native.md) §14.2).
 
 ### Security
 
 - **Author key compromise**: phishing-shape attack surface. Mitigated
   by user-visible bech32m author identity at install + revocation
-  topic auto-subscription (§10.7) + visual hash icon (§10.5 step 6).
+  topic auto-subscription ([distribution.md](distribution.md) §10.7) + visual hash icon ([distribution.md](distribution.md) §10.5 step 6).
   Future direction: key transparency log + petname registry —
   deferred to identity-binding child spec.
 - **Identity binding gap**: pubkey-as-identity is the v1 model. There
@@ -89,7 +88,7 @@ v1 audit blocker.
 - **No sigstore transparency log**: trust comes from author identity +
   user judgment. Trade accepted; matches P2P framing. Pairs with
   identity binding gap as a known v1 limitation.
-- **Side-channel resistance in deterministic helper set**: §5.1 mandates
+- **Side-channel resistance in deterministic helper set**: [determinism.md](determinism.md) §5.1 mandates
   constant-time implementations with respect to secret inputs. v1
   audit obligation: kernel implementations of `host.verify-signature`,
   `host.verify-payload-mac`, `host.aead-{seal,open}`, `host.x25519-ecdh`
@@ -112,7 +111,7 @@ v1 audit blocker.
   deterministic build verification; jco upgrades are kernel ABI
   advisories.
 - **Snapshot security at bootstrap**: out of v1 scope. v1 ships no
-  snapshots (§4.2 + Project-shape v2 above); bootstrap is full event
+  snapshots ([convergence.md](convergence.md) §4.2 + Project-shape v2 above); bootstrap is full event
   log replay. When the v2+ `myrhiza-state-snapshot-cache` module
   ships, snapshot-fetch must re-validate by replaying the log up to
   the snapshot's anchor hash on first install — snapshots are never
@@ -126,7 +125,7 @@ v1 audit blocker.
   based participation in lieu of invitation).
 - **Manifest TOCTOU**: capability declaration parsed at install,
   intersected at instantiation. Bundle update flow MUST re-run install
-  (per §10.5 step 7). Silent in-place bundle update is forbidden by
+  (per [distribution.md](distribution.md) §10.5 step 7). Silent in-place bundle update is forbidden by
   spec.
 - **Replay attack on submit-and-poll completion handlers**: kernel
   enforces that only kernel-issued tokens can re-enter components
@@ -134,7 +133,7 @@ v1 audit blocker.
   HMAC). v1 implementation MUST verify token before dispatching
   completion.
 - **Capability summary fatigue**: MetaMask Snaps lesson — users
-  habituate to permission prompts. Mitigations in §10.5: 2-second
+  habituate to permission prompts. Mitigations in [distribution.md](distribution.md) §10.5: 2-second
   minimum render time on high-value-op approval; visual hash icons;
   highlighted "first time installing from this author" markers.
   Insufficient long-term; future direction: trust-rating heuristics.
@@ -159,7 +158,7 @@ v1 audit blocker.
   as "production-validated" for event-log replay. Agoric is a
   blockchain (consensus-given ordering); Willow is at hundreds-of-
   users scale. Neither validates "event-log replay scales as P2P
-  infrastructure for write-heavy public-read apps." See §4.5 scaling
+  infrastructure for write-heavy public-read apps." See [convergence.md](convergence.md) §4.5 scaling
   section for explicit ceiling acknowledgment.
 
 ### Determinism enforcement
@@ -190,7 +189,7 @@ v1 audit blocker.
 ### Project-shape
 
 - **Schedule risk**: 24-32 weeks honest range; 16-20 was optimistic.
-  v1 scope-reduction fallback (§15.5) cuts jco / behavior / per-call
+  v1 scope-reduction fallback ([mvp.md](mvp.md) §15.5) cuts jco / behavior / per-call
   gating to v1.5 if mid-project measurement shows slip. Fallback is
   preserved as recoverable.
 - **Single architectural ancestor (Willow) at small scale**: Myrhiza
@@ -201,7 +200,7 @@ v1 audit blocker.
   (relay infra ownership, ticket changes, FFI mothballing). v1
   pinning to a specific iroh version is the immediate mitigation;
   long-term mitigation requires kernel network-trait abstraction
-  preserved as a design seam (planned in §20).
+  preserved as a design seam (planned in [implementation.md](implementation.md) §20).
 - **"Novel angle" precision**: §1 frames "peers as infrastructure"
   as novel. Holochain and Pears have framed this similarly. The
   actually-novel piece is the **combination**: WCM + capability

@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Component profiles
 
-# Component profiles
 
 ## 3. Component profiles
 
@@ -33,7 +32,7 @@ kernel calls it during normal event ingestion (apply mode) and
 during pre-check (dry-run mode against a hypothetical post-state).
 
 **Permitted host imports**: only the deterministic helper set (see
-§7). All return values are pure functions of inputs given the event
+[capabilities.md](capabilities.md) §7). All return values are pure functions of inputs given the event
 payload alone. No clock, no randomness, no network, no filesystem,
 no environment, no threads.
 
@@ -85,7 +84,7 @@ events and emit new ones.
 
 **Permitted host imports**: superset of interaction's plus
 `host.http`, `host.timer`, `host.author-event` (with behavior-
-scoped IdentityScope; see §6).
+scoped IdentityScope; see [identity.md](identity.md) §6).
 
 **Identity**: per-(peer, instance). When a peer enables a behavior,
 the kernel allocates a fresh IdentityScope under the peer's identity
@@ -98,7 +97,7 @@ identity across peers register an in-band mapping event).
 ### 3.5 Normative host import surface
 
 The canonical reference for permitted host imports per profile.
-Subsequent sections (§5 deterministic helper set, §9 crypto primitives)
+Subsequent sections ([determinism.md](determinism.md) §5 deterministic helper set, [crypto.md](crypto.md) §9 crypto primitives)
 expand on individual imports but do not contradict this table. When
 this table changes, the master spec changes — host imports are an ABI
 commitment.
@@ -146,9 +145,9 @@ Cells:
 
 - **permitted** — bound automatically when the profile loads.
 - **capability-gated** — bound only if the calling component's
-  manifest declares it (§7.1).
+  manifest declares it ([capabilities.md](capabilities.md) §7.1).
 - **per-call gated** — bound but each call rechecks the calling
-  component's manifest (§7.3).
+  component's manifest ([capabilities.md](capabilities.md) §7.3).
 - **denied** — never bound; importing it makes the component invalid
   for that profile (component-install lint rejects).
 
@@ -159,7 +158,7 @@ semantics of an import is a breaking ABI change.
 **Why state-propose does not have `host.author-event`**: propose
 returns an unsigned candidate event payload to the kernel. The kernel
 runs `state-apply` in dry-run mode against a hypothetical post-state
-(§4.4 pre-check), and only if pre-check returns Accept does the kernel
+([convergence.md](convergence.md) §4.4 pre-check), and only if pre-check returns Accept does the kernel
 sign the event under the user's IdentityScope and broadcast it. Propose
 never sees a private key and never produces a signature. This makes
 the propose-vs-apply gap structurally smaller — propose cannot bypass

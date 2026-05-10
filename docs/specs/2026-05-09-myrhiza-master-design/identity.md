@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Identity primitive
 
-# Identity primitive
 
 ## 6. Identity primitive
 
@@ -58,7 +57,7 @@ host.author-event(scope: identity-scope, event-payload: list<u8>) -> sig
 ```
 
 The kernel verifies the calling component is authorized to use the
-scope (per §7), validates that `event-payload` is a structurally-valid
+scope (per [capabilities.md](capabilities.md) §7), validates that `event-payload` is a structurally-valid
 event under the app's WIT contract (envelope shape, deps array,
 payload type), looks up the appropriate private key, signs the
 canonical encoding, and returns the signature. Private keys never
@@ -151,7 +150,7 @@ mechanics land in child specs as concrete needs emerge.
   `myrhiza-crypto-mls` module composes IdentityScope with
   `instance-kind: mls-leaf` for epoch-bound signing keys. Per-epoch
   key rotation is module-internal; kernel exposes only primitive
-  crypto (§9.2). v2+ child spec details.
+  crypto ([crypto.md](crypto.md) §9.2). v2+ child spec details.
 - **Recovery semantics when long-term key is lost** — direction:
   social recovery (M-of-N trusted peers attest to a recovery event
   re-binding the long-term identity to a new keypair) OR

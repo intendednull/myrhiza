@@ -3,12 +3,11 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Determinism
 
-# Determinism
 
 ## 5. Determinism
 
 The convergence proof rests on three legs: content-addressed events
-(per §4), deterministic topo-sort (per §4.1), and pure `state-apply`
+(per [convergence.md](convergence.md) §4), deterministic topo-sort (per [convergence.md](convergence.md) §4.1), and pure `state-apply`
 (this section).
 
 ### 5.1 Deterministic helper set
@@ -35,10 +34,10 @@ child spec):
 
 - `host.verify-signature` — Ed25519 only. RFC 8032 strict (rejects
   non-canonical s-values, malleable signatures). This is non-
-  negotiable due to Cremers ETK 2025 (§6.2 + `prior-art/mls/critiques.md`).
+  negotiable due to Cremers ETK 2025 ([identity.md](identity.md) §6.2 + `prior-art/mls/critiques.md`).
   ECDSA is forbidden anywhere in the kernel surface.
 - `host.hash` — BLAKE3, canonical 32-byte output. Pinning the algorithm
-  is required because `state-digest()` (§4.3) gossips the hash for
+  is required because `state-digest()` ([convergence.md](convergence.md) §4.3) gossips the hash for
   convergence verification; algorithm divergence breaks convergence.
 
 Notes on each helper:
@@ -79,7 +78,7 @@ key handles backed by symmetric secrets). It does NOT cover:
   WASM cache-conscious crypto patterns; v1 audit obligation).
 - Speculative-execution side-channels between components in the same
   Wasmtime instance (Wasmtime upstream issue; v1 accepts the residual
-  risk; documented in §19).
+  risk; documented in [risks.md](risks.md) §19).
 - Capability-gate dispatch timing (whether a specific origin is
   allowlisted for `host.http.request` may leak via timing). v1
   mitigation: kernel implements capability checks via constant-time
@@ -102,7 +101,7 @@ expose its contents to state-apply.
 
 - No wall clock. No randomness. No network. No filesystem. No
   environment. No threads.
-- No floats at v1 (per §3.1). State-apply WASM modules importing or
+- No floats at v1 (per [architecture.md](architecture.md) §3.1). State-apply WASM modules importing or
   using float ops are rejected at component install time.
 - No SIMD-float ops even if floats are eventually allowed; cross-platform
   divergence vectors.
@@ -151,7 +150,7 @@ revise defaults; doing so is a kernel-major version bump.
 
 These are calibrated for the Wasmtime LTS reference fuel-cost-table.
 Bumping Wasmtime LTS may require recalibration as a kernel major
-bump (per §14.2).
+bump (per [browser-native.md](browser-native.md) §14.2).
 
 ### 5.4 Encoding for state-digest
 
@@ -176,10 +175,10 @@ combination; `HashMap`, `HashSet`, and other unordered collections
 are forbidden in any field that contributes to `state-digest()`.
 
 **Why pin instead of defer**: `state-digest` is the convergence
-verification primitive (§4.3). Two kernel implementations picking
+verification primitive ([convergence.md](convergence.md) §4.3). Two kernel implementations picking
 different formats produce different digest bytes for identical
 state, causing convergence false-positives and breaking the cross-
-peer agreement check at acceptance criterion #2 (§15.1). Format
+peer agreement check at acceptance criterion #2 ([mvp.md](mvp.md) §15.1). Format
 must be specified at master-spec level.
 
 **Why bincode 1.3.x specifically**: it is what Willow ships

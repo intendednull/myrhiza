@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Apps, modules, distribution
 
-# Apps, modules, and bundle distribution
 
 ## 10. Apps, modules, and bundle distribution
 
@@ -31,7 +30,7 @@ Modules use the same shape but may not include `state-propose` or
 ### 10.2 Manifest schema (v1 normative)
 
 The manifest schema is part of the v1 master spec, not a deferred
-child spec, because §7.2's intersection mechanic cannot be specified
+child spec, because [capabilities.md](capabilities.md) §7.2's intersection mechanic cannot be specified
 without it.
 
 ```toml
@@ -133,7 +132,7 @@ algorithm = "ed25519"
 value = "0x..."
 ```
 
-**Capability vocabulary** is the table in §3.5 plus `ui:*` surfaces.
+**Capability vocabulary** is the table in [architecture.md](architecture.md) §3.5 plus `ui:*` surfaces.
 The v1 `ui:*` minimum vocabulary is enumerated in the kernel WIT
 package at v1 ship: `ui:panel`, `ui:list`, `ui:message`, `ui:form`,
 `ui:menu`, `ui:button`, `ui:input`, `ui:dialog`. Counter+poll MVP
@@ -160,7 +159,7 @@ older kernels (per `kernel-minor-min` field).
   major version bump.
 
 Apps declare `kernel-major` in manifest. Peers running incompatible
-kernel-majors cannot interoperate on the same topic (§11.2 implicit:
+kernel-majors cannot interoperate on the same topic ([networking.md](networking.md) §11.2 implicit:
 topic IDs include `app_bundle_hash` which depends on the kernel-major
 the app was built against; cross-major peers cannot subscribe to
 the same topic).
@@ -177,7 +176,7 @@ Canonical-encoding rules:
 - Convert to typed manifest struct (defined in `myrhiza-manifest`
   WIT package).
 - Encode struct via the same bincode 1.3.x + Options chain pinned
-  in §5.4.
+  in [determinism.md](determinism.md) §5.4.
 - BLAKE3 the encoded bytes → `manifest_canonical_hash`.
 - Author signs `manifest_canonical_hash + content_hash + version
   + author_pubkey`.
@@ -238,7 +237,7 @@ Author Ed25519 signs `(manifest_hash + content_hash + version +
 author_pubkey)`. The signature is part of the bundle. The author
 public key is embedded in the manifest.
 
-Author identity reuses the IdentityScope primitive (§6). App
+Author identity reuses the IdentityScope primitive ([identity.md](identity.md) §6). App
 authors are users; user signing keys can sign app releases.
 Production-grade authors typically use a separate IdentityScope
 long-term identity for releases (separation of concerns).
@@ -258,7 +257,7 @@ long-term identity for releases (separation of concerns).
    abort install with precise error.
 5. Kernel intersects capability declarations across the dep tree:
    - Each module's required capabilities are intersected with the
-     calling app's ambient set (§7.2).
+     calling app's ambient set ([capabilities.md](capabilities.md) §7.2).
    - Transitive module deps follow the same rule recursively. A
      module's required capabilities cannot exceed its calling
      module/app's grants.
@@ -271,7 +270,7 @@ long-term identity for releases (separation of concerns).
    - high-value-op list separately highlighted
 7. User confirms or rejects. **Kernel-controlled UI surface** (chrome
    the app cannot draw over) renders the prompt; high-value-op
-   prompts must use the same surface (§7.3).
+   prompts must use the same surface ([capabilities.md](capabilities.md) §7.3).
 8. Kernel instantiates the app's components.
 
 **Per-update consent**: when the app or any module dep updates,
@@ -289,8 +288,8 @@ without approving an associated app capability change. This prevents
 authors from hiding module substitutions inside larger app updates.
 
 **`on-completion` UI rendering**: high-value-op approval prompts
-(per §7.3) MUST render via the kernel-controlled UI surface defined
-in §13.2.1 (kernel-rendered chrome that the UI app cannot draw
+(per [capabilities.md](capabilities.md) §7.3) MUST render via the kernel-controlled UI surface defined
+in [ui.md](ui.md) §13.2.1 (kernel-rendered chrome that the UI app cannot draw
 over). UI app cannot intercept or fake these prompts. Non-privileged
 prompts (`host.user-prompt` for general intent) MAY render via the
 UI app's own surface, with the understanding that the UI app is in
@@ -387,9 +386,9 @@ revoked-at = "2026-05-09T12:34:56Z"
 **Subscription enumeration risk**: a relay observing revocation
 topic subscriptions can enumerate which peers ever installed software
 from author A (subscription is sticky after install). This is part
-of the §11.4 metadata-correlation surface; mitigation requires
+of the [networking.md](networking.md) §11.4 metadata-correlation surface; mitigation requires
 relay rotation + topic-subscription cover (out of scope for v1;
-named in §19).
+named in [risks.md](risks.md) §19).
 
 **Out of scope at v1**: certificate-transparency-style log;
 post-revocation re-keying; revocation forwarding via third-party

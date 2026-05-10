@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Crypto primitives
 
-# Crypto primitives and key custody
 
 ## 9. Crypto primitives and key custody
 
@@ -11,7 +10,7 @@
 
 All secret material lives in the kernel:
 
-- Private signing keys (per IdentityScope, §6).
+- Private signing keys (per IdentityScope, [identity.md](identity.md) §6).
 - Symmetric channel/group keys.
 - Ratchet state.
 - MLS group state when adopted.

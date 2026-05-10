@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Networking
 
-# Networking, sync, and relays
 
 ## 11. Networking, sync, and relays
 
@@ -21,7 +20,7 @@ upgrade pain.
 
 **Network trait abstraction is preserved as a design seam.** Even
 though iroh is committed for v1, the kernel-internal `Network` trait
-(see §15.4 `crates/network/`) is shaped so a future kernel could
+(see [mvp.md](mvp.md) §15.4 `crates/network/`) is shaped so a future kernel could
 swap transports if iroh strategy shifts (Number 0 has redirected
 before; iroh-ffi was mothballed). Trait shape: gossip publish/subscribe,
 blob publish/fetch by content hash, dial-by-pubkey, NAT-traversal
@@ -36,7 +35,7 @@ not ABI changes for apps.
 ### 11.2 Topic membership
 
 Apps subscribe to topics. A topic is a content-addressed identifier;
-exact formula at §4.6. Membership in a topic = the peer is gossiping
+exact formula at [convergence.md](convergence.md) §4.6. Membership in a topic = the peer is gossiping
 events on that topic.
 
 **Membership tracking** (v1): membership is implicit via subscription.
@@ -50,11 +49,11 @@ materialized into `members` derived state).
 topic without first being granted topic-write permission via the
 app's authority model (typically a permission module like
 `myrhiza-permission-rbac`). Bandwidth cost of accepting gossip from
-non-members is mitigated by the participation primitive (§12.5).
+non-members is mitigated by the participation primitive ([maintenance.md](maintenance.md) §12.5).
 
 ### 11.3 Sync protocol
 
-`HeadsSummary` delta exchange, per §4.2. Future work:
+`HeadsSummary` delta exchange, per [convergence.md](convergence.md) §4.2. Future work:
 `HistorySyncComplete` EOSE-style signal so peers know when backfill
 finished (Willow precedent); negentropy-shape range reconciliation
 for very large topics (deferred).

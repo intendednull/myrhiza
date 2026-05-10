@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — ABI and composition
 
-# ABI and composition
 
 ## 8. ABI and composition
 
@@ -33,7 +32,7 @@ rejected this:
 
 Components compose via typed WIT resource handles. A module exports
 a WIT interface; an app (or another module) imports it. Resource
-handles are non-forgeable refs (§7.4). The kernel arbitrates every
+handles are non-forgeable refs ([capabilities.md](capabilities.md) §7.4). The kernel arbitrates every
 cross-component call.
 
 ```
@@ -79,7 +78,7 @@ mailbox).
 **Token lifecycle**: tokens are kernel-issued opaque HMAC-tagged
 values. Components cannot forge tokens. Each token is single-use —
 the kernel rejects repeated `on-completion` calls with the same
-token (replay protection per §19). Tokens issued to a component
+token (replay protection per [risks.md](risks.md) §19). Tokens issued to a component
 expire when that component instance terminates.
 
 **Outstanding-token bound**: the kernel caps per-component

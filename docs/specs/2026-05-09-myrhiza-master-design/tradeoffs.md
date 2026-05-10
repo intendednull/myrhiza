@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Tradeoffs
 
-# Tradeoffs surfaced
 
 ## 18. Tradeoffs surfaced
 

@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Sources
 
-# Sources
 
 ## 21. Sources
 

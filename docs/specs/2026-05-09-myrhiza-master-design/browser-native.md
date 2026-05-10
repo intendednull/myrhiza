@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Browser and native
 
-# Browser and native: dual-stack at v1
 
 ## 14. Browser and native: dual-stack at v1
 
@@ -26,7 +25,7 @@ in the desktop app.
 LTS release available at v1 ship time, expected to be v48 at end-of-
 2026 per Wasmtime's 12-month LTS cadence). **Bumping Wasmtime LTS
 is a kernel MAJOR version bump**, not minor — fuel-cost-table
-shifts between Wasmtime majors are convergence-breaking per §10.2's
+shifts between Wasmtime majors are convergence-breaking per [distribution.md](distribution.md) §10.2's
 ABI versioning rule (deterministic-helper additions are major;
 fuel-cost recalibration falls in the same convergence-breaking
 class). LTS is mandatory because:
@@ -40,7 +39,7 @@ class). LTS is mandatory because:
 - **LTS provides 12+ months of stability** before forced bump, matching
   Myrhiza's release cadence.
 - **Bumping Wasmtime LTS is a kernel MAJOR version bump** (consistent
-  with §10.2 ABI versioning rule for convergence-breaking changes).
+  with [distribution.md](distribution.md) §10.2 ABI versioning rule for convergence-breaking changes).
   Apps re-publish bundles built against the new kernel major; older
   kernels cannot interoperate with newer-major topics. ABI advisory
   alone is insufficient because fuel-cost-table shifts are
@@ -66,7 +65,7 @@ migrates in-place (no API churn for app authors).
 
 Constraints:
 
-- Sync ABI only at preview2. Submit-and-poll (§8.5) is the workaround.
+- Sync ABI only at preview2. Submit-and-poll ([abi.md](abi.md) §8.5) is the workaround.
 - ~350KB JS shim floor accepted as the cost of browser parity.
 - Browser peers use iroh-relay-bridged QUIC for connectivity.
 

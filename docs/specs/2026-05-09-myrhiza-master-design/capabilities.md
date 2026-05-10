@@ -3,7 +3,6 @@
 **Parent:** [README.md](README.md)
 **Subject:** Myrhiza master design — Capability model
 
-# Capability model
 
 ## 7. Capability model
 
@@ -14,7 +13,7 @@ typed resource handles for non-forgeable inter-component refs.
 
 Every app's `manifest.toml` declares its ambient capability set:
 which host imports it may call, which UI surfaces it may bind, which
-modules it depends on. The manifest is signed (per §10) so the
+modules it depends on. The manifest is signed (per [distribution.md](distribution.md) §10) so the
 declared set cannot be modified after publication.
 
 At install time, the kernel renders a capability summary to the user
@@ -67,7 +66,7 @@ itself has clipboard access.
 
 ### 7.4 Resource handles for non-forgeable refs
 
-WASM Component Model resource handles (free from §8's full-CM ABI
+WASM Component Model resource handles (free from [abi.md](abi.md) §8's full-CM ABI
 choice) are the unit of explicit capability transfer. Apps pass
 scoped handles to modules to grant fine-grained access:
 
@@ -98,8 +97,8 @@ The four layers catch different attack classes:
 | Module forges capability ref | Resource handle non-forgeability (§7.4) |
 | Social engineering across components | Per-call gate (§7.3) |
 | Compromised behavior signing fake non-event payloads | Structural validation in `host.author-event` (§6.1) |
-| Silent capability widening on update | Per-update install flow re-runs capability summary (§10.5) |
-| Typosquatting on module names | Content-hash binding (§10.6); name is informative only |
+| Silent capability widening on update | Per-update install flow re-runs capability summary ([distribution.md](distribution.md) §10.5) |
+| Typosquatting on module names | Content-hash binding ([distribution.md](distribution.md) §10.6); name is informative only |
 
 The cost of these layers is **moderate, not free**. Manifest
 intersection requires a capability vocabulary registry + intersection
@@ -116,10 +115,10 @@ from third parties.
   install (§7.1 user review can be ignored)
 - A network adversary that controls the relay infrastructure (relays
   are dumb topic bridges; metadata correlation is a separate threat
-  class — see §11.4)
+  class — see [networking.md](networking.md) §11.4)
 - A malicious admitted member of a topic (group encryption protects
   against outsiders; insiders see what they were invited to see)
 - An author whose private key is compromised post-install (revocation
-  flow per §10.7 mitigates but cannot fully defend)
+  flow per [distribution.md](distribution.md) §10.7 mitigates but cannot fully defend)
 
 
