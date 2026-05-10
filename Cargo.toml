@@ -8,6 +8,13 @@ members = [
     "crates/kernel",
     "crates/test-utils",
 ]
+exclude = [
+    # Wasm-only fixtures — built for wasm32-unknown-unknown by
+    # `just build-fixtures` and wrapped into components via wasm-tools.
+    # Workspace inclusion would force `cargo check --workspace` to
+    # attempt cross-compiling on every gate run.
+    "tests/fixtures/counter-state-apply",
+]
 
 [workspace.package]
 version = "0.1.0"
