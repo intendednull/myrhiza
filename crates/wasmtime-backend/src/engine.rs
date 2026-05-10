@@ -14,7 +14,7 @@ use myrhiza_backend::{Backend, BackendError, ComponentInstance};
 use myrhiza_manifest::Manifest;
 use myrhiza_types::limits::{COMPONENT_MEMORY_CAP_V1, STATE_APPLY_FUEL_BUDGET_V1};
 use wasmtime::{
-    Engine, Store,
+    Config, Engine, Store,
     component::{Component, Linker, ResourceTable},
 };
 
@@ -62,23 +62,82 @@ pub struct WasmtimeBackend {
     engine: Engine,
 }
 
+/// Build the deterministic `wasmtime::Config` used for every engine
+/// construction in the runtime per determinism.md §5.2 + §5.3.
+///
+/// Wasmtime's defaults shift across LTS bumps (SIMD, relaxed-SIMD,
+/// threads, memory64, multi-memory have all flipped between releases).
+/// Replay determinism requires that two peers running the same kernel
+/// major produce identical post-state for the same event sequence —
+/// which means every engine must accept and reject the same set of
+/// instructions. We therefore pin each feature flag explicitly rather
+/// than relying on whatever the wasmtime build defaults to.
+///
+/// Disabled (nondeterministic / NaN-bit-divergent / cross-peer drift):
+/// - `wasm_simd` — `v128` ops include float lanes; bit patterns vary.
+/// - `wasm_relaxed_simd` — explicitly nondeterministic by design.
+/// - `wasm_memory64` — orthogonal pointer width; not in v1.
+/// - `wasm_multi_memory` — orthogonal store layout; not in v1.
+///
+/// Off at build time (no `Config` runtime call needed):
+/// - `wasm_threads` — the `wasm_threads` `Config` method is gated on
+///   the wasmtime `threads` cargo feature, which we deliberately do
+///   not enable in the workspace `wasmtime` dep. Threads are therefore
+///   off at compile time, which is strictly stronger than a runtime
+///   `wasm_threads(false)` call.
+///
+/// Enabled (component-model load-bearing — already on by default in
+/// wasmtime 36's `WasmFeatures::WASM2` baseline; documented here so
+/// that a future LTS bump dropping any of these lights up loudly):
+/// - `wasm_bulk_memory`, `wasm_multi_value` — required by the
+///   component-model lowering. Both default-on; we re-enable them
+///   defensively.
+/// - `wasm_reference_types` — required by the component-model
+///   lowering. Default-on as part of WASM2. The `wasm_reference_types`
+///   `Config` setter is gated on the wasmtime `gc` cargo feature
+///   (which we don't enable), so we cannot call it explicitly. The
+///   feature stays on by default; a future LTS that flips that default
+///   would break component instantiation noisily — `Component::new`
+///   would fail — which is the desired loudness.
+///
+/// Enabled (correctness):
+/// - `cranelift_nan_canonicalization` — converts every produced NaN
+///   to a single canonical bit pattern. f32/f64 are still byte-banned
+///   by the float-ban lint, but NaN canonicalization defends in depth
+///   in case a future host or cap admits a float-typed input/output.
+/// - `consume_fuel` — required for the fuel-bounded execution gate.
+/// - `wasm_component_model` — we only ever load components.
+#[must_use]
+pub fn deterministic_config() -> Config {
+    let mut config = Config::new();
+    config
+        .wasm_simd(false)
+        .wasm_relaxed_simd(false)
+        .wasm_memory64(false)
+        .wasm_multi_memory(false)
+        .wasm_bulk_memory(true)
+        .wasm_multi_value(true)
+        .cranelift_nan_canonicalization(true)
+        .consume_fuel(true)
+        .wasm_component_model(true);
+    config
+}
+
 impl WasmtimeBackend {
-    /// Build a new backend with fuel + component-model enabled per
-    /// determinism.md §5.3.
+    /// Build a new backend with the deterministic engine config per
+    /// determinism.md §5.2 + §5.3 (see [`deterministic_config`]).
     ///
     /// Float-ban is a byte-level lint enforced before instantiation
-    /// (see [`scan_component_for_floats`]); we deliberately do *not*
-    /// disable Wasmtime's float support because the lint runs first
-    /// and the WIT package does not declare any float-typed exports.
+    /// (see [`scan_component_for_floats`]); we belt-and-brace it with
+    /// `cranelift_nan_canonicalization(true)` so a future host that
+    /// accepts a float-typed input cannot leak a non-canonical NaN.
     ///
     /// # Errors
     ///
     /// Returns [`BackendError::Instantiation`] if the Wasmtime engine
     /// cannot be constructed with the requested config.
     pub fn new() -> Result<Self, BackendError> {
-        let mut config = wasmtime::Config::new();
-        config.consume_fuel(true);
-        config.wasm_component_model(true);
+        let config = deterministic_config();
         let engine =
             Engine::new(&config).map_err(|e| BackendError::Instantiation(e.to_string()))?;
         Ok(Self { engine })
