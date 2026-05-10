@@ -14,3 +14,6 @@ pub use install::{BundleAddress, InstallError, InstallFlow, LoadedBundle};
 
 pub mod state_apply;
 pub use state_apply::{ApplyError, ApplyOutcome, ApplyResult, PreCheckResult, StateApplyHandle};
+
+pub mod digest;
+pub use digest::{DigestEmitter, DigestEvent};
