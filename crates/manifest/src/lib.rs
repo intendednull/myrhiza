@@ -16,3 +16,6 @@ pub mod vocabulary;
 
 pub mod schema;
 pub use schema::*;
+
+pub mod parse;
+pub use parse::{ParseError, parse_manifest};
