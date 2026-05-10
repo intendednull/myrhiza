@@ -16,6 +16,16 @@ pub const STATE_PROPOSE_FUEL_BUDGET_V1: u64 = 50_000_000;
 /// Per-component memory cap per determinism.md §5.3.
 pub const COMPONENT_MEMORY_CAP_V1: usize = 64 * 1024 * 1024;
 
+/// Wasm operand stack ceiling per determinism.md §5.3, in bytes.
+///
+/// Pinned here so a future wasmtime LTS bump cannot silently change
+/// the wasm stack size and shift trap boundaries on deeply recursive
+/// components — see [`crate::limits`] preamble for the bump
+/// discipline. 512 KiB matches wasmtime 36's default; pinning the
+/// number means the value participates in convergence guarantees
+/// rather than tracking upstream's whim.
+pub const MAX_WASM_STACK_V1: usize = 512 * 1024;
+
 /// Maximum event payload size per determinism.md §5.3.
 pub const EVENT_PAYLOAD_CAP_V1: usize = 1024 * 1024;
 

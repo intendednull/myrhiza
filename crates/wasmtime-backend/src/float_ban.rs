@@ -119,7 +119,10 @@ pub fn scan_component_for_floats(component_bytes: &[u8]) -> Result<(), String> {
 /// - non-trapping float-to-int (`I32TruncSatF*`): DENIED — touches float
 /// - bulk-memory (memory.init/copy/fill, table.init/copy, *.drop): allowed
 /// - reference-types (ref.null, ref.func, table.get/set/grow/size/fill, typed-select): allowed
-/// - tail-call (`return_call`, `return_call_indirect`): allowed
+/// - tail-call (`return_call`, `return_call_indirect`): DENIED — `wasm_tail_call(false)`
+///   pinned in engine config; default differs across arch (on for
+///   `x86_64` / `aarch64` / `riscv64` cranelift, off for s390x / Winch) so the
+///   lint defends in depth.
 /// - threads (atomics): DENIED — `wasm_threads(false)` in engine, but defend in depth
 /// - SIMD (v128.*, *x*.*): DENIED — divergence vector
 /// - relaxed-SIMD (`Relaxed*`): DENIED — explicitly non-deterministic
@@ -259,9 +262,6 @@ fn is_allowed_op(op: &Operator<'_>) -> bool {
         RefIsNull,
         RefNull,
         Return,
-        // tail-call
-        ReturnCall,
-        ReturnCallIndirect,
         Select,
         TableCopy,
         TableFill,
@@ -412,9 +412,6 @@ fn is_allowed_op(op: &Operator<'_>) -> bool {
             | TableSet { .. }
             | TableGrow { .. }
             | TableSize { .. }
-            // tail-call
-            | ReturnCall { .. }
-            | ReturnCallIndirect { .. }
     )
 }
 
@@ -628,6 +625,57 @@ mod tests {
         assert!(
             err.contains("relaxed") || err.contains("f32x4") || err.contains("non-deterministic"),
             "error should name a relaxed-SIMD op: {err}"
+        );
+    }
+
+    /// Tail-call `return_call` must be rejected. The wasmtime default
+    /// for `wasm_tail_call` differs across architectures (on for
+    /// `x86_64` / `aarch64` / `riscv64` cranelift, off for s390x /
+    /// Winch), and the engine config now pins it off — but the lint
+    /// defends in depth so a forgotten engine flag cannot let a
+    /// tail-call op slip through and create silent cross-arch
+    /// divergence.
+    #[test]
+    fn detects_return_call_in_core_module() {
+        let bytes = wat::parse_str(
+            r#"
+            (module
+                (func $g (param i32) (result i32) local.get 0)
+                (func (export "f") (param i32) (result i32)
+                    local.get 0
+                    return_call $g))
+            "#,
+        )
+        .expect("valid tail-call WAT");
+        let err = scan_core_module_for_floats(&bytes).expect_err("return_call must be rejected");
+        assert!(
+            err.contains("non-deterministic") || err.contains("return_call"),
+            "error should name a banned op: {err}"
+        );
+    }
+
+    /// Tail-call `return_call_indirect` must also be rejected; same
+    /// rationale as `return_call` but exercises the table-dispatch
+    /// variant which a future LTS could expose independently.
+    #[test]
+    fn detects_return_call_indirect_in_core_module() {
+        let bytes = wat::parse_str(
+            r#"
+            (module
+                (type $sig (func (param i32) (result i32)))
+                (table 1 funcref)
+                (func (export "f") (param i32) (result i32)
+                    local.get 0
+                    i32.const 0
+                    return_call_indirect (type $sig)))
+            "#,
+        )
+        .expect("valid tail-call-indirect WAT");
+        let err =
+            scan_core_module_for_floats(&bytes).expect_err("return_call_indirect must be rejected");
+        assert!(
+            err.contains("non-deterministic") || err.contains("return_call"),
+            "error should name a banned op: {err}"
         );
     }
 

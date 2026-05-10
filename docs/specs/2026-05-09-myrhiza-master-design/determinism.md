@@ -126,6 +126,24 @@ expose its contents to state-apply.
 - No SIMD-float ops even if floats are eventually allowed; cross-platform
   divergence vectors.
 - No nondeterministic instructions (e.g. `now-from-host-clock`).
+- No tail-call ops (`return_call`, `return_call_indirect`). The
+  Wasmtime default for `wasm_tail_call` differs across cranelift
+  backends (on for x86_64/aarch64/riscv64, off for s390x and Winch
+  in wasmtime 36) — silent cross-arch divergence. Engine pins the
+  feature off; the byte-level lint defends in depth.
+- No extended-const expressions in globals or data segments (the
+  `extended-const` proposal). Engine pins the feature off so the v1
+  const-expr surface is exactly MVP single-`*.const`.
+- No exceptions, stack-switching, custom-page-sizes, or
+  wide-arithmetic proposals at v1. Each is pinned off explicitly in
+  the engine config so a future Wasmtime LTS bump cannot silently
+  flip a default and shift the deterministic accept set.
+
+The exhaustive feature-pin discipline lives in
+`crates/wasmtime-backend/src/engine.rs::deterministic_config`; every
+`Config` setter the workspace's wasmtime cargo features expose is
+called there, and the kernel-major version bump rule applies to any
+change in that pin set.
 
 ### 5.3 Fuel and resource limits
 
@@ -144,6 +162,11 @@ same fuel-cost-table AND the same per-invocation budget):
 - **Memory cap per component instance**: 64 MB.
 - **Maximum event payload size**: 1 MB.
 - **Maximum DAG deps array size**: 64.
+- **Maximum WASM operand stack**: 512 KiB (`524,288` bytes). Pinned
+  so deeply-recursive components hit the same trap boundary on every
+  peer; matches Wasmtime 36's current default but the pin makes the
+  value participate in convergence guarantees rather than tracking
+  upstream's whim.
 
 **Pre-check shares apply's per-event fuel budget**. Pre-check fuel
 exhaustion = pre-check fail-closed (event not signed). The shared

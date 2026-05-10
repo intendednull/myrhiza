@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use myrhiza_backend::{Backend, BackendError, ComponentInstance};
 use myrhiza_manifest::Manifest;
-use myrhiza_types::limits::{COMPONENT_MEMORY_CAP_V1, STATE_APPLY_FUEL_BUDGET_V1};
+use myrhiza_types::limits::{
+    COMPONENT_MEMORY_CAP_V1, MAX_WASM_STACK_V1, STATE_APPLY_FUEL_BUDGET_V1,
+};
 use wasmtime::{
     Config, Engine, Store,
     component::{Component, Linker, ResourceTable},
@@ -159,12 +161,17 @@ pub struct WasmtimeBackend {
 /// construction in the runtime per determinism.md §5.2 + §5.3.
 ///
 /// Wasmtime's defaults shift across LTS bumps (SIMD, relaxed-SIMD,
-/// threads, memory64, multi-memory have all flipped between releases).
-/// Replay determinism requires that two peers running the same kernel
-/// major produce identical post-state for the same event sequence —
-/// which means every engine must accept and reject the same set of
-/// instructions. We therefore pin each feature flag explicitly rather
-/// than relying on whatever the wasmtime build defaults to.
+/// threads, memory64, multi-memory have all flipped between releases),
+/// and several proposal flags also vary across architectures inside a
+/// single LTS — `wasm_tail_call` is on by default for `x86_64` /
+/// `aarch64` / `riscv64` cranelift but off for s390x and Winch, which is a silent
+/// cross-arch divergence vector. Replay determinism requires that two
+/// peers running the same kernel major produce identical post-state for
+/// the same event sequence — which means every engine must accept and
+/// reject the same set of instructions. We therefore pin each feature
+/// flag explicitly rather than relying on whatever the wasmtime build
+/// defaults to, and we exhaustively pin every feature method wasmtime
+/// 36 exposes that the workspace `wasmtime` cargo features admit.
 ///
 /// Disabled (nondeterministic / NaN-bit-divergent / cross-peer drift):
 /// - `wasm_simd` — `v128` ops include float lanes; bit patterns vary.
@@ -172,12 +179,42 @@ pub struct WasmtimeBackend {
 /// - `wasm_memory64` — orthogonal pointer width; not in v1.
 /// - `wasm_multi_memory` — orthogonal store layout; not in v1.
 ///
-/// Off at build time (no `Config` runtime call needed):
+/// Disabled (default differs across arch / LTS — pinning closes the
+/// silent divergence window):
+/// - `wasm_tail_call` — default is on for `x86_64` / `aarch64` /
+///   `riscv64` cranelift but off for s390x / Winch in wasmtime 36; the
+///   float-ban whitelist also rejects `return_call` /
+///   `return_call_indirect` so this is belt-and-brace. Tail calls are
+///   not in v1.
+/// - `wasm_extended_const` — default is on in wasmtime 36's WASM2
+///   baseline; pin off because v1 components don't use the extended
+///   constant-expression vocabulary in globals / data segments and we
+///   want a tight surface.
+///
+/// Disabled (proposals not in v1; pinned defensively even though
+/// either off-by-default or already covered by the float-ban):
+/// - `wasm_custom_page_sizes` — proposal not in v1.
+/// - `wasm_wide_arithmetic` — integer-only and deterministic, but not
+///   in the v1 ABI; pin off so adding it later is a deliberate spec
+///   bump rather than a default flip.
+/// - `wasm_stack_switching` — control-flow proposal not in v1.
+/// - `wasm_exceptions` — exception handling is a non-determinism
+///   vector and is `doc(hidden)` in wasmtime 36; pin off explicitly.
+///
+/// Off at build time (no `Config` runtime call needed — strictly
+/// stronger than a runtime pin):
 /// - `wasm_threads` — the `wasm_threads` `Config` method is gated on
 ///   the wasmtime `threads` cargo feature, which we deliberately do
 ///   not enable in the workspace `wasmtime` dep. Threads are therefore
-///   off at compile time, which is strictly stronger than a runtime
-///   `wasm_threads(false)` call.
+///   off at compile time.
+/// - `wasm_function_references` and `wasm_gc` — both `Config` setters
+///   are gated on the wasmtime `gc` cargo feature, which the workspace
+///   does not enable. Both proposals are therefore off at compile
+///   time. (Their feature bits — `FUNCTION_REFERENCES`, `GC` — also
+///   participate in `WasmFeatures::WASM2`'s conditional set tied to
+///   `cfg!(feature = "gc")`, so the engine's accepted feature set
+///   does not include them.) Adding them later would require enabling
+///   the `gc` cargo feature, which is itself a deliberate spec bump.
 ///
 /// Enabled (component-model load-bearing — already on by default in
 /// wasmtime 36's `WasmFeatures::WASM2` baseline; documented here so
@@ -193,6 +230,13 @@ pub struct WasmtimeBackend {
 ///   would break component instantiation noisily — `Component::new`
 ///   would fail — which is the desired loudness.
 ///
+/// Pinned (resource):
+/// - `max_wasm_stack` — pinned to [`MAX_WASM_STACK_V1`] (512 KiB) per
+///   determinism.md §5.3. Wasmtime 36's default also happens to be
+///   512 KiB, but pinning the bytes here means a future LTS bump
+///   cannot silently change the wasm stack ceiling and shift trap
+///   boundaries on deeply recursive components.
+///
 /// Enabled (correctness):
 /// - `cranelift_nan_canonicalization` — converts every produced NaN
 ///   to a single canonical bit pattern. f32/f64 are still byte-banned
@@ -204,12 +248,25 @@ pub struct WasmtimeBackend {
 pub fn deterministic_config() -> Config {
     let mut config = Config::new();
     config
+        // Nondeterministic / NaN-divergent / not-in-v1.
         .wasm_simd(false)
         .wasm_relaxed_simd(false)
         .wasm_memory64(false)
         .wasm_multi_memory(false)
+        // Cross-arch / LTS-default-flip surface — pin explicitly.
+        .wasm_tail_call(false)
+        .wasm_extended_const(false)
+        // Proposals not in v1; pinned defensively.
+        .wasm_custom_page_sizes(false)
+        .wasm_wide_arithmetic(false)
+        .wasm_stack_switching(false)
+        .wasm_exceptions(false)
+        // Component-model load-bearing — keep on defensively.
         .wasm_bulk_memory(true)
         .wasm_multi_value(true)
+        // Resource pin per determinism.md §5.3.
+        .max_wasm_stack(MAX_WASM_STACK_V1)
+        // Correctness.
         .cranelift_nan_canonicalization(true)
         .consume_fuel(true)
         .wasm_component_model(true);

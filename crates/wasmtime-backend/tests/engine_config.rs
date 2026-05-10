@@ -42,3 +42,62 @@ fn engine_config_pins_deterministic_features_simd_rejected() {
          wasmtime default likely changed — re-pin wasm_simd(false)"
     );
 }
+
+/// Tail-call `return_call` must be rejected by the engine. Default for
+/// `wasm_tail_call` differs across cranelift backends (on for
+/// `x86_64` / `aarch64` / `riscv64`, off for s390x / Winch in wasmtime
+/// 36) — a silent cross-arch divergence vector. The deterministic
+/// config pins it off so every architecture rejects the same set of
+/// components.
+#[test]
+fn engine_config_pins_deterministic_features_tail_call_rejected() {
+    let tail_call_wat = r#"
+        (component
+          (core module
+            (func $g (param i32) (result i32) local.get 0)
+            (func (export "f") (param i32) (result i32)
+              local.get 0
+              return_call $g)))
+    "#;
+    let bytes = wat::parse_str(tail_call_wat).expect("wat parses tail-call component");
+
+    let config = deterministic_config();
+    let engine = Engine::new(&config).expect("engine builds from deterministic config");
+
+    let result = Component::new(&engine, &bytes);
+    assert!(
+        result.is_err(),
+        "engine compiled tail-call component despite deterministic config; \
+         wasmtime default likely changed (or cross-arch default differs) — \
+         re-pin wasm_tail_call(false)"
+    );
+}
+
+/// Extended-const constant expressions in globals must be rejected.
+/// `wasm_extended_const` is on by default in wasmtime 36's WASM2
+/// baseline; pinning it off keeps the v1 const-expr surface tight so
+/// a future LTS bump cannot quietly admit new global initializers
+/// into the deterministic accept set.
+#[test]
+fn engine_config_pins_deterministic_features_extended_const_rejected() {
+    // A core module with a global initialized via `i32.add` of two
+    // constants — that's exactly the extended-const proposal: arbitrary
+    // constant expressions in initializers, not just a single
+    // `*.const`. Under MVP rules the engine rejects this at validation.
+    let extended_const_wat = r"
+        (component
+          (core module
+            (global i32 (i32.add (i32.const 1) (i32.const 2)))))
+    ";
+    let bytes = wat::parse_str(extended_const_wat).expect("wat parses extended-const component");
+
+    let config = deterministic_config();
+    let engine = Engine::new(&config).expect("engine builds from deterministic config");
+
+    let result = Component::new(&engine, &bytes);
+    assert!(
+        result.is_err(),
+        "engine compiled extended-const global initializer despite deterministic config; \
+         wasmtime default likely changed — re-pin wasm_extended_const(false)"
+    );
+}
