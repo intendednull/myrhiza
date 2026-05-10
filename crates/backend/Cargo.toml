@@ -1,0 +1,16 @@
+[package]
+name = "myrhiza-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Backend trait abstraction; Wasmtime and jco impls satisfy this trait."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+thiserror.workspace = true
