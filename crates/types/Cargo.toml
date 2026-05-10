@@ -17,3 +17,8 @@ serde_bytes.workspace = true
 blake3.workspace = true
 hex.workspace = true
 thiserror.workspace = true
+
+[build-dependencies]
+# Aligned with wasmtime 36 line (transitively pulls wit-parser 0.236.x);
+# pinning here avoids a duplicate wit-parser in the lockfile.
+wit-parser = "0.236"
