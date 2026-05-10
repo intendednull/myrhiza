@@ -8,7 +8,7 @@
 
 **Tech Stack:**
 - Rust 2024 edition
-- `wasmtime` LTS v48 (component model, fuel, resource handles)
+- `wasmtime` LTS — current LTS line as of plan-execution; v36 in May 2026; bumping to a future LTS (e.g., v48) is a kernel-major version bump (component model, fuel, resource handles)
 - `bincode` 1.3.x with pinned `DefaultOptions::new().with_fixint_encoding().with_big_endian()` (firm pin per [determinism.md §5.4](../specs/2026-05-09-myrhiza-master-design/determinism.md))
 - `serde` 1.0.x
 - `blake3` 1.5.x (canonical 32-byte digest per [determinism.md §5.1](../specs/2026-05-09-myrhiza-master-design/determinism.md))
@@ -148,11 +148,11 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/intendednull/myrhiza"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # Pins required by determinism.md §5.4 and distribution.md §10.2.
-bincode = { version = "=1.3.3", default-features = false }
+bincode = "=1.3.3"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 blake3 = { version = "1.5", features = ["traits-preview"] }
@@ -161,9 +161,9 @@ toml_edit = { version = "0.22", default-features = false, features = ["parse", "
 unicode-normalization = "0.1"
 thiserror = "1"
 hex = "0.4"
-# Wasmtime LTS — kernel-major bump per browser-native.md §14.2.
-wasmtime = { version = "=29.0.0", default-features = false, features = ["component-model", "cranelift", "runtime"] }
-wasmtime-wasi = { version = "=29.0.0", default-features = false }
+# Wasmtime LTS line — current LTS as of plan-execution date is v36; bumping to v48 (named in browser-native.md §14.2 as v1 ship target) is a kernel-major bump per distribution.md §10.2.
+wasmtime = { version = "=36.0.9", default-features = false, features = ["component-model", "cranelift", "runtime"] }
+wasmtime-wasi = { version = "=36.0.9", default-features = false }
 # Test/dev only.
 anyhow = "1"
 hex-literal = "0.4"
@@ -176,6 +176,17 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# panic!() / unwrap()/expect() are warns workspace-wide so the
+# state-apply runtime path stays panic-free. Test-only crates and
+# build scripts may override this in their own [lints] section, e.g.:
+#
+#   [lints.clippy]
+#   panic = "allow"
+#   unwrap_used = "allow"
+#   expect_used = "allow"
+#
+# This is the documented escape hatch — do not sprinkle #[allow(...)]
+# at call sites unless the override pattern is impractical.
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
@@ -187,7 +198,7 @@ Write `rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel = "1.85.0"
+channel = "1.95.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
 ```
@@ -258,10 +269,29 @@ chore: scaffold workspace and leaf types crate
 Replace cargo-new boilerplate with a workspace manifest pinning the
 deps required by the master spec's determinism + distribution
 sections (bincode 1.3.3, ed25519-dalek 2.1, blake3 1.5, toml_edit
-0.22, wasmtime 29 LTS).
+0.22, wasmtime 36 LTS).
 
 Add rust-toolchain.toml + .cargo/config.toml so warnings-as-errors
 applies workspace-wide.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+- [ ] **Step 8: Commit `Cargo.lock` for determinism**
+
+For a runtime where reproducible builds + cross-peer convergence are
+load-bearing, the workspace lockfile must be tracked.
+
+```bash
+git add Cargo.lock
+git commit -m "$(cat <<'EOF'
+chore: commit Cargo.lock for deterministic dep resolution
+
+Determinism is load-bearing per determinism.md §5.4. Tracking the
+workspace lockfile makes dep resolution reproducible across peers
+and CI runs.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -325,7 +355,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -4494,7 +4524,7 @@ impl BackendError {
 }
 ```
 
-> **Plan author's note to executor:** the `store.limiter(...)` block is illustrative — the Wasmtime version pin determines the exact builder API. Before commit, replace with the actual `StoreLimits::new().memory_size(64 << 20).build()` flow from the pinned `wasmtime = "=29.0.0"`. If wasmtime's API name changes between drafting and execution, follow the upstream docs and update the call site. The 64 MB cap is normative per determinism.md §5.3; wiring it any other way is not acceptable.
+> **Plan author's note to executor:** the `store.limiter(...)` block is illustrative — the Wasmtime version pin determines the exact builder API. Before commit, replace with the actual `StoreLimits::new().memory_size(64 << 20).build()` flow from the workspace wasmtime pin (currently `=36.0.9`). If wasmtime's API name changes between drafting and execution, follow the upstream docs and update the call site. The 64 MB cap is normative per determinism.md §5.3; wiring it any other way is not acceptable.
 
 - [ ] **Step 2: Verify compile**
 
@@ -4664,7 +4694,7 @@ pub fn wire_state_apply_linker(
 }
 ```
 
-> **Plan author's note to executor:** `wasmtime::component::Linker` API names for `instance(...)` and the closure signature for `func_wrap` track the Wasmtime version pinned in the workspace. The shape above is correct for `wasmtime = "=29"` pre-bindgen; if the bindgen-generated trait-impl pattern is preferred (it is, when stable), implement the `MyrhizaKernelHostDeterministicHost` trait on `HostState` instead. The contract — only listed imports get bound — is unchanged.
+> **Plan author's note to executor:** `wasmtime::component::Linker` API names for `instance(...)` and the closure signature for `func_wrap` track the Wasmtime version pinned in the workspace. The shape above is correct for the workspace `wasmtime` pin pre-bindgen; if the bindgen-generated trait-impl pattern is preferred (it is, when stable), implement the `MyrhizaKernelHostDeterministicHost` trait on `HostState` instead. The contract — only listed imports get bound — is unchanged.
 
 - [ ] **Step 4: Run + lint**
 

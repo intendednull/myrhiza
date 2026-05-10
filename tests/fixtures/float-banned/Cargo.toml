@@ -1,0 +1,22 @@
+[package]
+name = "float-banned-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.30"
+
+# Note: NOT panic=abort + lto here. We deliberately want rustc to keep
+# the f32 arithmetic in the final wasm; aggressive LTO can constant-
+# fold `1.0_f32 + 2.0_f32` into a single f32.const, which is still
+# banned by the lint, but the more direct signal is `f32.add` itself.
+# The float-ban scanner accepts either as a banned op.
+[profile.release]
+panic = "abort"
+opt-level = 1
+codegen-units = 1
+strip = "symbols"

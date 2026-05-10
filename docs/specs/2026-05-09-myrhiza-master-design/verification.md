@@ -254,6 +254,17 @@ discovery (proptest persists failure seeds to
 `crates/<app>/proptest-regressions/`) is committed; rerunning a
 seed must reproduce the failure deterministically.
 
+**v1 status**: the `proptest!` harness above is the target shape.
+Current plan-A coverage is smoke-only — single-input deterministic
+tests in `crates/kernel/tests/acceptance.rs` exercise the
+pre-check / apply agreement invariant (the third property above)
+on a fixed `(prior, event)` pair, but do not yet generate over
+arbitrary inputs. Building the `arbitrary_state` /
+`arbitrary_event` generators and wiring proptest seed-persistence
+is a plan-B deliverable; spec-coverage matrix entries pointing at
+`verification.md §22.5` therefore reflect smoke coverage, not the
+property-test surface this section ultimately specifies.
+
 ### 22.6 Reproducible fixture builds
 
 Per [distribution.md](distribution.md) §10.10: kernel binary distribution leans on
@@ -366,7 +377,7 @@ on `test-utils`; `test-utils` doesn't depend on tests.
 | Spec-coverage matrix (§22.2) | scaffold script + matrix | extend | extend |
 | WIT/ABI freeze (§22.3) | snapshot all 4 worlds | re-snapshot if WIT bumps | re-snapshot if WIT bumps |
 | Resource-cap regression (§22.4) | constants + shadow | extend if §5.3 grows | extend if §5.3 grows |
-| Determinism property tests (§22.5) | proptest harness in state-tier | hash-based event-stream proptest | counter+poll generators |
+| Determinism property tests (§22.5) | smoke pre-check/apply agreement (single input) | scaffold proptest harness in state-tier + hash-based event-stream proptest | counter+poll generators |
 | Reproducible fixtures (§22.6) | initial fixtures committed | network fixtures (events.bincode) | counter+poll fixtures |
 | Cross-platform CI (§22.7) | digest-replay job (state+kernel only) | extend with e2e topology fixture | extend with browser tier |
 | test-utils crate (§22.8) | manifest+bundle helpers | mem-network double | proptest generators |

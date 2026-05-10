@@ -1,0 +1,41 @@
+[package]
+name = "myrhiza-wasmtime-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Wasmtime impl of myrhiza-backend with capability-gated linker, fuel, float-ban."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+myrhiza-backend = { path = "../backend" }
+wasmtime = { workspace = true, features = ["component-model", "cranelift", "runtime"] }
+# Pinned to align with wasmtime 36's transitive wasmparser (0.236.x) so
+# Cargo.lock does not gain another wasmparser major.
+wasmparser = "0.236"
+blake3.workspace = true
+ed25519-dalek.workspace = true
+bincode.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+
+[build-dependencies]
+wasmtime = { workspace = true, features = ["component-model"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true
+# Build core wasm + component bytes from inline WAT in tests; avoids
+# hand-maintained hex literals. Pinned to the 0.236 line so wat's
+# transitive `wasmparser 0.236.x` matches wasmtime 36's pin and we don't
+# add a third wasmparser to Cargo.lock just for tests.
+wat = "=1.236.0"
+# Aligned with wasmtime 36 line (transitively pulls wit-parser 0.236.x);
+# pinning here matches the build-deps pin in myrhiza-types.
+wit-parser = "0.236"

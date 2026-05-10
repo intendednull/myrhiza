@@ -22,12 +22,32 @@ version bump; any removal or semantic change is breaking):
 
 ```wit
 host.verify-signature(pubkey: list<u8>, msg: list<u8>, sig: list<u8>) -> bool
-host.verify-payload-mac(envelope: list<u8>, key-handle: key-handle) -> bool
+host.verify-payload-mac(envelope: list<u8>, key: borrow<key-handle>) -> bool
 host.hash(bytes: list<u8>) -> list<u8>
 host.install-key(handle: key-handle, sealed-distribution-blob: list<u8>) -> ()
 host.now-hlc-from-event(event-bytes: list<u8>) -> hlc
 host.log(level: log-level, msg: string) -> ()
 ```
+
+**Resource-handle ownership:**
+
+- `host.verify-payload-mac` takes the key as `borrow<key-handle>` —
+  the caller retains ownership; the helper observes the binding
+  without consuming it. Verification can be repeated against the
+  same handle.
+- `host.install-key` takes `key-handle` by value — the call
+  consumes the handle binding (move semantics) because installation
+  is a one-shot registration; the kernel-side bookkeeping owns the
+  registered handle thereafter.
+
+**v1 deferral of key-management helpers:** `host.verify-payload-mac`
+and `host.install-key` are vocabulary-registered (still authored
+capabilities in the deterministic helper set) but **deferred to plan
+B at v1**. Manifests for `state-apply` that declare either capability
+are rejected at install with `InstallError::DeferredToPlanB(name)`.
+The names are reserved so plan B can land them without a vocabulary
+churn; the WIT signatures above are normative for plan B's
+implementation.
 
 **Algorithm pins** (master-spec normative; do not defer to crypto
 child spec):
@@ -106,6 +126,45 @@ expose its contents to state-apply.
 - No SIMD-float ops even if floats are eventually allowed; cross-platform
   divergence vectors.
 - No nondeterministic instructions (e.g. `now-from-host-clock`).
+- No tail-call ops (`return_call`, `return_call_indirect`). The
+  Wasmtime default for `wasm_tail_call` differs across cranelift
+  backends (on for x86_64/aarch64/riscv64, off for s390x and Winch
+  in wasmtime 36) — silent cross-arch divergence. Engine pins the
+  feature off; the byte-level lint defends in depth.
+- No extended-const expressions in globals or data segments (the
+  `extended-const` proposal). Engine pins the feature off so the v1
+  const-expr surface is exactly MVP single-`*.const`.
+- No exceptions, stack-switching, custom-page-sizes, or
+  wide-arithmetic proposals at v1. Each is pinned off explicitly in
+  the engine config so a future Wasmtime LTS bump cannot silently
+  flip a default and shift the deterministic accept set.
+- **Cranelift opt-level pinned to `Speed`**. Wasmtime 36's default
+  matches, but opt-level participates in instruction selection —
+  constant folding can elide trap sites, and register-allocation
+  ordering can shift the in-bytecode position of a faulting
+  instruction. A future LTS that flips the default to
+  `SpeedAndSize`, or a peer building with a non-default
+  `WASMTIME_OPT_LEVEL` env override that filters into `Config`
+  construction, would silently shift trap boundaries on pathological
+  components. The pin closes that divergence window; bumping the
+  level is a kernel-major version bump.
+- **Codegen strategy pinned to `Cranelift`**. Wasmtime's default is
+  `Strategy::Auto`, which prefers Cranelift when the `cranelift`
+  cargo feature is present (the workspace currently enables it). A
+  future workspace edit dropping the `cranelift` cargo feature, or
+  adding a Pulley- or Winch-only browser path that is not properly
+  cargo-feature-isolated, would silently switch backends and produce
+  a different trap-instruction set / different trap boundaries.
+  Explicitly pinning the strategy defends in depth: the engine
+  either compiles with Cranelift or fails to construct, never
+  falling through to a different backend by default. Switching the
+  backend is a kernel-major version bump.
+
+The exhaustive feature-pin discipline lives in
+`crates/wasmtime-backend/src/engine.rs::deterministic_config`; every
+`Config` setter the workspace's wasmtime cargo features expose is
+called there, and the kernel-major version bump rule applies to any
+change in that pin set.
 
 ### 5.3 Fuel and resource limits
 
@@ -124,6 +183,11 @@ same fuel-cost-table AND the same per-invocation budget):
 - **Memory cap per component instance**: 64 MB.
 - **Maximum event payload size**: 1 MB.
 - **Maximum DAG deps array size**: 64.
+- **Maximum WASM operand stack**: 512 KiB (`524,288` bytes). Pinned
+  so deeply-recursive components hit the same trap boundary on every
+  peer; matches Wasmtime 36's current default but the pin makes the
+  value participate in convergence guarantees rather than tracking
+  upstream's whim.
 
 **Pre-check shares apply's per-event fuel budget**. Pre-check fuel
 exhaustion = pre-check fail-closed (event not signed). The shared

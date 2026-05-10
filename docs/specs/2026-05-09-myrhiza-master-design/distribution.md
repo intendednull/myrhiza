@@ -20,8 +20,9 @@ bundle/
 │   ├── interaction.wasm
 │   └── behavior.wasm      (optional)
 ├── ui-assets/             (optional; static UI assets if present)
-└── signature              Ed25519 over (manifest_hash + content_hash
-                           + version + author_pubkey)
+└── signature              Ed25519 over the framed signing target
+                           (DOMAIN_SEP + manifest_hash + content_hash
+                           + version + author_pubkey; see §10.2)
 ```
 
 Modules use the same shape but may not include `state-propose` or
@@ -121,18 +122,32 @@ interaction = "components/interaction.wasm"
 behavior = "components/behavior.wasm"   # optional
 
 [signature]
-# Ed25519 signature over canonical encoding of:
-#   length-prefixed("myrhiza/manifest/v1") |
-#   length-prefixed(BLAKE3(manifest_body_without_signature_section)) |
-#   length-prefixed(BLAKE3(components_directory_canonical)) |
-#   length-prefixed(version_string) |
-#   length-prefixed(author_pubkey_bytes)
+# Ed25519 signature over the canonical signing target — five
+# length-prefixed fields:
+#
+#   signing_target = length_prefix("myrhiza/manifest/v1") |
+#                    length_prefix(BLAKE3(manifest_body_without_signature)) |
+#                    length_prefix(content_hash) |
+#                    length_prefix(version) |
+#                    length_prefix(author_pubkey)
+#
 # Canonical encoding: each field as 4-byte LE length followed by bytes.
+# The framed domain separator eliminates prefix/suffix collision risk;
+# verifiers MUST reject signatures computed over a 4-field framing
+# (i.e. one that omits the domain-separator field).
 algorithm = "ed25519"
 value = "0x..."
 ```
 
 **Capability vocabulary** is the table in [architecture.md](architecture.md) §3.5 plus `ui:*` surfaces.
+
+Capability identifiers in the manifest are the **capability keys**
+from architecture.md §3.5 (e.g. `host.broadcast`), NOT the WIT wire
+names of individual functions. For example, the capability key is
+`host.broadcast`; the WIT wire name `broadcast-submit` (per
+[abi.md](abi.md) §8.5) is the kernel-side import binding and is not what
+apps declare in `[capabilities.host-imports]`.
+
 The v1 `ui:*` minimum vocabulary is enumerated in the kernel WIT
 package at v1 ship: `ui:panel`, `ui:list`, `ui:message`, `ui:form`,
 `ui:menu`, `ui:button`, `ui:input`, `ui:dialog`. Counter+poll MVP
@@ -178,8 +193,15 @@ Canonical-encoding rules:
 - Encode struct via the same bincode 1.3.x + Options chain pinned
   in [determinism.md](determinism.md) §5.4.
 - BLAKE3 the encoded bytes → `manifest_canonical_hash`.
-- Author signs `manifest_canonical_hash + content_hash + version
-  + author_pubkey`.
+- Author signs the five-field framed signing target:
+  `length_prefix("myrhiza/manifest/v1") |
+   length_prefix(manifest_canonical_hash) |
+   length_prefix(content_hash) |
+   length_prefix(version) |
+   length_prefix(author_pubkey)`.
+  The framed domain separator eliminates prefix/suffix collision
+  risk; verifiers MUST reject signatures computed over a 4-field
+  framing (i.e. one that omits the domain-separator field).
 
 The TOML text is the human-readable representation; the canonical
 encoding is the byte-stable signature target. This means apps may
@@ -233,9 +255,11 @@ in-band catalog gossip for app/module discovery.
 
 ### 10.4 Signing
 
-Author Ed25519 signs `(manifest_hash + content_hash + version +
-author_pubkey)`. The signature is part of the bundle. The author
-public key is embedded in the manifest.
+Author Ed25519 signs the five-field framed signing target defined
+in §10.2: `length_prefix("myrhiza/manifest/v1") | length_prefix(
+manifest_canonical_hash) | length_prefix(content_hash) | length_prefix(
+version) | length_prefix(author_pubkey)`. The signature is part of the
+bundle. The author public key is embedded in the manifest.
 
 Author identity reuses the IdentityScope primitive ([identity.md](identity.md) §6). App
 authors are users; user signing keys can sign app releases.
@@ -250,6 +274,14 @@ long-term identity for releases (separation of concerns).
    in manifest. Cremers ETK 2025 enforcement: kernel structurally
    rejects any non-Ed25519 signature algorithm — there is no
    manifest field to declare alternative algorithms.
+
+   **Kernel-major gate**: Install MUST reject any manifest where
+   `kernel_major != 1`. `kernel_major` is the kernel ABI major
+   version; cross-major peers do not interop (per §10.2 ABI
+   versioning semantics — topic IDs depend on the kernel-major
+   the app was built against). The kernel returns
+   `InstallError::IncompatibleKernelMajor(v)` and aborts before
+   any module-dep resolution.
 4. Kernel resolves module deps recursively. For each module dep,
    kernel fetches by content hash, verifies signature against
    `expected-author`, and recursively resolves transitive deps.
