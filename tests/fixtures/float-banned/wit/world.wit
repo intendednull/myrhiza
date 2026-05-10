@@ -1,0 +1,24 @@
+// Float-banned fixture: `apply` performs an f32.add. The byte-level
+// float-ban lint per determinism.md §5.2 must reject this at
+// instantiation time (before the wasm even runs).
+package myrhiza:kernel@1.0.0;
+
+interface types {
+    variant verdict {
+        accept,
+        reject(string),
+    }
+}
+
+interface host-deterministic {
+    hash: func(bytes: list<u8>) -> list<u8>;
+    log: func(level: u8, msg: string);
+}
+
+world state-apply {
+    import host-deterministic;
+    use types.{verdict};
+    export apply: func(prior-state: list<u8>, event: list<u8>) ->
+        tuple<verdict, list<u8>>;
+    export state-digest: func(state: list<u8>) -> list<u8>;
+}

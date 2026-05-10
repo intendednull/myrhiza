@@ -198,3 +198,142 @@ fn capability_gating_rejects_non_deterministic_import() {
         "rejection error must mention the missing import; got: {msg}"
     );
 }
+
+/// Path to a built fixture under `tests/fixtures/built/`.
+fn fixture_path(name: &str) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above kernel crate manifest")
+        .join("tests/fixtures/built")
+        .join(format!("{name}.wasm"))
+}
+
+/// Build a signed bundle for a fixture wasm + helpers-only manifest.
+/// The manifest is signed with `seed` so different fixtures get
+/// distinct keys (cosmetic; not load-bearing for the test).
+fn build_signed_bundle_for(
+    fixture_name: &str,
+    seed: u8,
+) -> (myrhiza_test_utils::bundle::TestBundle, BundleAddress) {
+    let component_bytes = std::fs::read(fixture_path(fixture_name)).unwrap_or_else(|e| {
+        panic!(
+            "fixture {fixture_name} missing at {}: {e} — run `just build-fixtures`",
+            fixture_path(fixture_name).display()
+        )
+    });
+    let content_hash = EventHash::blake3(&component_bytes);
+
+    let mut manifest = helpers_only_state_apply_manifest();
+    let key = deterministic_signing_key(seed);
+    sign_manifest(&mut manifest, &content_hash, &key);
+
+    let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
+    let addr = BundleAddress {
+        bundle_dir: test_bundle.bundle_dir.clone(),
+        manifest_path: test_bundle.manifest_path.clone(),
+    };
+    (test_bundle, addr)
+}
+
+/// Covers: convergence.md §4.4, mvp.md §15.1
+///
+/// Pre-check fail-closed: a state-apply that always returns Reject
+/// must surface as `ApplyOutcome::Rejected` with the reject reason.
+/// Caller convention (kernel originator path): on Rejected, do NOT
+/// sign or broadcast. The handle returns the reject reason; the
+/// kernel surfaces it as a user-visible error and stops.
+#[test]
+fn pre_check_returns_reject_and_does_not_commit() {
+    let (_bundle, addr) = build_signed_bundle_for("pre-check-rejector", 13);
+
+    let flow = InstallFlow::new();
+    let loaded = flow.load(&addr).expect("load + verify");
+
+    let backend = WasmtimeBackend::new().expect("backend constructs");
+    let instance = backend
+        .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
+        .expect("instantiate pre-check-rejector");
+    let mut handle = StateApplyHandle::new(instance);
+
+    let result = handle.pre_check(b"", b"any-event").expect("pre_check OK");
+    match result.outcome {
+        ApplyOutcome::Rejected(reason) => {
+            assert_eq!(reason, "not allowed");
+        }
+        ApplyOutcome::Accepted => {
+            panic!("pre-check-rejector must reject; caller would otherwise sign+broadcast");
+        }
+    }
+    // The fixture also returns an empty candidate state on reject —
+    // the kernel discards it either way, but the contract is that
+    // pre-check on Reject returns no useful state.
+    assert!(result.candidate_state.is_empty());
+}
+
+/// Covers: determinism.md §5.3, mvp.md §15.1
+///
+/// Fuel exhaustion: the kernel sets a 10M-unit fuel budget per
+/// `apply` call. A state-apply that spins forever must trap when
+/// fuel is exhausted. The error must mention "fuel" or "trap" so
+/// callers can categorize the failure as compute-budget rather than
+/// a user-defined reject.
+#[test]
+fn fuel_exhaustion_traps_apply() {
+    let (_bundle, addr) = build_signed_bundle_for("infinite-loop", 17);
+
+    let flow = InstallFlow::new();
+    let loaded = flow.load(&addr).expect("load + verify");
+
+    let backend = WasmtimeBackend::new().expect("backend constructs");
+    let instance = backend
+        .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
+        .expect("instantiate infinite-loop");
+    let mut handle = StateApplyHandle::new(instance);
+
+    let Err(err) = handle.apply(b"", b"any-event") else {
+        panic!("infinite-loop must trap on fuel exhaustion");
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("fuel") || msg.contains("trap"),
+        "fuel-exhaustion error should mention fuel/trap; got: {msg}"
+    );
+}
+
+/// Covers: determinism.md §5.2, mvp.md §15.1
+///
+/// Float-ban: the byte-level lint per determinism.md §5.2 scans
+/// every embedded core module's function bodies and rejects any
+/// component containing a banned float instruction. The float-banned
+/// fixture's `apply` body contains `f32.add`; instantiation must
+/// fail before the wasm runs.
+#[test]
+fn float_banned_fixture_rejected_at_install() {
+    let component_bytes = std::fs::read(fixture_path("float-banned")).unwrap_or_else(|e| {
+        panic!(
+            "float-banned fixture missing at {}: {e} — run `just build-fixtures`",
+            fixture_path("float-banned").display()
+        )
+    });
+    let content_hash = EventHash::blake3(&component_bytes);
+
+    let mut manifest = helpers_only_state_apply_manifest();
+    let key = deterministic_signing_key(19);
+    sign_manifest(&mut manifest, &content_hash, &key);
+
+    let backend = WasmtimeBackend::new().expect("backend constructs");
+    let Err(err) = backend.instantiate_state_apply(&component_bytes, &manifest) else {
+        panic!("float-banned fixture must be rejected at install");
+    };
+    let msg = err.to_string();
+    let lower = msg.to_lowercase();
+    assert!(
+        lower.contains("float")
+            || lower.contains("f32")
+            || lower.contains("f64")
+            || lower.contains("banned"),
+        "float-ban error should mention float/f32/f64/banned; got: {msg}"
+    );
+}

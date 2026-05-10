@@ -13,8 +13,13 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:107
+- crates/kernel/tests/acceptance.rs:240
+
+## determinism.md §5.2
+- crates/kernel/tests/acceptance.rs:305
 
 ## determinism.md §5.3
+- crates/kernel/tests/acceptance.rs:275
 - crates/types/tests/limits_shadow.rs:3
 
 ## distribution.md §10.2
@@ -23,6 +28,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:107
 - crates/kernel/tests/acceptance.rs:156
+- crates/kernel/tests/acceptance.rs:240
+- crates/kernel/tests/acceptance.rs:275
+- crates/kernel/tests/acceptance.rs:305
 - crates/kernel/tests/acceptance.rs:85
 
 ## verification.md §22.1
