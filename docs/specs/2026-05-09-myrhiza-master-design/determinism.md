@@ -22,12 +22,32 @@ version bump; any removal or semantic change is breaking):
 
 ```wit
 host.verify-signature(pubkey: list<u8>, msg: list<u8>, sig: list<u8>) -> bool
-host.verify-payload-mac(envelope: list<u8>, key-handle: key-handle) -> bool
+host.verify-payload-mac(envelope: list<u8>, key: borrow<key-handle>) -> bool
 host.hash(bytes: list<u8>) -> list<u8>
 host.install-key(handle: key-handle, sealed-distribution-blob: list<u8>) -> ()
 host.now-hlc-from-event(event-bytes: list<u8>) -> hlc
 host.log(level: log-level, msg: string) -> ()
 ```
+
+**Resource-handle ownership:**
+
+- `host.verify-payload-mac` takes the key as `borrow<key-handle>` —
+  the caller retains ownership; the helper observes the binding
+  without consuming it. Verification can be repeated against the
+  same handle.
+- `host.install-key` takes `key-handle` by value — the call
+  consumes the handle binding (move semantics) because installation
+  is a one-shot registration; the kernel-side bookkeeping owns the
+  registered handle thereafter.
+
+**v1 deferral of key-management helpers:** `host.verify-payload-mac`
+and `host.install-key` are vocabulary-registered (still authored
+capabilities in the deterministic helper set) but **deferred to plan
+B at v1**. Manifests for `state-apply` that declare either capability
+are rejected at install with `InstallError::DeferredToPlanB(name)`.
+The names are reserved so plan B can land them without a vocabulary
+churn; the WIT signatures above are normative for plan B's
+implementation.
 
 **Algorithm pins** (master-spec normative; do not defer to crypto
 child spec):
