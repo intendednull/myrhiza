@@ -1,0 +1,23 @@
+package myrhiza:kernel@1.0.0;
+
+/// state-apply: strict pure function of (prior state, event).
+/// Bound only against host-deterministic. ABI is normative per
+/// architecture.md §3.5 + determinism.md §5.1 — adding any other
+/// import here is a kernel-major bump.
+world state-apply {
+    import host-deterministic;
+    use types.{verdict};
+
+    /// Apply mode: ingest an event, update state in place, return
+    /// the verdict. State is opaque app-defined bytes, encoded
+    /// canonically per the app's serde discipline.
+    /// In dry-run (pre-check) mode the kernel calls this same export
+    /// with the same `prior-state` it would use for apply, and
+    /// discards `new-state` if the verdict is Accept.
+    export apply: func(prior-state: list<u8>, event: list<u8>) ->
+        tuple<verdict, list<u8>>;
+
+    /// Canonical bytes of the app state, used by the kernel for
+    /// cross-peer convergence verification. Per convergence.md §4.3.
+    export state-digest: func(state: list<u8>) -> list<u8>;
+}
