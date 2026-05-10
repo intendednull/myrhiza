@@ -1,0 +1,29 @@
+[package]
+name = "myrhiza-wasmtime-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Wasmtime impl of myrhiza-backend with capability-gated linker, fuel, float-ban."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+myrhiza-backend = { path = "../backend" }
+wasmtime = { workspace = true, features = ["component-model", "cranelift", "runtime"] }
+blake3.workspace = true
+ed25519-dalek.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+
+[build-dependencies]
+wasmtime = { workspace = true, features = ["component-model"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true
