@@ -8,7 +8,7 @@
 
 **Tech Stack:**
 - Rust 2024 edition
-- `wasmtime` LTS v48 (component model, fuel, resource handles)
+- `wasmtime` LTS — current LTS line as of plan-execution; v36 in May 2026; bumping to a future LTS (e.g., v48) is a kernel-major version bump (component model, fuel, resource handles)
 - `bincode` 1.3.x with pinned `DefaultOptions::new().with_fixint_encoding().with_big_endian()` (firm pin per [determinism.md §5.4](../specs/2026-05-09-myrhiza-master-design/determinism.md))
 - `serde` 1.0.x
 - `blake3` 1.5.x (canonical 32-byte digest per [determinism.md §5.1](../specs/2026-05-09-myrhiza-master-design/determinism.md))
@@ -148,7 +148,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/intendednull/myrhiza"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # Pins required by determinism.md §5.4 and distribution.md §10.2.
@@ -161,9 +161,9 @@ toml_edit = { version = "0.22", default-features = false, features = ["parse", "
 unicode-normalization = "0.1"
 thiserror = "1"
 hex = "0.4"
-# Wasmtime LTS — kernel-major bump per browser-native.md §14.2.
-wasmtime = { version = "=29.0.0", default-features = false, features = ["component-model", "cranelift", "runtime"] }
-wasmtime-wasi = { version = "=29.0.0", default-features = false }
+# Wasmtime LTS line — current LTS as of plan-execution date is v36; bumping to v48 (named in browser-native.md §14.2 as v1 ship target) is a kernel-major bump per distribution.md §10.2.
+wasmtime = { version = "=36.0.9", default-features = false, features = ["component-model", "cranelift", "runtime"] }
+wasmtime-wasi = { version = "=36.0.9", default-features = false }
 # Test/dev only.
 anyhow = "1"
 hex-literal = "0.4"
@@ -187,7 +187,7 @@ Write `rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel = "1.85.0"
+channel = "1.95.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
 ```
@@ -262,6 +262,25 @@ sections (bincode 1.3.3, ed25519-dalek 2.1, blake3 1.5, toml_edit
 
 Add rust-toolchain.toml + .cargo/config.toml so warnings-as-errors
 applies workspace-wide.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+- [ ] **Step 8: Commit `Cargo.lock` for determinism**
+
+For a runtime where reproducible builds + cross-peer convergence are
+load-bearing, the workspace lockfile must be tracked.
+
+```bash
+git add Cargo.lock
+git commit -m "$(cat <<'EOF'
+chore: commit Cargo.lock for deterministic dep resolution
+
+Determinism is load-bearing per determinism.md §5.4. Tracking the
+workspace lockfile makes dep resolution reproducible across peers
+and CI runs.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF

@@ -13,7 +13,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 # Pins required by determinism.md §5.4 and distribution.md §10.2.
-bincode = { version = "=1.3.3", default-features = false }
+bincode = "=1.3.3"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 blake3 = { version = "1.5", features = ["traits-preview"] }
@@ -37,6 +37,17 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# panic!() / unwrap()/expect() are warns workspace-wide so the
+# state-apply runtime path stays panic-free. Test-only crates and
+# build scripts may override this in their own [lints] section, e.g.:
+#
+#   [lints.clippy]
+#   panic = "allow"
+#   unwrap_used = "allow"
+#   expect_used = "allow"
+#
+# This is the documented escape hatch — do not sprinkle #[allow(...)]
+# at call sites unless the override pattern is impractical.
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
