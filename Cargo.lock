@@ -680,6 +680,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "myrhiza-kernel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "ed25519-dalek",
+ "hex",
+ "myrhiza-backend",
+ "myrhiza-manifest",
+ "myrhiza-types",
+ "myrhiza-wasmtime-backend",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "myrhiza-manifest"
 version = "0.1.0"
 dependencies = [

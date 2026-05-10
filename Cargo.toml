@@ -5,6 +5,7 @@ members = [
     "crates/manifest",
     "crates/backend",
     "crates/wasmtime-backend",
+    "crates/kernel",
 ]
 
 [workspace.package]

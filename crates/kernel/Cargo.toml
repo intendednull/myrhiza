@@ -1,0 +1,26 @@
+[package]
+name = "myrhiza-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Myrhiza runtime kernel: install flow + state-apply ABI + state-digest stub."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+myrhiza-backend = { path = "../backend" }
+myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
+serde.workspace = true
+thiserror.workspace = true
+bincode.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true
+ed25519-dalek.workspace = true
