@@ -1,0 +1,40 @@
+package myrhiza:kernel@1.0.0;
+
+/// Deterministic helper set per determinism.md §5.1. Bound by
+/// state-apply, state-propose, interaction, and behavior worlds.
+interface host-deterministic {
+    use types.{hlc, key-handle, log-level};
+
+    /// BLAKE3 of `bytes`. Always returns 32 bytes.
+    /// Fuel cost: n * 5 where n = bytes.len().
+    hash: func(bytes: list<u8>) -> list<u8>;
+
+    /// Ed25519 RFC 8032 strict (rejects malleable s-values).
+    /// Fuel cost: 5_000.
+    verify-signature: func(
+        pubkey: list<u8>,
+        msg: list<u8>,
+        sig: list<u8>,
+    ) -> bool;
+
+    /// Verify a payload MAC under a kernel-managed key handle.
+    /// (Stub in plan A; real impl lands in plan B with key-handle
+    /// infrastructure.)
+    /// Fuel cost: 1_000.
+    verify-payload-mac: func(envelope: list<u8>, handle: borrow<key-handle>) -> bool;
+
+    /// Record a (handle, sealed-distribution-blob) pair into the
+    /// deterministic state surface. Returns unit deliberately —
+    /// "this peer can decrypt" would peer-locally branch state-apply.
+    /// Fuel cost: 100.
+    install-key: func(handle: borrow<key-handle>, sealed-distribution-blob: list<u8>);
+
+    /// Pure decoder over canonical event bytes; extracts the HLC
+    /// signed into the envelope by the originator.
+    /// Fuel cost: 50.
+    now-hlc-from-event: func(event-bytes: list<u8>) -> hlc;
+
+    /// Output-only sink. Not part of state-digest.
+    /// Fuel cost: 100 + msg.len().
+    log: func(level: log-level, msg: string);
+}
