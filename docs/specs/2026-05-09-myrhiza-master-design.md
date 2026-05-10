@@ -1019,9 +1019,7 @@ behavior = ["AutoArchive", "RemindEveryone"]
 
 The kernel checks `(calling-profile, payload-variant)` against this
 manifest at every `host.author-event` call. Variant identification
-uses WIT variant tag names. Apps that omit `[author-policy]` default
-to "any profile may author any variant" (current behavior; useful for
-simple apps but loses defense-in-depth).
+uses WIT variant tag names.
 
 Apps using behaviors for limited tasks (e.g. auto-moderation) should
 declare a tight `behavior` variant set so a compromised behavior
@@ -2221,9 +2219,12 @@ class). LTS is mandatory because:
   fuel boundary.
 - **LTS provides 12+ months of stability** before forced bump, matching
   Myrhiza's release cadence.
-- **Bumping Wasmtime LTS major is a kernel minor version bump and an
-  ABI advisory** to app authors. Apps may need to re-compile against
-  the new fuel cost table.
+- **Bumping Wasmtime LTS is a kernel MAJOR version bump** (consistent
+  with §10.2 ABI versioning rule for convergence-breaking changes).
+  Apps re-publish bundles built against the new kernel major; older
+  kernels cannot interoperate with newer-major topics. ABI advisory
+  alone is insufficient because fuel-cost-table shifts are
+  convergence-breaking, not merely API-compat-breaking.
 
 Mid-cadence Wasmtime majors (non-LTS) MAY be supported by the kernel
 build but are not the canonical fuel-determinism reference. Operators
@@ -2707,7 +2708,8 @@ v1 audit blocker.
   to early benchmarking on Safari iOS specifically.
 - **Wasmtime version churn**: Cranelift fuel cost tables may shift
   between Wasmtime majors. Mitigated by Wasmtime LTS pin (§14.2).
-  LTS bump is a kernel minor version and ABI advisory.
+  LTS bump is a kernel MAJOR version bump (convergence-breaking;
+  see §14.2).
 
 ### Security
 
@@ -2746,11 +2748,12 @@ v1 audit blocker.
   v1 commitment: pin a specific jco version per kernel release with
   deterministic build verification; jco upgrades are kernel ABI
   advisories.
-- **Snapshot security at bootstrap**: snapshots fetched from peers
-  at bootstrap are not authoritative — kernel re-validates by replaying
-  the event log up to the snapshot's anchor hash on first install.
-  Snapshots remain useful as bootstrap optimization (skip slow
-  storage I/O) but are never trusted for state contents.
+- **Snapshot security at bootstrap**: out of v1 scope. v1 ships no
+  snapshots (§4.2 + Project-shape v2 above); bootstrap is full event
+  log replay. When the v2+ `myrhiza-state-snapshot-cache` module
+  ships, snapshot-fetch must re-validate by replaying the log up to
+  the snapshot's anchor hash on first install — snapshots are never
+  trusted for state contents, only as a bootstrap optimization.
 - **Operator-deployed infrastructure + invitation flow**: operators
   needing to host many apps face a tension with social-graph Sybil
   resistance — they cannot be invited to every customer's social
