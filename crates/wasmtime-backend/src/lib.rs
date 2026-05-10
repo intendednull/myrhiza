@@ -14,3 +14,4 @@ mod helpers;
 mod instance;
 
 pub use engine::WasmtimeBackend;
+pub use float_ban::{scan_component_for_floats, scan_core_module_for_floats};
