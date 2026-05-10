@@ -2,13 +2,19 @@
 //!
 //! Per distribution.md §10.2:
 //! - `manifest_canonical_hash` = BLAKE3(`canonical_bincode`(`signed_body`))
-//! - `signing_target` = `length_prefix_concat`(
-//!   BLAKE3("myrhiza/manifest/v1"),
-//!   `manifest_canonical_hash`,
-//!   `content_hash`,
-//!   `version_string_bytes`,
-//!   `author_pubkey_bytes`)
-//! - Length prefixes are 4-byte little-endian per the section text.
+//! - `signing_target` is the concatenation of five length-prefixed
+//!   fields, in order:
+//!   1. `length_prefix`("myrhiza/manifest/v1") — domain separator
+//!   2. `length_prefix`(`manifest_canonical_hash`)
+//!   3. `length_prefix`(`content_hash`)
+//!   4. `length_prefix`(`version_string_bytes`)
+//!   5. `length_prefix`(`author_pubkey_bytes`)
+//! - The domain separator `"myrhiza/manifest/v1"` is framed as a raw
+//!   length-prefixed field (NOT hashed). Framing it eliminates
+//!   prefix/suffix collision risk; verifiers MUST reject signatures
+//!   computed over a 4-field framing.
+//! - Length prefixes are 4-byte little-endian, matching the rest of
+//!   the wire format per §10.2.
 
 use bincode::Options;
 use myrhiza_types::{EventHash, canonical_bincode};
@@ -126,12 +132,45 @@ mod tests {
     }
 
     #[test]
-    fn signing_target_layout() {
+    fn signing_target_is_five_length_prefixed_fields() {
+        // Walk the signing target byte-by-byte, asserting it is exactly
+        // 5 length-prefixed fields per spec §10.2 with no trailing
+        // garbage. Field lengths are pinned to the fixture so any
+        // structural drift (extra field, missing prefix, wrong field
+        // order) trips the test.
         let m = sample_manifest(None);
         let content = EventHash::blake3(b"some-content");
-        let target = signing_target_bytes(&m, &content);
-        // 4 length prefixes for 4 fields.
-        assert!(target.len() >= 16);
+        let bytes = signing_target_bytes(&m, &content);
+
+        let version_len = m.app.version.len();
+        let author_len = m.app.author_pubkey.len();
+        let expected_lens = [
+            (0, DOMAIN_SEP.len()),
+            (1, 32), // canonical_hash (BLAKE3 = 32 bytes)
+            (2, 32), // content_hash (BLAKE3 = 32 bytes)
+            (3, version_len),
+            (4, author_len),
+        ];
+
+        let mut cursor = 0usize;
+        for (idx, expected_len) in expected_lens {
+            assert!(
+                cursor + 4 <= bytes.len(),
+                "field {idx}: signing target truncated before length prefix at offset {cursor}",
+            );
+            let len = u32::from_le_bytes(
+                bytes[cursor..cursor + 4]
+                    .try_into()
+                    .expect("4 bytes fit a [u8; 4]"),
+            ) as usize;
+            assert_eq!(len, expected_len, "field {idx} length mismatch");
+            cursor += 4 + len;
+            assert!(
+                cursor <= bytes.len(),
+                "field {idx}: declared length {len} runs past end of signing target",
+            );
+        }
+        assert_eq!(cursor, bytes.len(), "trailing garbage in signing target");
     }
 
     fn sample_manifest(sig: Option<[u8; 64]>) -> crate::schema::Manifest {
