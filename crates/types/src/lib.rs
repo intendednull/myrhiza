@@ -19,3 +19,6 @@ pub use topic::Topic;
 
 pub mod identity;
 pub use identity::{CallingProfile, IdentityScope, InstanceBinding, InstanceKind};
+
+pub mod event;
+pub use event::Event;
