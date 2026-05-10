@@ -30,6 +30,13 @@ use crate::engine::{HostState, StateApply, myrhiza::kernel::types::Verdict as Wi
 ///   (the `wasmtime::StoreLimits` memory cap surfaces as an
 ///   out-of-bounds trap when `memory.grow` would exceed
 ///   [`myrhiza_types::limits::COMPONENT_MEMORY_CAP_V1`]).
+/// - [`wasmtime::Trap::StackOverflow`] → [`BackendError::StackExhausted`]
+///   (the wasm stack is pinned to
+///   [`myrhiza_types::limits::MAX_WASM_STACK_V1`] (512 KiB) on every
+///   peer per determinism.md §5.3, so a recursion-bomb traps at the
+///   same call depth on every peer; surfacing the failure as a typed
+///   variant lets the kernel deterministically quarantine the
+///   component rather than carrying an opaque trap string).
 /// - any other [`wasmtime::Trap`] variant → [`BackendError::Trap`]
 ///   carrying the trap's `Display` form for diagnostics.
 /// - non-trap errors (host-call panics, etc.) →
@@ -43,6 +50,7 @@ fn map_wasmtime_error(e: &wasmtime::Error) -> BackendError {
         return match trap {
             wasmtime::Trap::OutOfFuel => BackendError::FuelExhausted,
             wasmtime::Trap::MemoryOutOfBounds => BackendError::MemoryExhausted,
+            wasmtime::Trap::StackOverflow => BackendError::StackExhausted,
             other => BackendError::Trap(other.to_string()),
         };
     }
@@ -102,5 +110,78 @@ impl ComponentInstance for StateApplyInstance {
         self.bindings
             .call_state_digest(&mut self.store, state)
             .map_err(|e| map_wasmtime_error(&e))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests {
+    //! Unit coverage for [`map_wasmtime_error`].
+    //!
+    //! Every state-apply trap categorization the kernel relies on
+    //! flows through this function, so each typed variant gets a
+    //! direct mapping test. `wasmtime::Error: From<wasmtime::Trap>`
+    //! lets us synthesize traps without running a real wasm fixture
+    //! — the alternative is to author a recursion-bomb component for
+    //! `Trap::StackOverflow`, which adds a wasm-build dependency for
+    //! coverage that is mechanically equivalent to the typed downcast.
+    //! Fuel and memory exhaustion already have integration coverage
+    //! via the kernel acceptance suite (`fuel_exhaustion_traps_apply`
+    //! and friends), so we only mirror their direct-mapping check
+    //! here for parity.
+    use super::map_wasmtime_error;
+    use myrhiza_backend::BackendError;
+    use wasmtime::Error as WasmtimeError;
+    use wasmtime::Trap;
+
+    #[test]
+    fn stack_overflow_trap_maps_to_stack_exhausted() {
+        let err: WasmtimeError = Trap::StackOverflow.into();
+        assert!(
+            matches!(map_wasmtime_error(&err), BackendError::StackExhausted),
+            "Trap::StackOverflow must surface as BackendError::StackExhausted; \
+             got: {:?}",
+            map_wasmtime_error(&err),
+        );
+    }
+
+    #[test]
+    fn out_of_fuel_trap_maps_to_fuel_exhausted() {
+        let err: WasmtimeError = Trap::OutOfFuel.into();
+        assert!(
+            matches!(map_wasmtime_error(&err), BackendError::FuelExhausted),
+            "Trap::OutOfFuel must surface as BackendError::FuelExhausted; \
+             got: {:?}",
+            map_wasmtime_error(&err),
+        );
+    }
+
+    #[test]
+    fn memory_out_of_bounds_trap_maps_to_memory_exhausted() {
+        let err: WasmtimeError = Trap::MemoryOutOfBounds.into();
+        assert!(
+            matches!(map_wasmtime_error(&err), BackendError::MemoryExhausted),
+            "Trap::MemoryOutOfBounds must surface as BackendError::MemoryExhausted; \
+             got: {:?}",
+            map_wasmtime_error(&err),
+        );
+    }
+
+    #[test]
+    fn other_trap_falls_through_to_generic_trap() {
+        // Any variant that isn't one of the three typed cases must
+        // fall through to BackendError::Trap. `IntegerOverflow` is
+        // representative — it is not specialized and so should land
+        // in the generic bucket carrying the trap's Display form.
+        let err: WasmtimeError = Trap::IntegerOverflow.into();
+        match map_wasmtime_error(&err) {
+            BackendError::Trap(msg) => {
+                assert!(
+                    !msg.is_empty(),
+                    "BackendError::Trap must carry a non-empty diagnostic"
+                );
+            }
+            other => panic!("non-specialized trap must map to BackendError::Trap; got: {other:?}"),
+        }
     }
 }

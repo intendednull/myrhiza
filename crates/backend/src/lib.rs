@@ -38,6 +38,16 @@ pub enum BackendError {
     /// "memory cap exceeded" rather than a generic instantiation failure.
     #[error("memory cap exceeded during state-apply call")]
     MemoryExhausted,
+    /// State-apply call exhausted the pinned WASM stack
+    /// ([`myrhiza_types::limits::MAX_WASM_STACK_V1`], 512 KiB) — surfaces
+    /// from wasmtime as [`wasmtime::Trap::StackOverflow`]. Distinguished
+    /// from a generic trap so the kernel can deterministically quarantine
+    /// recursion-bomb components rather than treating the failure as an
+    /// opaque diagnostic string. Determinism is preserved because
+    /// `max_wasm_stack` is pinned to the same value on every peer (see
+    /// determinism.md §5.3 / R2-2).
+    #[error("stack exhausted during state-apply call")]
+    StackExhausted,
     /// Capability is registered in the v1 vocabulary but its
     /// state-apply binding is deferred to plan B (e.g. `host.install-key`,
     /// `host.verify-payload-mac` — both require the `key-handle` resource
