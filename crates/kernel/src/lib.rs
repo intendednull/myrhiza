@@ -8,3 +8,6 @@
 //! `pub mod` + re-exports so every commit builds clean.
 
 #![deny(missing_docs)]
+
+pub mod install;
+pub use install::{BundleAddress, InstallError, InstallFlow, LoadedBundle};
