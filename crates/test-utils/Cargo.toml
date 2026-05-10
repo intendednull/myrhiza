@@ -1,0 +1,21 @@
+[package]
+name = "myrhiza-test-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared test fixtures + doubles. Dev-only; not published."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+bincode.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+serde.workspace = true
+tempfile.workspace = true

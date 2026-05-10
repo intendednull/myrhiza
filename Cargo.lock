@@ -714,6 +714,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "myrhiza-test-utils"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "ed25519-dalek",
+ "hex",
+ "myrhiza-manifest",
+ "myrhiza-types",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "myrhiza-types"
 version = "0.1.0"
 dependencies = [
