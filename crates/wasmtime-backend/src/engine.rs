@@ -65,15 +65,35 @@ fn is_always_on_helper(cap: &str) -> bool {
 /// deterministically without depending on the wording of wasmtime's
 /// link-error messages.
 ///
-/// Two kinds of unauthorized imports surface:
+/// Three kinds of unauthorized imports surface:
 /// 1. An unknown WIT instance (anything other than
-///    `myrhiza:kernel/host-deterministic@1.0.0`). The error carries the
-///    full versioned WIT instance name so logs are unambiguous.
+///    `myrhiza:kernel/host-deterministic@1.0.0` or the types-only
+///    `myrhiza:kernel/types@1.0.0`). The error carries the full
+///    versioned WIT instance name so logs are unambiguous.
 /// 2. A known-instance function whose vocabulary-mapped name
 ///    (`host.<wit-fn-name>`) is not in `bound_imports` and is not the
 ///    always-on helper (`host.log`). The error carries the
 ///    vocabulary-style name `host.<fn-name>` to match the manifest's
 ///    declaration vocabulary.
+/// 3. Any non-`ComponentFunc` item appearing inside the
+///    `host-deterministic` instance (e.g. a resource, type, or
+///    nested instance). The state-apply WIT world surfaces only
+///    function imports inside this instance, so anything else means
+///    a future WIT bump has surfaced a non-function capability we
+///    haven't audited; reject fail-closed rather than silently
+///    skipping it. The error carries the qualified
+///    `host-deterministic-instance.<item-name>` so the audit point is
+///    obvious in logs.
+///
+///    A regression fixture exercising a synthetic component whose
+///    `host-deterministic@1.0.0` instance carries a non-function
+///    item (resource type / nested instance) is deferred to plan B
+///    — building one requires a custom WIT package fork, since the
+///    production WIT cannot be twisted into that shape. The
+///    inverted predicate above is the load-bearing security change;
+///    the existing test suite confirms legitimate state-apply
+///    components and the types-only `myrhiza:kernel/types@1.0.0`
+///    allowlist still instantiate.
 fn prewalk_state_apply_imports(
     engine: &Engine,
     component: &Component,
@@ -97,7 +117,7 @@ fn prewalk_state_apply_imports(
             // state-apply ambient set per architecture.md §3.5.
             return Err(BackendError::UnauthorizedImport(import_name.into()));
         }
-        // Walk the functions inside the deterministic-helper instance.
+        // Walk the items inside the deterministic-helper instance.
         // Only `ComponentInstance` carries function-typed exports we
         // can iterate; other shapes (functions, types, resources at
         // the top level) are not produced by the state-apply WIT
@@ -105,13 +125,22 @@ fn prewalk_state_apply_imports(
         let ComponentItem::ComponentInstance(inst) = item else {
             return Err(BackendError::UnauthorizedImport(import_name.into()));
         };
-        for (fn_name, fn_item) in inst.exports(engine) {
-            // Resource and type re-exports inside the instance aren't
-            // function imports the linker needs to bind — skip them.
-            if !matches!(fn_item, ComponentItem::ComponentFunc(_)) {
-                continue;
+        for (item_name, child_item) in inst.exports(engine) {
+            // Today's state-apply WIT world surfaces only
+            // `ComponentFunc` items inside `host-deterministic` — the
+            // host-bound deterministic helpers. A future WIT change
+            // surfacing a resource, type, or nested instance import
+            // here would be a new capability surface we haven't
+            // audited; reject fail-closed instead of skipping. This
+            // is the inverse of the previous "skip non-functions"
+            // behavior, which silently bypassed the gate. The
+            // qualified name pinpoints the audit site.
+            if !matches!(child_item, ComponentItem::ComponentFunc(_)) {
+                return Err(BackendError::UnauthorizedImport(format!(
+                    "{import_name}.{item_name}"
+                )));
             }
-            let cap = format!("host.{fn_name}");
+            let cap = format!("host.{item_name}");
             if !bound_imports.contains(&cap) && !is_always_on_helper(&cap) {
                 return Err(BackendError::UnauthorizedImport(cap));
             }
