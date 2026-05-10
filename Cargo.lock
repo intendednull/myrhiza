@@ -689,6 +689,7 @@ dependencies = [
  "hex",
  "myrhiza-backend",
  "myrhiza-manifest",
+ "myrhiza-test-utils",
  "myrhiza-types",
  "myrhiza-wasmtime-backend",
  "serde",

@@ -8,11 +8,21 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## architecture.md §3.5
 - crates/wasmtime-backend/tests/wit_freeze.rs:3
 
+## convergence.md §4.4
+- crates/kernel/tests/acceptance.rs:107
+
 ## determinism.md §5.3
 - crates/types/tests/limits_shadow.rs:3
 
 ## distribution.md §10.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:3
+
+## mvp.md §15.1
+- crates/kernel/tests/acceptance.rs:107
+- crates/kernel/tests/acceptance.rs:85
+
+## verification.md §22.1
+- crates/kernel/tests/acceptance.rs:85
 
 ## verification.md §22.3
 - crates/wasmtime-backend/tests/wit_freeze.rs:3

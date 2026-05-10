@@ -24,3 +24,5 @@ hex.workspace = true
 anyhow.workspace = true
 tempfile.workspace = true
 ed25519-dalek.workspace = true
+myrhiza-test-utils = { path = "../test-utils" }
+myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
