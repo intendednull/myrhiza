@@ -44,7 +44,7 @@ build-fixtures: \
 _build-fixture dir crate_name:
     @mkdir -p tests/fixtures/built
     cd tests/fixtures/{{dir}} && \
-        cargo build --release --target wasm32-unknown-unknown --locked --frozen
+        cargo build --release --target wasm32-unknown-unknown --locked
     wasm-tools component embed \
         tests/fixtures/{{dir}}/wit \
         tests/fixtures/{{dir}}/target/wasm32-unknown-unknown/release/{{crate_name}}.wasm \
