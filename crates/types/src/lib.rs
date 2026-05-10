@@ -5,3 +5,6 @@
 
 pub mod encoding;
 pub use encoding::{CanonicalOptions, canonical_bincode};
+
+pub mod hash;
+pub use hash::{BundleHash, EventHash};
