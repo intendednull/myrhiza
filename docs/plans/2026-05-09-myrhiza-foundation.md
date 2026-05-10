@@ -152,7 +152,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 # Pins required by determinism.md §5.4 and distribution.md §10.2.
-bincode = { version = "=1.3.3", default-features = false }
+bincode = "=1.3.3"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 blake3 = { version = "1.5", features = ["traits-preview"] }
@@ -176,6 +176,17 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# panic!() / unwrap()/expect() are warns workspace-wide so the
+# state-apply runtime path stays panic-free. Test-only crates and
+# build scripts may override this in their own [lints] section, e.g.:
+#
+#   [lints.clippy]
+#   panic = "allow"
+#   unwrap_used = "allow"
+#   expect_used = "allow"
+#
+# This is the documented escape hatch — do not sprinkle #[allow(...)]
+# at call sites unless the override pattern is impractical.
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
@@ -258,7 +269,7 @@ chore: scaffold workspace and leaf types crate
 Replace cargo-new boilerplate with a workspace manifest pinning the
 deps required by the master spec's determinism + distribution
 sections (bincode 1.3.3, ed25519-dalek 2.1, blake3 1.5, toml_edit
-0.22, wasmtime 29 LTS).
+0.22, wasmtime 36 LTS).
 
 Add rust-toolchain.toml + .cargo/config.toml so warnings-as-errors
 applies workspace-wide.
@@ -344,7 +355,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -4513,7 +4524,7 @@ impl BackendError {
 }
 ```
 
-> **Plan author's note to executor:** the `store.limiter(...)` block is illustrative — the Wasmtime version pin determines the exact builder API. Before commit, replace with the actual `StoreLimits::new().memory_size(64 << 20).build()` flow from the pinned `wasmtime = "=29.0.0"`. If wasmtime's API name changes between drafting and execution, follow the upstream docs and update the call site. The 64 MB cap is normative per determinism.md §5.3; wiring it any other way is not acceptable.
+> **Plan author's note to executor:** the `store.limiter(...)` block is illustrative — the Wasmtime version pin determines the exact builder API. Before commit, replace with the actual `StoreLimits::new().memory_size(64 << 20).build()` flow from the workspace wasmtime pin (currently `=36.0.9`). If wasmtime's API name changes between drafting and execution, follow the upstream docs and update the call site. The 64 MB cap is normative per determinism.md §5.3; wiring it any other way is not acceptable.
 
 - [ ] **Step 2: Verify compile**
 
