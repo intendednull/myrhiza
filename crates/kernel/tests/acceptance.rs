@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use myrhiza_backend::{Backend, BackendError};
 use myrhiza_kernel::{ApplyOutcome, BundleAddress, InstallFlow, StateApplyHandle};
-use myrhiza_test_utils::bundle::write_bundle;
+use myrhiza_test_utils::bundle::{build_counter_bundle_with_extra_cap, write_bundle};
 use myrhiza_test_utils::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest, sign_manifest,
 };
@@ -346,5 +346,63 @@ fn float_banned_fixture_rejected_at_install() {
     assert!(
         matches!(err, BackendError::BannedInstruction(_)),
         "float-ban must surface BannedInstruction; got: {err:?}"
+    );
+}
+
+/// Covers: capabilities.md §7.2, distribution.md §10.5, mvp.md §15.1
+///
+/// Manifest-arm of plan-A criterion #5: a state-apply bundle whose
+/// manifest declares a non-deterministic capability (here `host.broadcast`,
+/// classified as `HostImport` in the v1 vocabulary) must be rejected
+/// at install. The complementary linker-arm
+/// (`capability_gating_rejects_non_deterministic_import`) covers the
+/// case where a component imports a non-deterministic function the
+/// linker refuses to bind. This test covers the manifest-side gate:
+/// the counter fixture itself does not import `host.broadcast`, but
+/// declaring it in `capabilities.host_imports` is still rejected
+/// up-front by [`validate_state_apply_manifest`] before the linker
+/// runs. Bundle signing is intact (signature verifies) — the failure
+/// surfaces from the backend's manifest gating step.
+#[test]
+fn manifest_declaring_non_deterministic_cap_rejects_at_install() {
+    let component_bytes = std::fs::read(counter_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "counter fixture missing at {}: {e} — run `just build-fixtures`",
+            counter_fixture_path().display()
+        )
+    });
+
+    let bundle = build_counter_bundle_with_extra_cap(&component_bytes, "host.broadcast", 23)
+        .expect("write bundle to tempdir");
+
+    // Sanity: the install flow itself still accepts the bundle —
+    // signature verification is independent of capability gating.
+    // The manifest-gating rejection comes from the backend.
+    let addr = BundleAddress {
+        bundle_dir: bundle.bundle_dir.clone(),
+        manifest_path: bundle.manifest_path.clone(),
+    };
+    let flow = InstallFlow::new();
+    let loaded = flow
+        .load(&addr)
+        .expect("install flow accepts the signed bundle (cap gating is downstream)");
+
+    let backend = WasmtimeBackend::new().expect("backend constructs");
+    let Err(err) = backend.instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
+    else {
+        panic!("manifest declaring host.broadcast must be rejected at install");
+    };
+
+    // `host.broadcast` is `HostImport`-classified in the v1 vocabulary,
+    // so `validate_state_apply_manifest` rejects it as
+    // `UnauthorizedImport`. Plan-B-deferred caps (e.g. `host.install-key`)
+    // would surface as `DeferredToPlanB` instead — both arms are
+    // load-bearing for §15.1 #5 manifest gating, so we accept either.
+    assert!(
+        matches!(
+            err,
+            BackendError::UnauthorizedImport(_) | BackendError::DeferredToPlanB(_)
+        ),
+        "manifest-arm gating must surface UnauthorizedImport or DeferredToPlanB; got: {err:?}"
     );
 }

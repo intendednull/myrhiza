@@ -4,8 +4,12 @@ use std::path::PathBuf;
 
 use bincode::Options;
 use myrhiza_manifest::schema::Manifest;
-use myrhiza_types::canonical_bincode;
+use myrhiza_types::{EventHash, canonical_bincode};
 use tempfile::TempDir;
+
+use crate::manifest::{
+    deterministic_signing_key, helpers_only_state_apply_manifest_with_extra_cap, sign_manifest,
+};
 
 /// A built test bundle: tempdir + manifest path + content bytes.
 ///
@@ -66,4 +70,35 @@ pub fn write_bundle(m: &Manifest, component_bytes: &[u8]) -> std::io::Result<Tes
         manifest_path: manifest_rel,
         content_bytes: component_bytes.to_vec(),
     })
+}
+
+/// Build a signed [`TestBundle`] around `component_bytes` whose manifest
+/// is the helpers-only state-apply manifest *augmented* with one extra
+/// entry under `capabilities.host_imports` set to `true`.
+///
+/// Used to drive the `mvp.md §15.1 #5` manifest-arm acceptance test.
+/// The manifest is signed with [`deterministic_signing_key`] keyed on
+/// `seed` so the install flow accepts the bundle (signature verifies);
+/// the rejection then surfaces from the backend's
+/// `validate_state_apply_manifest` step rather than from the install
+/// loader. The component itself does not need to import `extra_cap` —
+/// the manifest gating fires regardless.
+///
+/// # Errors
+/// Returns any underlying [`std::io::Error`] from the tempdir creation,
+/// directory creation, or file write calls.
+///
+/// # Panics
+/// Panics under the same conditions as [`write_bundle`].
+#[allow(clippy::expect_used)]
+pub fn build_counter_bundle_with_extra_cap(
+    component_bytes: &[u8],
+    extra_cap: &str,
+    seed: u8,
+) -> std::io::Result<TestBundle> {
+    let content_hash = EventHash::blake3(component_bytes);
+    let mut manifest = helpers_only_state_apply_manifest_with_extra_cap(extra_cap);
+    let key = deterministic_signing_key(seed);
+    sign_manifest(&mut manifest, &content_hash, &key);
+    write_bundle(&manifest, component_bytes)
 }

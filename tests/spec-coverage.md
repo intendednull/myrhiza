@@ -13,6 +13,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## capabilities.md §7.2
 - crates/kernel/tests/acceptance.rs:156
+- crates/kernel/tests/acceptance.rs:352
 
 ## convergence.md §4 — genesis events MUST encode `prev` as
 - crates/types/src/event.rs:192
@@ -34,12 +35,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## distribution.md §10.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:3
 
+## distribution.md §10.5
+- crates/kernel/tests/acceptance.rs:352
+
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:107
 - crates/kernel/tests/acceptance.rs:156
 - crates/kernel/tests/acceptance.rs:244
 - crates/kernel/tests/acceptance.rs:279
 - crates/kernel/tests/acceptance.rs:317
+- crates/kernel/tests/acceptance.rs:352
 - crates/kernel/tests/acceptance.rs:85
 
 ## verification.md §22.1

@@ -61,6 +61,26 @@ pub fn helpers_only_state_apply_manifest() -> Manifest {
     m
 }
 
+/// Like [`helpers_only_state_apply_manifest`] but augmented with one
+/// extra entry under `capabilities.host_imports` set to `true`.
+///
+/// Used by acceptance tests for `mvp.md §15.1 #5` manifest-arm: a
+/// state-apply bundle whose manifest declares a non-deterministic
+/// capability (e.g. `host.broadcast`) must be rejected at install
+/// regardless of what the underlying component actually imports.
+/// The counter fixture itself does not import `host.broadcast`; the
+/// rejection comes from the manifest gating step in
+/// `validate_state_apply_manifest`, not from the linker.
+#[must_use]
+pub fn helpers_only_state_apply_manifest_with_extra_cap(extra_cap: &str) -> Manifest {
+    let mut m = helpers_only_state_apply_manifest();
+    m.capabilities
+        .host_imports
+        .insert(extra_cap.to_owned(), true);
+    m.canonicalize();
+    m
+}
+
 /// Return a fixed test signing key. Same seed across runs — handy for
 /// deterministic test fixtures.
 #[must_use]
