@@ -744,6 +744,7 @@ dependencies = [
  "wasmparser 0.236.1",
  "wasmtime",
  "wat",
+ "wit-parser 0.236.1",
 ]
 
 [[package]]

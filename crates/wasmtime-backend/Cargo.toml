@@ -36,3 +36,6 @@ tempfile.workspace = true
 # transitive `wasmparser 0.236.x` matches wasmtime 36's pin and we don't
 # add a third wasmparser to Cargo.lock just for tests.
 wat = "=1.236.0"
+# Aligned with wasmtime 36 line (transitively pulls wit-parser 0.236.x);
+# pinning here matches the build-deps pin in myrhiza-types.
+wit-parser = "0.236"

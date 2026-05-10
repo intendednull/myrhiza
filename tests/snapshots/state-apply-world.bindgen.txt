@@ -1,0 +1,9 @@
+world state-apply {
+  imports:
+    myrhiza:kernel/types@1.0.0: Interface { id: Id { idx: 1 }, stability: Unknown }
+    myrhiza:kernel/host-deterministic@1.0.0: Interface { id: Id { idx: 3 }, stability: Unknown }
+    verdict: Type(Id { idx: 40 })
+  exports:
+    apply: Function(Function { name: "apply", kind: Freestanding, params: [("prior-state", Id(Id { idx: 26 })), ("event", Id(Id { idx: 26 }))], result: Some(Id(Id { idx: 41 })), docs: Docs { contents: Some("Apply mode: ingest an event, update state in place, return\nthe verdict. State is opaque app-defined bytes, encoded\ncanonically per the app's serde discipline.\nIn dry-run (pre-check) mode the kernel calls this same export\nwith the same `prior-state` it would use for apply, and\ndiscards `new-state` if the verdict is Accept.") }, stability: Unknown })
+    state-digest: Function(Function { name: "state-digest", kind: Freestanding, params: [("state", Id(Id { idx: 26 }))], result: Some(Id(Id { idx: 26 })), docs: Docs { contents: Some("Canonical bytes of the app state, used by the kernel for\ncross-peer convergence verification. Per convergence.md §4.3.") }, stability: Unknown })
+}
