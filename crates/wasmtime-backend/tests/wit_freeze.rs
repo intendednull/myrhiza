@@ -1,6 +1,4 @@
-//! WIT/ABI freeze test per verification.md §22.3.
-//!
-//! /// Covers: architecture.md §3.5, distribution.md §10.2, verification.md §22.3
+//! WIT/ABI freeze tests per verification.md §22.3.
 //!
 //! Re-runs `wit-parser` over the canonical kernel WIT package and renders
 //! a textual dump of every world's imports/exports with name-resolved
@@ -10,7 +8,19 @@
 //!
 //! All four worlds (`state-apply`, `state-propose`, `interaction`,
 //! `behavior`) are frozen — adding any of them post-hoc is an ABI change
-//! that must be visible in review.
+//! that must be visible in review. Each world has its own `#[test]` so
+//! the spec-coverage matrix surfaces one entry per world rather than
+//! collapsing all four into a single line; if `state-propose`'s freeze
+//! were quietly removed, the matrix would lose its row, which is the
+//! observability §22.2 is built for.
+//!
+//! The state-apply test additionally carries the §22.2 self-coverage
+//! annotation: §22.2 is the spec-coverage-matrix convention itself,
+//! and the matrix is regenerated from doc-comment annotations on
+//! tests. By pinning §22.2 to a load-bearing freeze test, removing
+//! the freeze (or its annotation) makes the matrix lose its §22.2
+//! row, which is the same fail-closed loop §22.2 prescribes for
+//! everything else.
 //!
 //! Renderer notes:
 //! - Functions render as `func name(p: type, ...) -> result-type` using
@@ -37,10 +47,42 @@ use wit_parser::{
     WorldItem,
 };
 
-const WORLDS: &[&str] = &["state-apply", "state-propose", "interaction", "behavior"];
-
+/// Covers: architecture.md §3.5, distribution.md §10.2, verification.md §22.2, verification.md §22.3
+///
+/// Freezes the `state-apply` world's WIT/ABI surface against its
+/// snapshot. Carries the §22.2 self-coverage annotation: §22.2 is the
+/// spec-coverage-matrix convention, and this test's presence in the
+/// generated matrix is itself the §22.2 evidence — drop the test or
+/// drop the annotation, and the matrix loses its §22.2 row.
 #[test]
-fn world_bindings_match_snapshots() {
+fn freeze_state_apply_world() {
+    assert_world_snapshot_matches("state-apply");
+}
+
+/// Covers: architecture.md §3.5, distribution.md §10.2, verification.md §22.3
+#[test]
+fn freeze_state_propose_world() {
+    assert_world_snapshot_matches("state-propose");
+}
+
+/// Covers: architecture.md §3.5, distribution.md §10.2, verification.md §22.3
+#[test]
+fn freeze_interaction_world() {
+    assert_world_snapshot_matches("interaction");
+}
+
+/// Covers: architecture.md §3.5, distribution.md §10.2, verification.md §22.3
+#[test]
+fn freeze_behavior_world() {
+    assert_world_snapshot_matches("behavior");
+}
+
+/// Render the named world's WIT and compare it byte-for-byte against
+/// `tests/snapshots/<world>-world.bindgen.txt`. Set
+/// `MYRHIZA_SNAPSHOT_UPDATE=1` to regenerate the snapshot in place
+/// after an intentional ABI change (which also requires a
+/// kernel-major bump per distribution.md §10.2).
+fn assert_world_snapshot_matches(world_name: &str) {
     let mut resolve = Resolve::new();
     let (pkg_id, _src_map) = resolve
         .push_dir(std::path::Path::new(concat!(
@@ -49,38 +91,34 @@ fn world_bindings_match_snapshots() {
         )))
         .expect("parse WIT package");
 
-    let update = std::env::var("MYRHIZA_SNAPSHOT_UPDATE").is_ok();
+    let snapshot_path = format!(
+        "{}/../../tests/snapshots/{}-world.bindgen.txt",
+        env!("CARGO_MANIFEST_DIR"),
+        world_name
+    );
+    let world_id = resolve
+        .select_world(pkg_id, Some(world_name))
+        .unwrap_or_else(|e| panic!("select world {world_name}: {e}"));
+    let rendered = render_world(&resolve, world_id);
 
-    for world_name in WORLDS {
-        let snapshot_path = format!(
-            "{}/../../tests/snapshots/{}-world.bindgen.txt",
-            env!("CARGO_MANIFEST_DIR"),
-            world_name
-        );
-        let world_id = resolve
-            .select_world(pkg_id, Some(*world_name))
-            .unwrap_or_else(|e| panic!("select world {world_name}: {e}"));
-        let rendered = render_world(&resolve, world_id);
-
-        if update {
-            std::fs::write(&snapshot_path, &rendered).expect("write snapshot");
-            continue;
-        }
-
-        let expected = std::fs::read_to_string(&snapshot_path).unwrap_or_else(|e| {
-            panic!(
-                "snapshot for world {world_name} missing at {snapshot_path}: {e}\n\
-                 Run with MYRHIZA_SNAPSHOT_UPDATE=1 to regenerate."
-            )
-        });
-        assert_eq!(
-            rendered, expected,
-            "WIT/ABI drift for world {world_name}. Either:\n\
-             1. Revert the WIT change, or\n\
-             2. Bump kernel-major + regenerate {snapshot_path} via\n\
-                MYRHIZA_SNAPSHOT_UPDATE=1 cargo test -p myrhiza-wasmtime-backend wit_freeze"
-        );
+    if std::env::var("MYRHIZA_SNAPSHOT_UPDATE").is_ok() {
+        std::fs::write(&snapshot_path, &rendered).expect("write snapshot");
+        return;
     }
+
+    let expected = std::fs::read_to_string(&snapshot_path).unwrap_or_else(|e| {
+        panic!(
+            "snapshot for world {world_name} missing at {snapshot_path}: {e}\n\
+             Run with MYRHIZA_SNAPSHOT_UPDATE=1 to regenerate."
+        )
+    });
+    assert_eq!(
+        rendered, expected,
+        "WIT/ABI drift for world {world_name}. Either:\n\
+         1. Revert the WIT change, or\n\
+         2. Bump kernel-major + regenerate {snapshot_path} via\n\
+            MYRHIZA_SNAPSHOT_UPDATE=1 cargo test -p myrhiza-wasmtime-backend wit_freeze"
+    );
 }
 
 fn render_world(resolve: &Resolve, world_id: WorldId) -> String {

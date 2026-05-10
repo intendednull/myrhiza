@@ -242,13 +242,17 @@ fn build_signed_bundle_for(
     (test_bundle, addr)
 }
 
-/// Covers: convergence.md §4.4, mvp.md §15.1
+/// Covers: convergence.md §4.4, mvp.md §15.1, verification.md §22.5
 ///
 /// Pre-check fail-closed: a state-apply that always returns Reject
 /// must surface as `ApplyOutcome::Rejected` with the reject reason.
 /// Caller convention (kernel originator path): on Rejected, do NOT
 /// sign or broadcast. The handle returns the reject reason; the
 /// kernel surfaces it as a user-visible error and stops.
+///
+/// The second half of this test asserts the §22.5 pre-check / apply
+/// agreement invariant: the same `(prior_state, event)` pair must
+/// produce the same verdict through `apply` as through `pre_check`.
 #[test]
 fn pre_check_returns_reject_and_does_not_commit() {
     let (_bundle, addr) = build_signed_bundle_for("pre-check-rejector", 13);
