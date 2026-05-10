@@ -7,7 +7,9 @@
 //! - Canonical encoding = bincode 1.3.x (via
 //!   `myrhiza_types::canonical_bincode`) over the typed struct.
 //! - BLAKE3 the encoded bytes → `manifest_canonical_hash`.
-//! - Author signs `manifest_canonical_hash + content_hash + version
-//!   + author_pubkey` (length-prefixed framing per §10.2).
+//! - Author signs `manifest_canonical_hash` + `content_hash` + `version`
+//!   + `author_pubkey` (length-prefixed framing per §10.2).
 
 #![deny(missing_docs)]
+
+pub mod vocabulary;
