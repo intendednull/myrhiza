@@ -38,6 +38,13 @@ pub(crate) mod serde_bytes_32_pub {
 }
 
 impl EventHash {
+    /// All-zero hash sentinel used for the `prev` field of a genesis
+    /// event (`seq == 1`) per [convergence.md §4]. Genesis events MUST
+    /// encode `prev` as 32 raw zero bytes; non-genesis events MUST
+    /// reference a real prior `EventHash` (zero-collision is
+    /// astronomically improbable for BLAKE3).
+    pub const ZERO: EventHash = EventHash([0u8; 32]);
+
     /// Construct from a raw 32-byte array.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {

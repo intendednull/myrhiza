@@ -24,8 +24,11 @@ pub struct Event {
     pub author: AuthorPubkey,
     /// Monotonic per-author, starting at 1.
     pub seq: u64,
-    /// Hash of this author's previous event. `None` iff `seq == 1`.
-    pub prev: Option<EventHash>,
+    /// Hash of this author's previous event. For a genesis event
+    /// (`seq == 1`), this MUST be [`EventHash::ZERO`] (32 raw zero
+    /// bytes). For all other events this MUST reference a real prior
+    /// `EventHash` per [convergence.md §4].
+    pub prev: EventHash,
     /// Cross-author causal heads. `BTreeSet` for canonical encoding
     /// order (sorted by `EventHash` byte-lex).
     pub deps: BTreeSet<EventHash>,
@@ -63,7 +66,7 @@ mod serde_signature {
 struct SignedBody<'a> {
     author: &'a AuthorPubkey,
     seq: u64,
-    prev: &'a Option<EventHash>,
+    prev: &'a EventHash,
     deps: &'a BTreeSet<EventHash>,
     hlc: &'a Hlc,
     #[serde(with = "serde_bytes")]
@@ -127,7 +130,7 @@ mod tests {
         Event {
             author: AuthorPubkey::from_bytes([1; 32]),
             seq: 1,
-            prev: None,
+            prev: EventHash::ZERO,
             deps: BTreeSet::new(),
             hlc: Hlc {
                 wall_ms: 1_700_000_000_000,
@@ -175,5 +178,79 @@ mod tests {
         deps.insert(EventHash::from_bytes([1; 32]));
         let collected: Vec<_> = deps.iter().collect();
         assert!(collected[0] < collected[1]);
+    }
+
+    // Field layout under canonical bincode (fixint big-endian):
+    //   author : serde_bytes(32) = 8-byte u64 length prefix + 32 bytes = 40
+    //   seq    : u64 = 8
+    //   prev   : serde_bytes(32) = 8-byte u64 length prefix + 32 bytes = 40
+    //
+    // The 32 raw `prev` bytes therefore start at offset
+    //   40 (author) + 8 (seq) + 8 (length prefix) = 56.
+    const PREV_OFFSET: usize = 56;
+
+    /// Covers: convergence.md §4 — genesis events MUST encode `prev` as
+    /// 32 raw zero bytes (no Option discriminant byte). Non-genesis
+    /// events MUST reference a real prior hash. The all-zero sentinel
+    /// is used at the genesis position; collision with a real BLAKE3
+    /// output is astronomically improbable.
+    #[test]
+    fn genesis_event_prev_is_zero_sentinel() {
+        // Build a genesis event (seq = 1, prev = ZERO).
+        let event = Event {
+            author: AuthorPubkey::from_bytes([1; 32]),
+            seq: 1,
+            prev: EventHash::ZERO,
+            deps: BTreeSet::new(),
+            hlc: Hlc {
+                wall_ms: 1_700_000_000_000,
+                logical: 0,
+            },
+            payload: vec![],
+            signature: [0xFF; 64],
+        };
+        let bytes = crate::canonical_bincode()
+            .serialize(&event)
+            .expect("encode");
+
+        // Length prefix on the prev byte sequence must be 32 (big-endian u64).
+        assert_eq!(
+            &bytes[PREV_OFFSET - 8..PREV_OFFSET],
+            &[0, 0, 0, 0, 0, 0, 0, 32],
+            "prev field must be a 32-byte sequence (no Option discriminant)"
+        );
+        assert_eq!(
+            &bytes[PREV_OFFSET..PREV_OFFSET + 32],
+            &[0u8; 32],
+            "genesis prev MUST be 32 raw zero bytes"
+        );
+    }
+
+    #[test]
+    fn non_genesis_event_prev_serializes_inline() {
+        // A non-genesis event uses a real prior hash. Bytes at the prev
+        // position should be those raw 32 bytes, with no preceding
+        // Option discriminant.
+        let prior = EventHash::blake3(b"prior-event");
+        let event = Event {
+            author: AuthorPubkey::from_bytes([2; 32]),
+            seq: 2,
+            prev: prior,
+            deps: BTreeSet::new(),
+            hlc: Hlc {
+                wall_ms: 1_700_000_000_001,
+                logical: 0,
+            },
+            payload: vec![],
+            signature: [0xFF; 64],
+        };
+        let bytes = crate::canonical_bincode()
+            .serialize(&event)
+            .expect("encode");
+        assert_eq!(
+            &bytes[PREV_OFFSET..PREV_OFFSET + 32],
+            prior.as_bytes(),
+            "non-genesis prev must encode as raw 32 bytes inline"
+        );
     }
 }
