@@ -140,3 +140,61 @@ fn kernel_instantiates_and_applies_increment() {
     let value = decode_state(&result.new_state);
     assert_eq!(value, 42);
 }
+
+/// Path to the over-importer fixture. See
+/// `tests/fixtures/over-importer/wit/world.wit` for the import that
+/// the state-apply linker does not bind.
+fn over_importer_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above kernel crate manifest")
+        .join("tests/fixtures/built/over-importer.wasm")
+}
+
+/// Covers: mvp.md §15.1, capabilities.md §7.2
+///
+/// Plan-A criterion #5: capability declarations gate access. The
+/// over-importer fixture imports `myrhiza:kernel/host-non-deterministic.random`,
+/// which the state-apply linker per architecture.md §3.5 does NOT
+/// bind. Component instantiation must therefore fail.
+///
+/// This is the structural defense — the linker has no binding for the
+/// import, so the component fails to link. Independent of whether the
+/// manifest happens to have over-declared (here it has not, so the
+/// rejection cannot come from manifest validation).
+#[test]
+fn capability_gating_rejects_non_deterministic_import() {
+    let component_bytes = std::fs::read(over_importer_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "over-importer fixture missing at {}: {e} — run `just build-fixtures`",
+            over_importer_fixture_path().display()
+        )
+    });
+
+    // Use a minimal helper-set-only manifest: declares only host.hash
+    // + host.log. The component's `host-non-deterministic.random`
+    // import is therefore NOT validated up front (manifest gating
+    // doesn't see it because the manifest doesn't list it). The
+    // rejection comes structurally from the linker missing the
+    // binding. That's the load-bearing claim per capabilities.md
+    // §7.2: the linker is the gate, not just the manifest.
+    let mut manifest = helpers_only_state_apply_manifest();
+    let key = deterministic_signing_key(11);
+    sign_manifest(&mut manifest, &EventHash::blake3(&component_bytes), &key);
+
+    let backend = WasmtimeBackend::new().expect("backend constructs");
+    let Err(err) = backend.instantiate_state_apply(&component_bytes, &manifest) else {
+        panic!("over-importer must be rejected at link time");
+    };
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("host-non-deterministic")
+            || msg.contains("random")
+            || msg.contains("import")
+            || msg.contains("unknown"),
+        "rejection error must mention the missing import; got: {msg}"
+    );
+}

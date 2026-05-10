@@ -30,19 +30,30 @@ check:
 # with only the imports declared in the fixture's WIT.
 #
 # Tools required: rustup target wasm32-unknown-unknown, wasm-tools.
-build-fixtures:
+build-fixtures: \
+    (_build-fixture "counter-state-apply" "counter_state_apply_fixture") \
+    (_build-fixture "over-importer" "over_importer_fixture") \
+    (_build-fixture "pre-check-rejector" "pre_check_rejector_fixture") \
+    (_build-fixture "infinite-loop" "infinite_loop_fixture") \
+    (_build-fixture "float-banned" "float_banned_fixture")
+    @echo "Built 5 fixtures into tests/fixtures/built/"
+
+# Compile a single fixture into a wasm component. `crate_name` is the
+# Rust crate name with hyphens replaced by underscores (cargo's artifact
+# filename rule). `dir` is the fixture directory under tests/fixtures/.
+_build-fixture dir crate_name:
     @mkdir -p tests/fixtures/built
-    cd tests/fixtures/counter-state-apply && \
+    cd tests/fixtures/{{dir}} && \
         cargo build --release --target wasm32-unknown-unknown --locked --frozen
     wasm-tools component embed \
-        tests/fixtures/counter-state-apply/wit \
-        tests/fixtures/counter-state-apply/target/wasm32-unknown-unknown/release/counter_state_apply_fixture.wasm \
+        tests/fixtures/{{dir}}/wit \
+        tests/fixtures/{{dir}}/target/wasm32-unknown-unknown/release/{{crate_name}}.wasm \
         --world state-apply \
-        -o tests/fixtures/built/counter-state-apply.embed.wasm
+        -o tests/fixtures/built/{{dir}}.embed.wasm
     wasm-tools component new \
-        tests/fixtures/built/counter-state-apply.embed.wasm \
-        -o tests/fixtures/built/counter-state-apply.wasm
-    rm tests/fixtures/built/counter-state-apply.embed.wasm
+        tests/fixtures/built/{{dir}}.embed.wasm \
+        -o tests/fixtures/built/{{dir}}.wasm
+    rm tests/fixtures/built/{{dir}}.embed.wasm
 
 spec-coverage:
     ./scripts/spec-coverage.sh

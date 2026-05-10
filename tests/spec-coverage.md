@@ -8,6 +8,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## architecture.md §3.5
 - crates/wasmtime-backend/tests/wit_freeze.rs:3
 
+## capabilities.md §7.2
+- crates/kernel/tests/acceptance.rs:156
+
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:107
 
@@ -19,6 +22,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:107
+- crates/kernel/tests/acceptance.rs:156
 - crates/kernel/tests/acceptance.rs:85
 
 ## verification.md §22.1

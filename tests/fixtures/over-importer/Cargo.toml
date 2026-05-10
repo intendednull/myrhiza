@@ -1,0 +1,27 @@
+[package]
+name = "over-importer-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Intentionally NOT a workspace member — see root `Cargo.toml`'s
+# `[workspace.exclude]`. Built for `wasm32-unknown-unknown` and wrapped
+# into a component by `just build-fixtures`.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.30"
+
+# Same shape as counter-state-apply fixture: panic=abort + aggressive
+# size opts so the rust panic+format machinery does not pull float
+# Display paths into the binary. We don't actually need that here
+# since the over-importer is rejected at link time before instantiation
+# proper, but matching the counter fixture's profile keeps the build
+# pipeline uniform.
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,36 @@
+// Over-importer fixture: declares an import the state-apply linker
+// does NOT bind, so component instantiation must fail.
+//
+// The state-apply ambient set per architecture.md §3.5 contains only
+// deterministic helpers (host-deterministic). This fixture declares
+// `host-non-deterministic.random` — a clearly non-deterministic
+// import — and calls it from `apply`.
+//
+// Wasmtime's linker construction in
+// `WasmtimeBackend::instantiate_state_apply` registers ONLY
+// host-deterministic. Linking this component therefore fails because
+// `myrhiza:kernel/host-non-deterministic@1.0.0` is unbound.
+//
+// Package + interface paths mirror production WIT exactly so the
+// import names line up with the production linker's view.
+package myrhiza:kernel@1.0.0;
+
+interface types {
+    variant verdict {
+        accept,
+        reject(string),
+    }
+}
+
+interface host-non-deterministic {
+    /// Cryptographic randomness — non-deterministic by definition.
+    random: func(bytes: u32) -> list<u8>;
+}
+
+world state-apply {
+    import host-non-deterministic;
+    use types.{verdict};
+    export apply: func(prior-state: list<u8>, event: list<u8>) ->
+        tuple<verdict, list<u8>>;
+    export state-digest: func(state: list<u8>) -> list<u8>;
+}
