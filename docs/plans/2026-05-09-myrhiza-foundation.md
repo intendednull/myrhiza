@@ -4694,7 +4694,7 @@ pub fn wire_state_apply_linker(
 }
 ```
 
-> **Plan author's note to executor:** `wasmtime::component::Linker` API names for `instance(...)` and the closure signature for `func_wrap` track the Wasmtime version pinned in the workspace. The shape above is correct for `wasmtime = "=29"` pre-bindgen; if the bindgen-generated trait-impl pattern is preferred (it is, when stable), implement the `MyrhizaKernelHostDeterministicHost` trait on `HostState` instead. The contract — only listed imports get bound — is unchanged.
+> **Plan author's note to executor:** `wasmtime::component::Linker` API names for `instance(...)` and the closure signature for `func_wrap` track the Wasmtime version pinned in the workspace. The shape above is correct for the workspace `wasmtime` pin pre-bindgen; if the bindgen-generated trait-impl pattern is preferred (it is, when stable), implement the `MyrhizaKernelHostDeterministicHost` trait on `HostState` instead. The contract — only listed imports get bound — is unchanged.
 
 - [ ] **Step 4: Run + lint**
 
