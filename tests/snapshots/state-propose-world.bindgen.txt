@@ -1,4 +1,4 @@
-world state-apply {
+world state-propose {
   imports:
     interface myrhiza:kernel/host-deterministic@1.0.0 {
       type hlc = hlc
@@ -10,6 +10,15 @@ world state-apply {
       func now-hlc-from-event(event-bytes: list<u8>) -> hlc
       func verify-payload-mac(envelope: list<u8>, handle: borrow<key-handle>) -> bool
       func verify-signature(pubkey: list<u8>, msg: list<u8>, sig: list<u8>) -> bool
+    }
+    interface myrhiza:kernel/host-non-deterministic@1.0.0 {
+      type hlc = hlc
+      type identity-scope = identity-scope
+      type key-handle = key-handle
+      func author-event(scope: identity-scope, event-payload: list<u8>) -> list<u8>
+      func now-hlc() -> hlc
+      func random(bytes: u32) -> list<u8>
+      func user-prompt(prompt: string) -> string
     }
     interface myrhiza:kernel/types@1.0.0 {
       type hlc = record { wall-ms: u64, logical: u32 }
@@ -25,6 +34,5 @@ world state-apply {
     }
     type verdict = verdict
   exports:
-    func apply(prior-state: list<u8>, event: list<u8>) -> tuple<verdict, list<u8>>
-    func state-digest(state: list<u8>) -> list<u8>
+    func propose(prior-state: list<u8>, intent: list<u8>) -> result<list<u8>, string>
 }

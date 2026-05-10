@@ -1,0 +1,51 @@
+world behavior {
+  imports:
+    interface myrhiza:kernel/host-async@1.0.0 {
+      type broadcast-error = variant { cap-denied, topic-unknown, would-block }
+      type fetch-error = variant { cap-denied, not-found, timeout, would-block }
+      type http-error = variant { cap-denied, timeout, transport(string), would-block }
+      type http-request = record { method: string, url: string, headers: list<tuple<string, string>>, body: list<u8> }
+      type http-response = record { status: u16, headers: list<tuple<string, string>>, body: list<u8> }
+      type request-token = request-token
+      func blob-fetch-submit(hash: list<u8>) -> own<request-token>
+      func broadcast-submit(topic: list<u8>, msg: list<u8>) -> own<request-token>
+      func http-request-submit(req: http-request) -> own<request-token>
+    }
+    interface myrhiza:kernel/host-deterministic@1.0.0 {
+      type hlc = hlc
+      type key-handle = key-handle
+      type log-level = log-level
+      func hash(bytes: list<u8>) -> list<u8>
+      func install-key(handle: borrow<key-handle>, sealed-distribution-blob: list<u8>)
+      func log(level: log-level, msg: string)
+      func now-hlc-from-event(event-bytes: list<u8>) -> hlc
+      func verify-payload-mac(envelope: list<u8>, handle: borrow<key-handle>) -> bool
+      func verify-signature(pubkey: list<u8>, msg: list<u8>, sig: list<u8>) -> bool
+    }
+    interface myrhiza:kernel/host-non-deterministic@1.0.0 {
+      type hlc = hlc
+      type identity-scope = identity-scope
+      type key-handle = key-handle
+      func author-event(scope: identity-scope, event-payload: list<u8>) -> list<u8>
+      func now-hlc() -> hlc
+      func random(bytes: u32) -> list<u8>
+      func user-prompt(prompt: string) -> string
+    }
+    interface myrhiza:kernel/types@1.0.0 {
+      type hlc = record { wall-ms: u64, logical: u32 }
+      type identity-handle = resource
+      type identity-scope = record { long-term: borrow<identity-handle>, instance: option<instance-binding> }
+      type instance-binding = record { peer: borrow<peer-handle>, kind: instance-kind, name: string }
+      type instance-kind = variant { device, behavior, mls-leaf, custom(string) }
+      type key-handle = resource
+      type log-level = enum { trace, debug, info, warn, error }
+      type peer-handle = resource
+      type request-token = resource
+      type verdict = variant { accept, reject(string) }
+    }
+  exports:
+    func on-broadcast-completion(token: list<u8>, ok: bool, err: string)
+    func on-event(event: list<u8>)
+    func on-http-completion(token: list<u8>, ok: bool, status: u16, body: list<u8>, err: string)
+    func tick()
+}
