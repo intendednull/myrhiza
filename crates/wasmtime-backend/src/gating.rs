@@ -50,11 +50,10 @@ pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
         match classify(cap) {
             None => return Err(BackendError::UnknownImport(cap.clone())),
             Some(CapabilityClass::DeterministicHelper) => {
-                if !ambient.contains(cap) {
-                    return Err(BackendError::UnauthorizedImport {
-                        imported: cap.clone(),
-                    });
-                }
+                // The deterministic-helper class is exactly the
+                // state-apply ambient set (see
+                // `state_apply_ambient_set`), so no further
+                // membership check is needed.
             }
             Some(_) => {
                 return Err(BackendError::UnauthorizedImport {

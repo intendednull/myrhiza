@@ -128,6 +128,7 @@ plan B will need to address them before any production claim:
    (which trip the byte-level float-ban lint at instantiation). For
    real apps, the canonical bincode discipline still applies; the
    fixture's hand-rolled encoding is a test-only measure.
+7. **Host-call fuel deduction is unwired.** `crates/wasmtime-backend/src/gating.rs::wire_state_apply_linker` registers each helper as a Wasmtime func_wrap closure but does NOT subtract the per-call fuel costs documented in `myrhiza-types::limits::HOST_*_FUEL*` from the Store's fuel budget. WASM instruction count is metered (the 10M budget enforces wall-time uniformity at the bytecode level), but a state-apply that calls `host.hash` with a 1MB blob currently consumes ~zero fuel for the hash itself — divergent from determinism.md §5.3. Plan B owns wiring `Store::get_fuel`/`set_fuel` deductions inside each `func_wrap` closure with the matching `HOST_*_FUEL*` constants from `myrhiza-types::limits`.
 
 ## Acceptance evidence
 

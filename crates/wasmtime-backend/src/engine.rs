@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use myrhiza_backend::{Backend, BackendError, ComponentInstance};
 use myrhiza_manifest::Manifest;
+use myrhiza_types::limits::{COMPONENT_MEMORY_CAP_V1, STATE_APPLY_FUEL_BUDGET_V1};
 use wasmtime::{
     Engine, Store,
     component::{Component, Linker, ResourceTable},
@@ -51,16 +52,6 @@ pub struct HostState {
     /// traps inside the wasm component.
     pub limits: wasmtime::StoreLimits,
 }
-
-/// State-apply fuel budget per determinism.md §5.3.
-///
-/// 10M units; the deterministic helper costs in
-/// `wit/host-deterministic.wit` are chosen so a typical apply
-/// fits well within this envelope.
-pub const STATE_APPLY_FUEL_BUDGET: u64 = 10_000_000;
-
-/// State-apply memory cap per determinism.md §5.3 (64 MiB).
-pub const STATE_APPLY_MEMORY_CAP: usize = 64 * 1024 * 1024;
 
 /// Backend impl using Wasmtime's component model.
 ///
@@ -133,12 +124,12 @@ impl Backend for WasmtimeBackend {
             bound_imports,
             table: ResourceTable::new(),
             limits: wasmtime::StoreLimitsBuilder::new()
-                .memory_size(STATE_APPLY_MEMORY_CAP)
+                .memory_size(COMPONENT_MEMORY_CAP_V1)
                 .build(),
         };
         let mut store: Store<HostState> = Store::new(&self.engine, host_state);
         store
-            .set_fuel(STATE_APPLY_FUEL_BUDGET)
+            .set_fuel(STATE_APPLY_FUEL_BUDGET_V1)
             .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
         // Enforce the 64 MB memory cap via the StoreLimits the
         // host_state already carries. `memory.grow` past the cap
