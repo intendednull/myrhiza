@@ -13,3 +13,6 @@
 #![deny(missing_docs)]
 
 pub mod vocabulary;
+
+pub mod schema;
+pub use schema::*;
