@@ -8,3 +8,6 @@ pub use encoding::{CanonicalOptions, canonical_bincode};
 
 pub mod hash;
 pub use hash::{BundleHash, EventHash};
+
+pub mod hlc;
+pub use hlc::Hlc;
