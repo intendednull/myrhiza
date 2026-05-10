@@ -1,6 +1,6 @@
 //! Wasmtime `Config` determinism freeze per determinism.md §5.2 + §5.3.
 //!
-//! /// Covers: determinism.md §5.2 (banned features), §5.3 (engine config)
+//! /// Covers: determinism.md §5.2, determinism.md §5.3
 //!
 //! Asserts the engine built from `deterministic_config()` refuses to compile
 //! a component using `v128.const` (SIMD). Wasmtime's defaults shift across

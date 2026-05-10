@@ -189,11 +189,13 @@ mod tests {
     //   40 (author) + 8 (seq) + 8 (length prefix) = 56.
     const PREV_OFFSET: usize = 56;
 
-    /// Covers: convergence.md §4 — genesis events MUST encode `prev` as
-    /// 32 raw zero bytes (no Option discriminant byte). Non-genesis
-    /// events MUST reference a real prior hash. The all-zero sentinel
-    /// is used at the genesis position; collision with a real BLAKE3
-    /// output is astronomically improbable.
+    /// Covers: convergence.md §4
+    ///
+    /// Genesis events MUST encode `prev` as 32 raw zero bytes (no
+    /// Option discriminant byte). Non-genesis events MUST reference a
+    /// real prior hash. The all-zero sentinel is used at the genesis
+    /// position; collision with a real BLAKE3 output is astronomically
+    /// improbable.
     #[test]
     fn genesis_event_prev_is_zero_sentinel() {
         // Build a genesis event (seq = 1, prev = ZERO).

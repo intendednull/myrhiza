@@ -4,12 +4,93 @@
 # committed file matches the generated output.
 #
 # Convention per verification.md §22.2.
+#
+# Validates each parsed `<file>.md §X(.Y...)` reference against the
+# actual section headings of the master spec (under
+# `docs/specs/2026-05-09-myrhiza-master-design`). A test that points
+# at a non-existent section is a typo or stale reference; the script
+# exits non-zero so CI catches the rot per Imp 14 of plan
+# 2026-05-10-foundation-review-fixes.
 set -euo pipefail
 
 OUT="tests/spec-coverage.md"
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+SPEC_DIR="docs/specs/2026-05-09-myrhiza-master-design"
+
+# 1. Build the valid-ref set from spec headings.
+#
+# Heading convention per verification.md §22.2: `## N. Title` for
+# top-level chapters and `### N.X[.Y...] Title` for nested sections.
+# Each `<filename>.md §N` and `<filename>.md §N.X[.Y...]` token is a
+# legitimate target of `/// Covers:` doc comments.
+declare -A valid_refs
+for f in "$SPEC_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    fname=$(basename "$f")
+    # Match `## N.` or `### N.X[.Y...]`. The captured section number
+    # may include trailing dot for top-level chapters (e.g. `## 4.
+    # Convergence`); strip it before insertion.
+    while IFS= read -r heading; do
+        section=$(printf '%s\n' "$heading" \
+            | grep -oE '^#{2,4} [0-9]+(\.[0-9]+)*' \
+            | sed -E 's/^#{2,4} //' \
+            | sed -E 's/\.$//')
+        [ -n "$section" ] || continue
+        valid_refs["${fname} §${section}"]=1
+    done < <(grep -E '^#{2,4} [0-9]+(\.[0-9]+)*\.?[[:space:]]' "$f" || true)
+done
+
+# 2. Parse `/// Covers:` references the same way the matrix-emitter
+#    does (comma-split, trailing-punct strip), feed each through the
+#    validator, fail if any are unknown.
+parsed_refs=$(grep -RIn --include='*.rs' '/// Covers:' \
+    crates tests \
+    2>/dev/null \
+| awk '{
+    p1 = index($0, ":"); rest1 = substr($0, p1+1);
+    p2 = index(rest1, ":"); content = substr(rest1, p2+1);
+    file = substr($0, 1, p1-1);
+    line = substr(rest1, 1, p2-1);
+    sub(/.*Covers:[[:space:]]*/, "", content);
+    sub(/[.[:space:]]*$/, "", content);
+    n = split(content, parts, /,[[:space:]]*/);
+    for (i=1; i<=n; i++) {
+        sec = parts[i]; sub(/[.[:space:]]*$/, "", sec);
+        print sec "\t" file ":" line;
+    }
+}')
+
+# 3. Validate. Each ref must start with `<file>.md §<section>` whose
+#    `<file>.md §<section>` tuple is in the valid set. Anything after
+#    (e.g. " — prose" or " (qualifier)") is allowed and ignored for
+#    validation, but the leading token must resolve.
+unknown_refs=()
+while IFS=$'\t' read -r ref location; do
+    [ -n "$ref" ] || continue
+    # Extract the canonical leading "<file>.md §<section>" token.
+    head_token=$(printf '%s\n' "$ref" \
+        | grep -oE '^[a-z0-9_-]+\.md §[0-9]+(\.[0-9]+)*' \
+        || true)
+    if [ -z "$head_token" ]; then
+        unknown_refs+=("[unparseable] '$ref' at $location")
+        continue
+    fi
+    if [ -z "${valid_refs[$head_token]+x}" ]; then
+        unknown_refs+=("[unknown spec section] '$head_token' at $location")
+    fi
+done <<< "$parsed_refs"
+
+if [ "${#unknown_refs[@]}" -gt 0 ]; then
+    echo "spec-coverage: ${#unknown_refs[@]} reference(s) point at sections not in $SPEC_DIR/" >&2
+    for r in "${unknown_refs[@]}"; do
+        echo "  $r" >&2
+    done
+    exit 1
+fi
+
+# 4. Emit the matrix.
 cat > "$OUT" <<'EOF'
 # Spec-coverage matrix
 
@@ -20,29 +101,11 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 EOF
 
-# Find every test file and grep `/// Covers:` lines.
-grep -RIn --include='*.rs' '/// Covers:' \
-    crates tests \
-    2>/dev/null \
-| awk '{
-    # Parse "<file>:<line>:<content>" by anchoring on the first two colons.
-    p1 = index($0, ":"); rest1 = substr($0, p1+1);
-    p2 = index(rest1, ":"); content = substr(rest1, p2+1);
-    file = substr($0, 1, p1-1);
-    line = substr(rest1, 1, p2-1);
-    # Strip everything up to and including "Covers:".
-    sub(/.*Covers:[[:space:]]*/, "", content);
-    # Strip trailing punctuation/whitespace.
-    sub(/[.[:space:]]*$/, "", content);
-    n = split(content, parts, /,[[:space:]]*/);
-    for (i=1; i<=n; i++) {
-        sec = parts[i]; sub(/[.[:space:]]*$/, "", sec);
-        print sec "\t" file ":" line;
-    }
-}' \
+printf '%s\n' "$parsed_refs" \
 | sort -k1,1 -k2,2 \
 | awk -F'\t' '
     BEGIN { last="" }
+    NF < 2 { next }
     {
         if ($1 != last) {
             if (last != "") print "";
