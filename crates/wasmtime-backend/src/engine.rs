@@ -38,10 +38,17 @@ const HOST_DETERMINISTIC_INSTANCE: &str = "myrhiza:kernel/host-deterministic@1.0
 /// WIT instance name for the shared types interface. The state-apply
 /// world `use`s `verdict` / `hlc` / `key-handle` / `log-level` from
 /// this interface, which surfaces as a top-level component import of
-/// the types instance. It carries no executable functions — only type
-/// definitions and resource declarations — so the pre-walk treats it
-/// as an always-available types-only instance rather than a
-/// capability surface.
+/// the types instance. The instance is types-only by design — no
+/// callable functions — so the pre-walk permits its `Type` and
+/// `Resource` items but rejects any callable (`ComponentFunc`) or
+/// nested-instance / module / core-func item that would surface a
+/// non-type capability via this instance. A future WIT bump that adds
+/// a method to one of `types.wit`'s resources (`identity-handle`,
+/// `peer-handle`, `key-handle`, `request-token`) would land that
+/// method as a `ComponentFunc` item inside this instance with a
+/// mangled name (e.g. `[method]key-handle.fingerprint`); rejecting all
+/// callables here means such a future bump fails closed instead of
+/// silently bypassing the deterministic-helper gate.
 const SHARED_TYPES_INSTANCE: &str = "myrhiza:kernel/types@1.0.0";
 
 /// `host.log` is unconditionally bound on state-apply per
@@ -65,7 +72,7 @@ fn is_always_on_helper(cap: &str) -> bool {
 /// deterministically without depending on the wording of wasmtime's
 /// link-error messages.
 ///
-/// Three kinds of unauthorized imports surface:
+/// Four kinds of unauthorized imports surface:
 /// 1. An unknown WIT instance (anything other than
 ///    `myrhiza:kernel/host-deterministic@1.0.0` or the types-only
 ///    `myrhiza:kernel/types@1.0.0`). The error carries the full
@@ -84,6 +91,15 @@ fn is_always_on_helper(cap: &str) -> bool {
 ///    skipping it. The error carries the qualified
 ///    `host-deterministic-instance.<item-name>` so the audit point is
 ///    obvious in logs.
+/// 4. Any callable item appearing inside the `types@1.0.0` instance.
+///    The shared types instance is types-only by design — only
+///    `Type` and `Resource` items are permitted. A future WIT bump
+///    that adds a method to a `types.wit` resource would surface as
+///    a `ComponentFunc` item inside this instance (with a mangled
+///    `[method]resource.method-name` shape) and bypass the
+///    deterministic-helper gate; rejecting all callables here closes
+///    that hole. The error carries the qualified
+///    `types-instance.<item-name>`.
 ///
 ///    A regression fixture exercising a synthetic component whose
 ///    `host-deterministic@1.0.0` instance carries a non-function
@@ -104,12 +120,57 @@ fn prewalk_state_apply_imports(
     let component_type = component.component_type();
     for (import_name, item) in component_type.imports(engine) {
         // The shared `types` instance carries only type definitions
-        // (verdict, hlc, key-handle, log-level) — no callable
-        // functions — so it's always permitted. Components that `use
-        // types.{...}` in their world surface this as a top-level
-        // import; rejecting it would block every legitimate
-        // state-apply component.
+        // and resource declarations — no callable functions — so it
+        // is permitted but still walked: any callable inside this
+        // instance is treated as unauthorized so a future WIT bump
+        // that adds a method to one of `types.wit`'s resources fails
+        // closed instead of silently surfacing a capability the
+        // manifest never declared. Components that `use types.{...}`
+        // in their world surface this as a top-level instance import,
+        // and wit-parser today renders only `type` / `resource`
+        // declarations inside it (see
+        // `tests/snapshots/state-apply-world.bindgen.txt`).
+        //
+        // wasmtime exposes resources opaquely as
+        // `ComponentItem::Resource(_)` here — there is no method
+        // introspection at this level. Method-on-resource imports
+        // surface separately as `ComponentItem::ComponentFunc` items
+        // in the parent instance with mangled names of the shape
+        // `[method]resource.method-name`. The callable rejection
+        // below catches them.
         if import_name == SHARED_TYPES_INSTANCE {
+            let ComponentItem::ComponentInstance(inst) = item else {
+                // The shared `types` import is declared as an
+                // instance in the WIT; anything else is a malformed
+                // or future-shape import we have not audited.
+                return Err(BackendError::UnauthorizedImport(import_name.into()));
+            };
+            for (item_name, child_item) in inst.exports(engine) {
+                match child_item {
+                    // Pure type aliases (verdict, hlc, log-level,
+                    // identity-scope, instance-binding, instance-kind)
+                    // and resource declarations (identity-handle,
+                    // peer-handle, key-handle, request-token) are the
+                    // only items today; both are fine.
+                    ComponentItem::Type(_) | ComponentItem::Resource(_) => {}
+                    // Any callable on a types-only instance is
+                    // unauthorized: types.wit declares no functions,
+                    // so a `ComponentFunc` here is either a future
+                    // method on a resource or a future top-level
+                    // function. Either way, it bypasses the
+                    // deterministic-helper gate; reject fail-closed.
+                    // The qualified name pinpoints the audit site.
+                    ComponentItem::ComponentFunc(_)
+                    | ComponentItem::CoreFunc(_)
+                    | ComponentItem::Module(_)
+                    | ComponentItem::Component(_)
+                    | ComponentItem::ComponentInstance(_) => {
+                        return Err(BackendError::UnauthorizedImport(format!(
+                            "{import_name}.{item_name}"
+                        )));
+                    }
+                }
+            }
             continue;
         }
         if import_name != HOST_DETERMINISTIC_INSTANCE {
