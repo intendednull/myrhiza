@@ -13,30 +13,50 @@ use myrhiza_backend::BackendError;
 use myrhiza_manifest::Manifest;
 use myrhiza_manifest::vocabulary::{CapabilityClass, classify};
 
-/// The state-apply ambient set is the deterministic helper set per
-/// architecture.md §3.5 (every cell marked "permitted" in the
-/// state-apply column).
+/// The state-apply ambient set is the v1 subset of the deterministic
+/// helper set per architecture.md §3.5.
+///
+/// `host.install-key` and `host.verify-payload-mac` are vocabulary-
+/// registered authored capabilities (still `DeterministicHelper`
+/// classified) but are intentionally NOT in the v1 ambient set: their
+/// signatures take a `key-handle` resource whose infrastructure lands
+/// in plan B (per determinism.md §5.1 v1 deferral). Manifests that
+/// declare them for state-apply are rejected at install with
+/// [`BackendError::DeferredToPlanB`].
 #[must_use]
 pub fn state_apply_ambient_set() -> BTreeSet<String> {
     let mut s = BTreeSet::new();
     s.insert("host.hash".into());
     s.insert("host.verify-signature".into());
-    s.insert("host.verify-payload-mac".into());
-    s.insert("host.install-key".into());
     s.insert("host.now-hlc-from-event".into());
     s.insert("host.log".into());
     s
 }
 
+/// Capabilities deferred to plan B — registered in the vocabulary as
+/// `DeterministicHelper` but not bindable in v1 state-apply. Declared
+/// here so `validate_state_apply_manifest` can short-circuit before
+/// the class check rejects them as "non-deterministic".
+const DEFERRED_TO_PLAN_B: &[&str] = &["host.install-key", "host.verify-payload-mac"];
+
 /// Validate that the manifest's declared imports are a subset of the
 /// state-apply ambient set. Any declared host-imports row that is not
 /// a `DeterministicHelper` rejects.
 ///
+/// `host.install-key` and `host.verify-payload-mac` are vocabulary-
+/// registered (still `DeterministicHelper`) but deferred to plan B;
+/// declaring either short-circuits to [`BackendError::DeferredToPlanB`]
+/// before the generic class check fires (so users see the specific
+/// "deferred" message rather than a misleading "unauthorized non-det
+/// import" — both are `DeterministicHelper`-classified).
+///
 /// # Errors
 ///
-/// Returns [`BackendError::UnknownImport`] if a declared capability is
-/// not in the v1 vocabulary. Returns [`BackendError::UnauthorizedImport`]
-/// if a declared capability is in the vocabulary but not part of the
+/// Returns [`BackendError::DeferredToPlanB`] if a declared capability
+/// is registered but not bindable in v1 state-apply. Returns
+/// [`BackendError::UnknownImport`] if a declared capability is not in
+/// the v1 vocabulary. Returns [`BackendError::UnauthorizedImport`] if a
+/// declared capability is in the vocabulary but not part of the
 /// state-apply ambient set (i.e. any non-deterministic import).
 pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
     let ambient = state_apply_ambient_set();
@@ -47,13 +67,19 @@ pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
         if !enabled {
             continue;
         }
+        // Defer-check fires first so install-key / verify-payload-mac
+        // get the specific "deferred" verdict even though the class
+        // check below would otherwise treat them as accepted helpers.
+        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
+            return Err(BackendError::DeferredToPlanB(cap.clone()));
+        }
         match classify(cap) {
             None => return Err(BackendError::UnknownImport(cap.clone())),
             Some(CapabilityClass::DeterministicHelper) => {
-                // The deterministic-helper class is exactly the
-                // state-apply ambient set (see
-                // `state_apply_ambient_set`), so no further
-                // membership check is needed.
+                // The deterministic-helper class minus the deferred
+                // entries is exactly the state-apply ambient set (see
+                // `state_apply_ambient_set`), so no further membership
+                // check is needed.
             }
             Some(_) => {
                 return Err(BackendError::UnauthorizedImport {
@@ -65,9 +91,13 @@ pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
 
     // capabilities.deterministic_helpers = true entries are
     // self-documenting only — they must all be in the ambient set.
+    // Deferred entries are checked first for the same reason as above.
     for (cap, &enabled) in &m.capabilities.deterministic_helpers {
         if !enabled {
             continue;
+        }
+        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
+            return Err(BackendError::DeferredToPlanB(cap.clone()));
         }
         if !ambient.contains(cap) {
             return Err(BackendError::UnknownImport(cap.clone()));
@@ -85,8 +115,10 @@ pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
 ///
 /// `host.install-key` and `host.verify-payload-mac` are intentionally
 /// not bound here — they take a `key-handle` resource whose
-/// infrastructure lands in plan B. A plan-A state-apply that imports
-/// them fails to link, which is the desired behavior.
+/// infrastructure lands in plan B. They are also rejected up-front by
+/// [`validate_state_apply_manifest`] with [`BackendError::DeferredToPlanB`]
+/// when declared in a manifest, so a state-apply component that imports
+/// them never reaches link time on the v1 happy path.
 ///
 /// # Errors
 ///
@@ -278,9 +310,59 @@ mod tests {
         // a state-apply-only bundle.
         m.capabilities
             .host_imports
-            .insert("host.broadcast-submit".into(), true);
+            .insert("host.broadcast".into(), true);
         let res = validate_state_apply_manifest(&m);
-        assert!(res.is_err(), "non-det import must be rejected");
+        assert!(
+            matches!(res, Err(BackendError::UnauthorizedImport { .. })),
+            "non-det import must be rejected as unauthorized: {res:?}"
+        );
+    }
+
+    #[test]
+    fn install_key_in_manifest_returns_deferred_to_plan_b() {
+        let mut m = sample_state_apply_manifest();
+        m.capabilities
+            .host_imports
+            .insert("host.install-key".into(), true);
+        let res = validate_state_apply_manifest(&m);
+        match res {
+            Err(BackendError::DeferredToPlanB(name)) => {
+                assert_eq!(name, "host.install-key");
+            }
+            other => panic!("expected DeferredToPlanB(\"host.install-key\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_payload_mac_in_manifest_returns_deferred_to_plan_b() {
+        let mut m = sample_state_apply_manifest();
+        m.capabilities
+            .host_imports
+            .insert("host.verify-payload-mac".into(), true);
+        let res = validate_state_apply_manifest(&m);
+        match res {
+            Err(BackendError::DeferredToPlanB(name)) => {
+                assert_eq!(name, "host.verify-payload-mac");
+            }
+            other => panic!("expected DeferredToPlanB(\"host.verify-payload-mac\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deferred_caps_also_rejected_when_declared_in_deterministic_helpers() {
+        // The defer-check must fire on either declaration site
+        // (host_imports or deterministic_helpers) — they are still
+        // `DeterministicHelper`-classified in the vocabulary so a user
+        // could put them anywhere.
+        let mut m = sample_state_apply_manifest();
+        m.capabilities
+            .deterministic_helpers
+            .insert("host.install-key".into(), true);
+        let res = validate_state_apply_manifest(&m);
+        assert!(
+            matches!(&res, Err(BackendError::DeferredToPlanB(name)) if name == "host.install-key"),
+            "deterministic_helpers declaration must also defer: {res:?}"
+        );
     }
 
     #[test]

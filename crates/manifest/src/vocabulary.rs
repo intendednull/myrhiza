@@ -40,7 +40,10 @@ const V1_VOCABULARY: &[(&str, CapabilityClass)] = &[
     ("host.hlc", CapabilityClass::HostImport),
     ("host.random", CapabilityClass::HostImport),
     ("host.author-event", CapabilityClass::HostImport),
-    ("host.broadcast-submit", CapabilityClass::HostImport),
+    // Capability key is `host.broadcast` per architecture.md §3.5; the
+    // WIT wire name `broadcast-submit` (per abi.md §8.5) is the
+    // kernel-side import binding and is unchanged.
+    ("host.broadcast", CapabilityClass::HostImport),
     ("host.subscribe", CapabilityClass::HostImport),
     ("host.kv.get", CapabilityClass::HostImport),
     ("host.kv.put", CapabilityClass::HostImport),
@@ -141,9 +144,13 @@ mod tests {
             Some(CapabilityClass::DeterministicHelper)
         );
         assert_eq!(
-            classify("host.broadcast-submit"),
+            classify("host.broadcast"),
             Some(CapabilityClass::HostImport)
         );
+        // Old name is no longer in vocabulary — capability key matches
+        // architecture.md §3.5; WIT wire-name `broadcast-submit` is
+        // separate (per abi.md §8.5).
+        assert_eq!(classify("host.broadcast-submit"), None);
         assert_eq!(
             classify("host.clipboard.write"),
             Some(CapabilityClass::HighValueOp)

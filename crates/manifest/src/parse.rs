@@ -396,11 +396,7 @@ mod tests {
         let m = parse_manifest(toml).expect("parse counter fixture");
         assert_eq!(m.app.name, "counter");
         assert_eq!(m.abi.kernel_major, 1);
-        assert!(
-            m.capabilities
-                .host_imports
-                .contains_key("host.broadcast-submit")
-        );
+        assert!(m.capabilities.host_imports.contains_key("host.broadcast"));
         // canonicalize should have run during parse.
         let mut prev = String::new();
         for dep in &m.modules.dep {

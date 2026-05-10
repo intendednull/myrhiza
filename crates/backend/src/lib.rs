@@ -26,6 +26,13 @@ pub enum BackendError {
     /// Component imported a function not in the v1 vocabulary.
     #[error("component imports unknown capability: {0}")]
     UnknownImport(String),
+    /// Capability is registered in the v1 vocabulary but its
+    /// state-apply binding is deferred to plan B (e.g. `host.install-key`,
+    /// `host.verify-payload-mac` — both require the `key-handle` resource
+    /// infrastructure that plan B introduces). Manifests declaring these
+    /// for state-apply are rejected at install per determinism.md §5.1.
+    #[error("capability {0:?} declared but deferred to plan B")]
+    DeferredToPlanB(String),
     /// State-apply WASM contains a banned float instruction.
     #[error("float-ban lint: component contains banned instruction {0}")]
     BannedInstruction(&'static str),
