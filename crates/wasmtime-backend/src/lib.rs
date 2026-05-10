@@ -15,3 +15,6 @@ mod instance;
 
 pub use engine::WasmtimeBackend;
 pub use float_ban::{scan_component_for_floats, scan_core_module_for_floats};
+pub use gating::{
+    state_apply_ambient_set, state_apply_bound_imports, validate_state_apply_manifest,
+};
