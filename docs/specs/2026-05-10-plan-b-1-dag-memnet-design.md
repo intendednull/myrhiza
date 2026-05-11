@@ -276,6 +276,8 @@ Validation order (fail-fast):
 5. **Deps presence**: for each `d ∈ event.deps`, `d ∈ by_hash`. Any missing → `Ok(Inserted::Pending(missing_set))`. Caller stashes into `PendingBuffer`.
 6. **Commit**: insert into all three maps; advance `AuthorChain`; return `NewlyApplied { topo_index, hash }`. `topo_index` is the monotonic count of events inserted to this DAG instance (used by drift-emit modulo trigger).
 
+   **Parent set**: `parents = event.deps ∪ {event.prev (if non-ZERO)} ∪ {Genesis (if non-founder chain head)}`. The third disjunct — the **implicit Genesis dependency** — fires when `event.seq == 1` AND `genesis_author` is already recorded AND `event.author != genesis_author`. Non-founder chain heads causally depend on Genesis: their state-apply requires Genesis to have run first so `prior_state` is populated (per master spec convergence.md §"Genesis event semantics": *"the first event in any topic MUST be a Genesis event"*). Without the implicit edge, the topo-sort BTreeSet lex tie-break (§4.3) can place a non-founder seq=1 ahead of Genesis whenever its hash sorts lex-smaller — at which point a state-apply discriminator like `seq == 1 && prior_state.is_empty()` mis-identifies the non-founder event as Genesis and rejects. Making the edge structural means Genesis is the unique indegree-0 root once recorded; every peer's replay applies it first regardless of hash ordering or insertion order. `topo_sort_subset` (§4.3) mirrors the same edge when building its local sub-indegree map.
+
 **First-seen-wins** falls out of step 4: any second event with same `(author, seq)` against the same `prev` arrives when `chain.head_hash` is already advanced past it → fails chain integrity → rejected.
 
 ### 4.3 Topo-sort

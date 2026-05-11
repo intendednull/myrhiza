@@ -256,6 +256,17 @@ impl EventDag {
             }
         }
 
+        // Look up the Genesis event-hash (if any) BEFORE taking the
+        // per-author chain mutable borrow below — we need it in step 6
+        // to add the implicit Genesis dependency for non-founder chain
+        // heads, and the borrow checker can't see that `genesis_author`
+        // is distinct from `event.author` in the non-founder case.
+        let genesis_hash: Option<EventHash> = self
+            .genesis_author
+            .filter(|a| *a != event.author)
+            .and_then(|a| self.by_author.get(&a))
+            .and_then(|c| c.seq_to_hash.get(&1).copied());
+
         // Step 4: chain integrity + equivocation check (genesis + non-genesis both).
         let chain = self.by_author.entry(event.author).or_default();
 
@@ -295,12 +306,35 @@ impl EventDag {
         }
 
         // Step 6: commit.
-        // Parents = deps ∪ {prev (if not ZERO)}; indegree records the
-        // total parent count so the topo-sort planned for B-1 Task 13
-        // can decrement as parents are resolved.
+        // Parents = deps ∪ {prev (if not ZERO)} ∪ {Genesis (if non-founder chain head)};
+        // indegree records the total parent count so the topo-sort
+        // decrements as parents are resolved.
+        //
+        // Non-founder chain heads (seq=1 where genesis_author is Some
+        // and != event.author) carry an implicit causal dependency on
+        // the topic Genesis: their state-apply requires Genesis to have
+        // run first so prior_state is populated. Without this edge,
+        // topo-sort (BTreeSet lex tie-break on EventHash) can place a
+        // non-founder seq=1 before Genesis whenever the non-founder's
+        // hash sorts before Genesis's hash — causing the state-apply
+        // discriminator (`seq == 1 && prior_state.is_empty()`) to mis-
+        // identify the non-founder event as Genesis and reject. Making
+        // the dependency explicit in the DAG turns a hash-ordering
+        // accident into a structural guarantee: Genesis is the unique
+        // event with indegree 0 once it has been inserted, so every
+        // peer's replay applies it first regardless of insertion order.
+        // See plan-B-1 §4.3 + master convergence.md §"Genesis event
+        // semantics" ("the first event in any topic MUST be a Genesis
+        // event").
         let mut parents: BTreeSet<EventHash> = event.deps.clone();
         if event.prev != EventHash::ZERO {
             parents.insert(event.prev);
+        }
+        if event.seq == 1
+            && !runs_genesis_validation
+            && let Some(g_hash) = genesis_hash
+        {
+            parents.insert(g_hash);
         }
         self.indegree.insert(wire_hash, parents.len());
         for parent in &parents {
@@ -408,6 +442,16 @@ impl EventDag {
             .map(|(h, _)| *h)
             .collect();
 
+        // Implicit Genesis dependency: non-founder chain heads (seq=1
+        // from author != genesis_author) carry an implicit edge from
+        // the topic Genesis (see `insert` step 6 for rationale). Mirror
+        // that edge here so sub_indegree matches `parents_to_children`.
+        let genesis_in_subset: Option<EventHash> = self
+            .genesis_author
+            .and_then(|a| self.by_author.get(&a))
+            .and_then(|c| c.seq_to_hash.get(&1).copied())
+            .filter(|h| in_subset.contains(h));
+
         let mut sub_indegree: BTreeMap<EventHash, usize> = BTreeMap::new();
         for hash in &in_subset {
             let event = &self.by_hash[hash];
@@ -419,6 +463,13 @@ impl EventDag {
                 if in_subset.contains(d) {
                     count += 1;
                 }
+            }
+            if event.seq == 1
+                && let Some(g_author) = self.genesis_author
+                && event.author != g_author
+                && genesis_in_subset.is_some()
+            {
+                count += 1;
             }
             sub_indegree.insert(*hash, count);
         }
