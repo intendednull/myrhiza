@@ -37,7 +37,9 @@ mod tests {
     fn peer_pubkey_round_trips_canonical_bincode() {
         let p = PeerPubkey::from_bytes([0xAB; 32]);
         let bytes = crate::canonical_bincode().serialize(&p).expect("encode");
-        let decoded: PeerPubkey = crate::canonical_bincode().deserialize(&bytes).expect("decode");
+        let decoded: PeerPubkey = crate::canonical_bincode()
+            .deserialize(&bytes)
+            .expect("decode");
         assert_eq!(p, decoded);
     }
 }
