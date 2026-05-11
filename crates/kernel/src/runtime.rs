@@ -191,6 +191,25 @@ pub enum PeerWarning {
         /// Seq the lookup failed at (the remote's claimed head seq).
         seq: u64,
     },
+
+    /// Pending-drain loop observed an `Inserted::Pending(_)` or `Err(_)`
+    /// outcome from the inner `dag.insert` call. Under honest input this
+    /// is unreachable: `PendingBuffer::newly_satisfied` filters on
+    /// `is_subset(known)`, so the deps are present when we re-insert.
+    /// Reaching this arm implies a DAG / pending consistency drift (e.g.
+    /// a future refactor of `newly_satisfied`) or a non-fatal `DagError`
+    /// (sig / genesis / chain). Surfaced rather than silently dropped so
+    /// the invariant break is observable (CLAUDE.md: no swallowing
+    /// errors; review Q-2).
+    PendingDrainAnomaly {
+        /// Author of the event the anomaly was observed on.
+        author: AuthorPubkey,
+        /// Seq of the event the anomaly was observed on.
+        seq: u64,
+        /// Free-form description of the anomaly (variant name +
+        /// `Debug`-formatted detail for `Err`).
+        reason: String,
+    },
 }
 
 /// Command sent into the runtime task via [`RuntimeHandle::author_tx`].
@@ -528,6 +547,7 @@ impl Runtime {
     /// direct-receive insert and any during-drain inserts).
     /// §11.5 / plan-review C-3: at most one drift emission per batch,
     /// using the highest topological index observed.
+    #[allow(clippy::too_many_lines)]
     async fn handle_event(&mut self, event: Event) -> Result<(), RuntimeError> {
         match self.dag.insert(event.clone()) {
             Ok(Inserted::NewlyApplied { topo_index, hash }) => {
@@ -541,7 +561,9 @@ impl Runtime {
                         break;
                     }
                     for e in ready {
-                        match self.dag.insert(e) {
+                        let drain_author = e.author;
+                        let drain_seq = e.seq;
+                        match self.dag.insert(e.clone()) {
                             Ok(Inserted::NewlyApplied {
                                 topo_index: ti,
                                 hash: h,
@@ -567,11 +589,52 @@ impl Runtime {
                                         peer: None,
                                     });
                             }
-                            // AlreadyKnown / Pending: no further action.
-                            // Other DagErrors (sig / genesis / chain):
-                            // drop silently — byzantine input, no
-                            // convergence impact.
-                            Ok(Inserted::AlreadyKnown | Inserted::Pending(_)) | Err(_) => {}
+                            Ok(Inserted::AlreadyKnown) => {
+                                // Event was promoted by a parallel path
+                                // (e.g. an earlier iteration of this same
+                                // drain loop already inserted it). No-op.
+                            }
+                            Ok(Inserted::Pending(still_missing)) => {
+                                // Spec invariant: `newly_satisfied`
+                                // filters on `is_subset(known)`, so the
+                                // deps are present at insert time.
+                                // Reaching `Pending` here implies a
+                                // DAG / pending consistency drift.
+                                // Re-buffer with the current
+                                // missing-set rather than silently drop
+                                // so the event can be retried on the
+                                // next round, and surface a warning
+                                // (review Q-2; CLAUDE.md: no swallowing
+                                // errors).
+                                self.pending.insert(e, still_missing);
+                                #[allow(clippy::expect_used)]
+                                self.peer_warnings
+                                    .lock()
+                                    .expect("peer_warnings mutex poisoned")
+                                    .push(PeerWarning::PendingDrainAnomaly {
+                                        author: drain_author,
+                                        seq: drain_seq,
+                                        reason: "pending-drain produced Pending(_); re-buffered"
+                                            .to_string(),
+                                    });
+                            }
+                            Err(err) => {
+                                // Non-fatal DagError (sig / genesis /
+                                // chain): byzantine input, no
+                                // convergence impact, but surface it
+                                // rather than discard so the operator
+                                // can see what the drain loop
+                                // encountered (review Q-2).
+                                #[allow(clippy::expect_used)]
+                                self.peer_warnings
+                                    .lock()
+                                    .expect("peer_warnings mutex poisoned")
+                                    .push(PeerWarning::PendingDrainAnomaly {
+                                        author: drain_author,
+                                        seq: drain_seq,
+                                        reason: format!("pending-drain insert error: {err:?}"),
+                                    });
+                            }
                         }
                     }
                 }
