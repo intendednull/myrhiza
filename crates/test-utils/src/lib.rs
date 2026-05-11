@@ -6,8 +6,10 @@
 
 pub mod bundle;
 pub mod event_builder;
+pub mod harness;
 pub mod manifest;
 
 pub use event_builder::{
     AuthorKeypair, EventBuilder, canonical_envelope, counter_increment_payload,
 };
+pub use harness::{InProcessHarness, PeerHandle};
