@@ -132,6 +132,19 @@ pub enum Inserted {
 
 impl EventDag {
     pub fn insert(&mut self, event: Event) -> Result<Inserted, DagError>;
+    pub fn topo_sort(&self) -> Vec<EventHash>;
+    pub fn get(&self, hash: &EventHash) -> Option<&Event>;
+    pub fn known_hashes(&self) -> BTreeSet<EventHash>;     // for PendingBuffer drain
+
+    /// Build the `author_seq_vec` used in DriftAnchor + HeadsSummary diff.
+    /// Iterates `by_author` in pubkey-byte-lex order; emits `AuthorSeq { author, max_seq: chain.head_seq }`
+    /// for each author with `head_seq > 0`. Returns sorted by author pubkey
+    /// bytes (canonical ordering).
+    pub fn author_seq_vec(&self) -> Vec<AuthorSeq>;
+
+    /// Build the `Vec<AuthorHead>` used in HeadsSummary. Same ordering as
+    /// `author_seq_vec` but with the head event hash attached.
+    pub fn author_heads(&self) -> Vec<AuthorHead>;
 }
 ```
 
@@ -158,10 +171,13 @@ Validation order (fail-fast):
    - `event.author == founder_pubkey` (the author of the Genesis is the founder).
 
    The kernel hands the FULL canonical `Event` envelope (with payload = canonical-encoded `GenesisV1`) to state-apply. State-apply decodes `GenesisV1`, reads `app_payload`, and initializes its state from those bytes. App authors writing custom genesis logic embed their app-specific payload INSIDE `app_payload` — never as a sibling field, never as trailing bytes. Future kernel majors may introduce `GenesisV2` with a tag-discriminator byte for migration; v1 commits to `GenesisV1` only.
-4. **Chain integrity** (non-genesis):
+4. **Chain integrity** (genesis and non-genesis):
    - Look up `chain = by_author.entry(event.author).or_default()`.
-   - `event.seq == chain.head_seq + 1` else `DagError::InvalidChain { ... }`.
+   - **Direct-receive equivocation check**: if `chain.seq_to_hash.get(&event.seq).is_some()` (we already have a different event from this author at this seq — the duplicate-wire-hash check at step 2 would have caught an identical event, so a hash exists at this seq AND it's not equal to `event.wire_hash()`), this is equivocation. Push `EquivocationFlag { author: event.author, seq: event.seq, local_hash: chain.seq_to_hash[event.seq], remote_hash: event.wire_hash(), peer: None }` to the caller's `equivocation_log` via the returned `DagError::Equivocation { ... }` variant. **This catches direct-receive equivocation at any seq, including the seq=1 (genesis) case** where step 3's validation has already passed but a different genesis with the same `seq=1` was already inserted. Without this check, second-genesis would silently fail step 4's `seq == head_seq + 1` (expected 2, got 1) as `InvalidChain` and never log as equivocation.
+   - **Chain advance**: `event.seq == chain.head_seq + 1` else `DagError::InvalidChain { ... }`.
    - `event.prev == chain.head_hash` else `DagError::InvalidChain { ... }`.
+
+   For genesis (seq=1): step 3 validates payload + topic; step 4's equivocation check catches a second genesis from the same author against an existing genesis; the chain-advance condition (`seq == 1 == head_seq + 1` requires `head_seq == 0`) implicitly enforces "no prior event from this author."
 5. **Deps presence**: for each `d ∈ event.deps`, `d ∈ by_hash`. Any missing → `Ok(Inserted::Pending(missing_set))`. Caller stashes into `PendingBuffer`.
 6. **Commit**: insert into all three maps; advance `AuthorChain`; return `NewlyApplied { topo_index, hash }`. `topo_index` is the monotonic count of events inserted to this DAG instance (used by drift-emit modulo trigger).
 
@@ -243,7 +259,10 @@ at ~10-event scale; full-replay cost is microseconds.
 pub struct PendingBuffer {
     by_hash: BTreeMap<EventHash, PendingEntry>,
     by_author_count: BTreeMap<AuthorPubkey, usize>,
-    by_insert_time: BTreeMap<Instant, EventHash>,
+    by_insert_time: BTreeMap<(Instant, EventHash), ()>,  // compound key — Instant
+                                                          // alone collides on
+                                                          // same-microsecond inserts
+                                                          // (common in tests)
     max_total: usize,
     max_per_author: usize,    // = max_total / 50 per §4.2
     ttl: Duration,            // = 1h per §4.2
@@ -410,10 +429,15 @@ The Runtime publishes its own HeadsSummary:
 
 The Runtime, on receiving each message:
 
-- **`Event(e)`**: validate signature → `dag.insert(e)`. On `Pending(missing)`, stash in `PendingBuffer` + publish a `HeadsRequest` for the missing events' authors. On `NewlyApplied`:
-  1. Drain `PendingBuffer.newly_satisfied(&self.dag.known_hashes())` in a loop: insert each returned event into DAG (which may further unblock subsequent stashed events), repeating until `newly_satisfied` returns empty.
-  2. Call `replay_full` ONCE after the drain loop settles — do NOT replay after each individual `dag.insert` in the drain.
-  3. Check the highest `topo_index` produced by the batch against the drift trigger; emit at most one drift-message per batch even if multiple anchors were crossed (skipping intermediate anchors is acceptable — the rate cap §8.3 would suppress them anyway).
+- **`Event(e)`**: validate signature → `dag.insert(e)`. Outcomes:
+  - `Ok(Pending(missing))`: stash in `PendingBuffer` + publish a `HeadsRequest` for the missing events' authors.
+  - `Ok(AlreadyKnown)`: no-op.
+  - `Err(DagError::Equivocation { author, seq, local_hash, remote_hash })`: push `EquivocationFlag { author, seq, local_hash, remote_hash, peer: Some(sender_if_known) }` to `Runtime::equivocation_log`. Do NOT halt the Runtime — equivocation is byzantine input, not a runtime error. Continue.
+  - `Err(other)`: log + drop (signature fail, invalid genesis, etc. — peer is misbehaving but no convergence impact).
+  - `Ok(NewlyApplied)`:
+    1. Drain `PendingBuffer.newly_satisfied(&self.dag.known_hashes())` in a loop: insert each returned event into DAG (which may further unblock subsequent stashed events), repeating until `newly_satisfied` returns empty. Equivocation errors during drain are logged-and-continued same as direct receive.
+    2. Call `replay_full` ONCE after the drain loop settles — do NOT replay after each individual `dag.insert` in the drain.
+    3. Check the highest `topo_index` produced by the batch against the drift trigger; emit at most one drift-message per batch even if multiple anchors were crossed (skipping intermediate anchors is acceptable — the rate cap §8.3 would suppress them anyway).
 - **`HeadsSummary(remote)`**: compute diff against local `dag.author_heads()`. For each `AuthorHead { author, seq: remote_seq, hash: remote_hash }` in `remote`, compare to `(local_seq, local_hash)`:
   - Local has no entry for `author`, or `local_seq < remote_seq` → request the missing range via `EventRequest(author, local_seq+1, remote_seq)` (with `local_seq = 0` when absent).
   - `local_seq > remote_seq` → **first** check `chain.seq_to_hash[remote_seq] == remote_hash`; if mismatch, flag equivocation (`Runtime::equivocation_log` entry, `peer = Some(sender)`) and DO NOT push events for this author — the chains have diverged at `remote_seq` and pushing past that point would help propagate one branch over the other. If the hash check passes, publish events `(remote_seq+1 ..= local_seq)` for that author as individual `Event` messages.
@@ -423,7 +447,9 @@ The Runtime, on receiving each message:
   For each `author` in local but not in `remote`: publish all events for that author as `Event` messages. Aggregate backward-direction asks into a single `HeadsRequest`.
 
   **Equivocation detection invariant**: the ahead-by-≥1 hash check above ensures that an equivocating author is flagged regardless of how far ahead one branch has progressed. §4.4.1's "same seq, different hash" requirement is satisfied at any matching seq position, not just at the head.
-- **`HeadsRequest(req)`**: for each `EventRequest { author, from_seq, to_seq }`, look up `chain.seq_to_hash[from_seq..=to_seq]`, fetch each event from `by_hash`, publish as `Event` messages. Bounds-check: refuse `to_seq - from_seq > 256` per single request (anti-amplification). Caller batches.
+- **`HeadsRequest(req)`**: for each `EventRequest { author, from_seq, to_seq }`, look up `chain.seq_to_hash[from_seq..=to_seq]`, fetch each event from `by_hash`, publish as `Event` messages. Bounds-check: refuse `to_seq - from_seq > 256` per single request (anti-amplification) → log + drop the request. The requester is responsible for paginating.
+
+  **Requester pagination (normative)**: when constructing a `HeadsRequest` from a `HeadsSummary` diff, the requester MUST split any `(author, from_seq, to_seq)` range with `to_seq - from_seq > 255` into consecutive pages of at most 256 events each: `(from_seq, from_seq+255), (from_seq+256, from_seq+511), ...`. Each page is sent as a separate `HeadsRequest` (one per `Runtime::publish_heads_summary` tick, or back-to-back if the requester batches). The responder accepts each page. Late-joining peers thus catch up in chunks of 256 events.
 - **`Drift(d)`**: §8 drift logic below.
 
 **Kernel-version skew**: HeadsSummary carries `kernel_fuel_table_version`. Mismatch → log "kernel out of date" warning to `Runtime::peer_warnings`; do not refuse sync. The version mismatch is *informative*; the topic-id-includes-kernel-major rule (per `browser-native.md §14.2`) is what structurally separates incompatible kernels.
@@ -460,6 +486,22 @@ pub struct DriftMessage {
     #[serde(with = "myrhiza_types::serde_signature_64")]
     pub signature: [u8; 64],
 }
+
+/// The exact byte target that `DriftMessage::signature` covers.
+///
+/// **Normative**: peer signing = `peer_key.sign(canonical_bincode().serialize(&DriftSignedPayload{...}))`.
+/// Verifying = same. Field order is pinned by the struct's declaration order;
+/// canonical bincode encodes fields sequentially with no field-name metadata,
+/// so emitter and verifier MUST produce identical bytes given the same struct.
+/// The `signed_by_peer` and `signature` fields of `DriftMessage` are EXCLUDED
+/// from the signed payload (the signature can't cover itself; the public-key
+/// identity is supplied separately for verification).
+#[derive(Serialize, Deserialize)]
+pub struct DriftSignedPayload {
+    pub anchor: DriftAnchor,
+    pub digest_format: String,
+    pub digest: [u8; 32],
+}
 ```
 
 ### 8.2 Emit trigger
@@ -468,9 +510,9 @@ After each `dag.insert(...)` returning `NewlyApplied { topo_index, hash }`:
 - If `topo_index % drift_interval == 0` where `drift_interval` is read from the loaded manifest's `[determinism.drift-detection]` `interval-events` field (plan-A `crates/manifest/src/schema.rs::DriftDetectionSection`). The kernel's `InstallFlow::load` extracts this value and injects it into `RuntimeCfg.drift_interval`. Test code overrides via `RuntimeCfg` directly (e.g. `drift_interval = 1` to exercise emit on every event). The manifest field is signed; honoring it is non-optional under spec §10.2's signing contract.
   - Compute `state_digest_bytes = self.handle.state_digest(&self.state)?`
   - `digest = blake3::hash(&state_digest_bytes).into()`
-  - Build anchor: `event_hash = hash`, `author_seq_vec = dag.author_heads()`.
+  - Build anchor: `event_hash = hash`, `author_seq_vec = dag.author_seq_vec()`.
   - Cache `(author_seq_vec → digest)` in `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` (keyed on `author_seq_vec` only; `event_hash` is metadata only — see §8.4).
-  - Sign: `signature = peer_key.sign(canonical_bincode((anchor, digest_format, digest)))`.
+  - Sign: build `DriftSignedPayload { anchor: anchor.clone(), digest_format: "bincode-1.3".into(), digest }`, serialize via `canonical_bincode().serialize(&payload)`, then `signature = peer_key.sign(&serialized_bytes)`.
   - Publish `GossipMessage::Drift(DriftMessage { anchor, digest, digest_format: "bincode-1.3".into(), signed_by_peer: peer_key.public, signature })`.
 
 ### 8.3 Rate cap
@@ -494,13 +536,15 @@ deterministically.
 
 On `GossipMessage::Drift(d)`:
 
-1. Verify `d.signature` over canonical `(d.anchor, d.digest_format, d.digest)` against `d.signed_by_peer`. Fail → drop.
+1. Verify `d.signature` over `canonical_bincode().serialize(&DriftSignedPayload { anchor: d.anchor.clone(), digest_format: d.digest_format.clone(), digest: d.digest })` against `d.signed_by_peer` (using `myrhiza_manifest::verify_signature`). Fail → drop.
 2. Match against own state. **Anchor identity is `d.anchor.author_seq_vec` only — `event_hash` is informative metadata and MUST NOT be used for anchor equality**. Two peers reaching the same `(author, max_seq)` vector are at the same materialized state regardless of which event triggered the emit (different insertion orderings can pin different `event_hash` values for the same author-seq tuple). Match:
    - For each `AuthorSeq { author, max_seq }` in `d.anchor.author_seq_vec`:
      - Local `chain.head_seq < max_seq` → anchor not yet materialized locally → stash and exit.
      - Local `chain.seq_to_hash[max_seq]` exists and differs from any previously-observed hash at `(author, max_seq)` → equivocation context → log "branch divergence" and exit; do NOT compare digests.
    - All `(author, max_seq)` present locally → look up own digest cache by `author_seq_vec` key.
-3. Local cache: `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` keyed on `author_seq_vec` (not full `DriftAnchor`). Look up using `d.anchor.author_seq_vec`. Cache miss → anchor was not an emit position locally; compute digest now by topo-sort-then-materialize-up-to-anchor (replay through events with `(author, seq) ≤ (a, max_seq)` for every author in `author_seq_vec`).
+3. Local cache: `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` keyed on `author_seq_vec` (not full `DriftAnchor`). Look up using `d.anchor.author_seq_vec`. Cache miss → anchor was not an emit position locally; compute digest now by anchor-bounded replay:
+   - **Replay scope**: topo-sort the SUBSET of `dag.by_hash` whose events satisfy: `event.author ∈ author_seq_vec` AND `event.seq ≤ author_seq_vec[event.author].max_seq`. **Authors NOT listed in `author_seq_vec` are EXCLUDED entirely — their events do not contribute to the anchor digest.** Replay through that subset and hash the resulting state-digest output.
+   - **Why**: the emitter computed its digest from a state materialized at the moment its own `author_seq_vec` was the head set. Including events outside that frontier produces a digest the emitter never saw.
 4. Compare cached/computed digest against `d.digest`.
    - Match → log success (no surface; success is silent).
    - Mismatch → push `DriftDetected { peer: d.signed_by_peer, anchor: d.anchor, local_digest: own, remote_digest: d.digest }` to `Runtime::drift_log`. Acceptance tests inspect this.
@@ -545,14 +589,23 @@ the manifest-side helper.
 
 ### 9.2 Genesis payload contract for B-1
 
-Test-utils `EventBuilder::genesis` produces payload bytes shaped as
-canonical-bincode `(seed: [u8; 32], founder_pubkey: AuthorPubkey,
-initial_state: Vec<u8>)`. The kernel decodes this prefix to extract
-seed for topic-id verification. Apps with richer Genesis payloads
-prepend this triple in their canonical encoding (decided at app design
-time). The plan-A counter fixture's wire format is per-event (the
-big-endian i64 increment payload); genesis-payload-shape is a fresh
-B-1 concern.
+Test-utils `EventBuilder::genesis` produces `event.payload` as the
+canonical-bincode encoding of `GenesisV1` (the struct defined in §4.2
+step 3). Field names are normative: `seed`, `founder_pubkey`,
+`app_payload`. No field is omitted; no bytes exist outside the
+`GenesisV1` boundary — `decode_canonical::<GenesisV1>` (strict
+re-encode-and-byte-compare) enforces exact round-trip.
+
+Apps with app-specific initialization data embed those bytes inside
+`app_payload: Vec<u8>`. There is no "prefix" convention; appending
+bytes after `GenesisV1` fails the strict decode and the event is
+rejected at insert.
+
+The plan-A counter fixture's wire format remains big-endian i64 for
+per-event increment payloads; B-1 introduces `GenesisV1` only for the
+genesis event. The counter fixture's genesis `app_payload` is the
+canonical 8-byte big-endian encoding of `0_i64` (the initial counter
+value).
 
 **State-propose seed-injection from `host.random`** is the spec
 §4.6-mandated path for production. B-1 defers because state-propose
@@ -783,9 +836,10 @@ counter fixture's `apply` export must be rewritten in B-1 to:
 
 1. Decode the incoming event slice via canonical bincode 1.3.x as `Event`.
 2. Detect Genesis: if `event.seq == 1 && event.prev == EventHash::ZERO`,
-   read `(seed, founder_pubkey, initial_state)` from `event.payload`
-   and return `Accept` with `new_state = initial_state` (typically
-   the canonical encoding of `0_i64`).
+   decode `event.payload` via `decode_canonical::<GenesisV1>` (the
+   strict decoder defined in §4.2 step 3); the fixture uses `app_payload`
+   as the initial state bytes (canonical 8-byte big-endian `0_i64` for
+   the counter). Return `Accept` with `new_state = app_payload`.
 3. For non-Genesis: decode payload as big-endian i64 increment; add
    to current state's i64; return updated state.
 
@@ -829,6 +883,8 @@ pub enum DagError {
     InvalidTopic { expected: Topic, derived: Topic },
     InvalidChain { author: AuthorPubkey, expected_seq: u64, got_seq: u64,
                    expected_prev: EventHash, got_prev: EventHash },
+    Equivocation { author: AuthorPubkey, seq: u64,
+                   local_hash: EventHash, remote_hash: EventHash },
 }
 
 // crates/network/src/lib.rs
