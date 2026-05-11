@@ -23,3 +23,5 @@ pub use identity::{AuthorKeypair, PeerKeypair};
 
 pub mod dag;
 pub use dag::{AuthorChain, DagError, EventDag, Inserted};
+
+pub mod pending;
