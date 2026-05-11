@@ -16,19 +16,40 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:394
 
 ## capabilities.md §7.2
-- crates/kernel/tests/acceptance.rs:157
-- crates/kernel/tests/acceptance.rs:377
+- crates/kernel/tests/acceptance.rs:188
+- crates/kernel/tests/acceptance.rs:408
 
 ## convergence.md §4
 - crates/kernel/src/state_apply.rs:213
-- crates/types/src/event.rs:192
+- crates/kernel/tests/convergence.rs:28
+- crates/types/src/event.rs:177
+
+## convergence.md §4.1
+- crates/kernel/tests/convergence.rs:81
+
+## convergence.md §4.2
+- crates/kernel/tests/convergence.rs:154
+- crates/kernel/tests/convergence.rs:384
+- crates/kernel/tests/convergence.rs:418
 
 ## convergence.md §4.3
 - crates/kernel/src/digest.rs:70
 
 ## convergence.md §4.4
-- crates/kernel/tests/acceptance.rs:108
-- crates/kernel/tests/acceptance.rs:245
+- crates/kernel/tests/acceptance.rs:276
+- crates/kernel/tests/acceptance.rs:71
+
+## convergence.md §4.4.1
+- crates/kernel/tests/convergence.rs:337
+
+## convergence.md §4.6
+- crates/kernel/tests/convergence.rs:200
+
+## convergence.md §4.7
+- crates/kernel/tests/convergence.rs:277
+
+## convergence.md §4.8
+- crates/kernel/tests/convergence.rs:384
 
 ## determinism.md §5.1
 - crates/kernel/src/state_apply.rs:213
@@ -36,11 +57,11 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:394
 
 ## determinism.md §5.2
-- crates/kernel/tests/acceptance.rs:342
+- crates/kernel/tests/acceptance.rs:373
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
 ## determinism.md §5.3
-- crates/kernel/tests/acceptance.rs:304
+- crates/kernel/tests/acceptance.rs:335
 - crates/types/tests/limits_shadow.rs:3
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
@@ -55,20 +76,29 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/tests/wit_freeze.rs:74
 
 ## distribution.md §10.5
-- crates/kernel/tests/acceptance.rs:377
-- crates/kernel/tests/acceptance.rs:85
+- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:48
+
+## mvp.md §15.1 #1+#2
+- crates/kernel/tests/convergence.rs:28
+
+## mvp.md §15.1 #2
+- crates/kernel/tests/convergence.rs:81
+
+## mvp.md §15.1 #4
+- crates/kernel/tests/convergence.rs:200
 
 ## mvp.md §15.1
-- crates/kernel/tests/acceptance.rs:108
-- crates/kernel/tests/acceptance.rs:157
-- crates/kernel/tests/acceptance.rs:245
-- crates/kernel/tests/acceptance.rs:304
-- crates/kernel/tests/acceptance.rs:342
-- crates/kernel/tests/acceptance.rs:377
-- crates/kernel/tests/acceptance.rs:85
+- crates/kernel/tests/acceptance.rs:188
+- crates/kernel/tests/acceptance.rs:276
+- crates/kernel/tests/acceptance.rs:335
+- crates/kernel/tests/acceptance.rs:373
+- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:48
+- crates/kernel/tests/acceptance.rs:71
 
 ## verification.md §22.1
-- crates/kernel/tests/acceptance.rs:85
+- crates/kernel/tests/acceptance.rs:48
 
 ## verification.md §22.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:50
@@ -83,4 +113,4 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/types/tests/limits_shadow.rs:3
 
 ## verification.md §22.5
-- crates/kernel/tests/acceptance.rs:245
+- crates/kernel/tests/acceptance.rs:276

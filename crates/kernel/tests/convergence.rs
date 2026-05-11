@@ -381,7 +381,7 @@ async fn equivocating_author_chain_first_seen_wins() {
     assert!(matches!(r, DagError::Equivocation { seq: 2, .. }));
 }
 
-/// Covers: convergence.md §4.2, §4.8
+/// Covers: convergence.md §4.2, convergence.md §4.8
 #[test]
 fn pending_buffer_evicts_oldest_under_capacity() {
     use myrhiza_kernel::pending::{PendingBuffer, PendingCfg};
