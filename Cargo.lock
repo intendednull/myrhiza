@@ -749,10 +749,13 @@ dependencies = [
  "bincode",
  "ed25519-dalek",
  "hex",
+ "myrhiza-kernel",
  "myrhiza-manifest",
+ "myrhiza-network",
  "myrhiza-types",
  "serde",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

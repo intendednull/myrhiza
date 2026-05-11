@@ -14,8 +14,11 @@ workspace = true
 [dependencies]
 myrhiza-types = { path = "../types" }
 myrhiza-manifest = { path = "../manifest" }
+myrhiza-kernel = { path = "../kernel" }
+myrhiza-network = { path = "../network" }
 bincode.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 serde.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
