@@ -15,7 +15,7 @@ workspace = true
 myrhiza-types = { path = "../types" }
 myrhiza-manifest = { path = "../manifest" }
 myrhiza-kernel = { path = "../kernel" }
-myrhiza-network = { path = "../network" }
+myrhiza-network = { path = "../network", features = ["test-helpers"] }
 bincode.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true

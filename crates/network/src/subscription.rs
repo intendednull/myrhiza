@@ -1,6 +1,8 @@
 //! [`Subscription`] trait + [`MemSubscription`] impl.
 
-use crate::{GossipMessage, SubError};
+use crate::{GossipMessage, SubError, memory::MemBus};
+use myrhiza_types::Topic;
+use std::sync::Arc;
 
 /// Receive-side of a topic subscription.
 #[async_trait::async_trait]
@@ -20,13 +22,31 @@ pub trait Subscription: Send {
 }
 
 /// In-process subscription backed by a tokio broadcast receiver.
+///
+/// Carries an `Arc<MemBus>` + `topic` solely so [`Self::recv`] can check
+/// the bus-side `force_lag` flag set by [`MemBus::inject_lag`] (spec
+/// §6.3 deterministic-lag affordance). The bus reference adds a single
+/// `Arc` clone per subscribe and a single `Mutex` lock + empty-set
+/// check per `recv` — negligible on the hot path and `force_lag` is
+/// empty in non-test builds.
 pub struct MemSubscription {
     pub(crate) rx: tokio::sync::broadcast::Receiver<GossipMessage>,
+    pub(crate) bus: Arc<MemBus>,
+    pub(crate) topic: Topic,
 }
 
 #[async_trait::async_trait]
 impl Subscription for MemSubscription {
     async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError> {
+        // Deterministic-lag injection (spec §6.3 / review-finding M-3):
+        // if the bus has armed `force_lag` for this topic, consume the
+        // flag and surface a synthetic `Lagged(1)` exactly once. The
+        // underlying broadcast receiver is left untouched, so any
+        // already-buffered messages are still delivered by the next
+        // `recv` call — matching the natural-overflow recovery shape.
+        if self.bus.take_force_lag(self.topic) {
+            return Err(SubError::Lagged(1));
+        }
         match self.rx.recv().await {
             Ok(msg) => Ok(Some(msg)),
             Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(None),

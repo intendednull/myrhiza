@@ -79,3 +79,47 @@ async fn mem_network_lag_surfaces_as_sub_error() {
         "first recv after overflow must be Lagged, got {r:?}"
     );
 }
+
+/// Covers: spec §6.3 — `MemBus::inject_lag(topic)` test affordance for
+/// deterministic lag-recovery testing (review-finding M-3).
+///
+/// Without this affordance, the existing
+/// `lagged_broadcast_recovers_via_heads_summary` convergence test
+/// relies on natural capacity-overflow timing, which is intrinsically
+/// consumer-speed-dependent. With `inject_lag` the next `recv` on any
+/// subscriber of the named topic deterministically returns
+/// `Err(SubError::Lagged(1))` exactly once.
+///
+/// Gated on `feature = "test-helpers"` because `MemBus::inject_lag`
+/// itself carries the same gate (it is intentionally absent from the
+/// non-test public surface). Workspace test runs enable the feature
+/// transitively via the kernel/test-utils dev-dep chain.
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn inject_lag_forces_next_recv_to_return_lagged() {
+    use myrhiza_network::SubError;
+    let bus = MemBus::new(8);
+    let net = MemNetwork::new(bus.clone());
+    let t = topic(4);
+    let mut sub = net.subscribe(t).await.expect("subscribe");
+
+    bus.inject_lag(t);
+
+    let r = sub.recv().await;
+    assert!(
+        matches!(r, Err(SubError::Lagged(_))),
+        "expected Lagged after inject_lag, got {r:?}"
+    );
+
+    // After the forced lag fires once, the flag clears and normal
+    // delivery resumes. Publish a real message and confirm it arrives.
+    net.publish(t, GossipMessage::HeadsSummary(sample_heads_summary()))
+        .await
+        .expect("publish");
+    let r2 = tokio::time::timeout(std::time::Duration::from_millis(200), sub.recv()).await;
+    let delivered = r2.expect("recv did not time out").expect("recv ok");
+    assert!(
+        delivered.is_some(),
+        "post-lag publish must deliver normally"
+    );
+}
