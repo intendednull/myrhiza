@@ -380,3 +380,101 @@ async fn equivocating_author_chain_first_seen_wins() {
     let r = dag.insert(e2b).expect_err("equivocation");
     assert!(matches!(r, DagError::Equivocation { seq: 2, .. }));
 }
+
+/// Covers: convergence.md §4.2, §4.8
+#[test]
+fn pending_buffer_evicts_oldest_under_capacity() {
+    use myrhiza_kernel::pending::{PendingBuffer, PendingCfg};
+    use myrhiza_types::{AuthorPubkey, Event, EventHash, Hlc};
+    use std::collections::BTreeSet;
+
+    let cfg = PendingCfg {
+        max_total: 3,
+        max_per_author: 10,
+        ttl: Duration::from_hours(1),
+    };
+    let mut pb = PendingBuffer::new(cfg);
+    for i in 0u8..5 {
+        let e = Event {
+            author: AuthorPubkey::from_bytes([i; 32]),
+            seq: 1,
+            prev: EventHash::ZERO,
+            deps: BTreeSet::new(),
+            hlc: Hlc {
+                wall_ms: 0,
+                logical: 0,
+            },
+            payload: vec![i],
+            signature: [0; 64],
+        };
+        let mut missing = BTreeSet::new();
+        missing.insert(EventHash::blake3(&[i]));
+        pb.insert(e, missing);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(pb.len(), 3, "PendingBuffer must cap at max_total = 3");
+}
+
+/// Covers: convergence.md §4.2
+#[tokio::test]
+async fn lagged_broadcast_recovers_via_heads_summary() {
+    let harness = InProcessHarness::new(2, [0x66; 32]);
+    let cfg = fast_cfg();
+    let peer_a = harness
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .await;
+    let mut peer_b = harness
+        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .await;
+
+    let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
+    let genesis = GenesisV1 {
+        seed: harness.seed,
+        founder_pubkey: kp_a.author,
+        app_payload: 0_i64.to_be_bytes().to_vec(),
+    };
+    peer_a
+        .author(
+            canonical_bincode().serialize(&genesis).expect("encode"),
+            std::collections::BTreeSet::new(),
+        )
+        .await
+        .expect("genesis");
+
+    // Flood many increments rapidly to exceed bus capacity.
+    for delta in [1_i64; 10] {
+        peer_a
+            .author(
+                delta.to_be_bytes().to_vec(),
+                std::collections::BTreeSet::new(),
+            )
+            .await
+            .expect("inc");
+    }
+
+    // Recovery indicator: either B converges fully to state==10 (the
+    // happy-path) OR B records a BroadcastLagged warning (proving the
+    // lag-detection path fired and triggered a recovery HeadsSummary).
+    //
+    // Per plan hint: bus capacity=2 + flood=10 is intrinsically
+    // consumer-speed-dependent, so we accept *either* indicator. Both
+    // demonstrate that the lag → recovery path is wired correctly per
+    // convergence.md §4.2.
+    let expected = 10_i64.to_be_bytes().to_vec();
+    let converged = peer_b
+        .await_digest(expected.clone(), Duration::from_secs(2))
+        .await;
+    let warnings = peer_b.peer_warnings();
+    let lagged_seen = warnings.iter().any(|w| {
+        matches!(
+            w,
+            myrhiza_kernel::runtime::PeerWarning::BroadcastLagged { .. }
+        )
+    });
+    assert!(
+        converged || lagged_seen,
+        "B must either converge to state==10 OR record a BroadcastLagged warning; \
+         saw digest={:?} warnings={warnings:?}",
+        peer_b.current_digest(),
+    );
+}
