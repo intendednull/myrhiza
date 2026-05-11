@@ -96,15 +96,6 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:408
 - crates/kernel/tests/acceptance.rs:48
 
-## mvp.md §15.1 #1+#2
-- crates/kernel/tests/convergence.rs:28
-
-## mvp.md §15.1 #2
-- crates/kernel/tests/convergence.rs:81
-
-## mvp.md §15.1 #4
-- crates/kernel/tests/convergence.rs:203
-
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:188
 - crates/kernel/tests/acceptance.rs:276
@@ -113,6 +104,15 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:408
 - crates/kernel/tests/acceptance.rs:48
 - crates/kernel/tests/acceptance.rs:71
+
+## mvp.md §15.1 #1+#2
+- crates/kernel/tests/convergence.rs:28
+
+## mvp.md §15.1 #2
+- crates/kernel/tests/convergence.rs:81
+
+## mvp.md §15.1 #4
+- crates/kernel/tests/convergence.rs:203
 
 ## verification.md §22.1
 - crates/kernel/tests/acceptance.rs:48
