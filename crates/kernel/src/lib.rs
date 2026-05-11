@@ -17,3 +17,6 @@ pub use state_apply::{ApplyError, ApplyOutcome, ApplyResult, PreCheckResult, Sta
 
 pub mod digest;
 pub use digest::{DigestEmitter, DigestEvent};
+
+pub mod identity;
+pub use identity::{AuthorKeypair, PeerKeypair};

@@ -19,10 +19,11 @@ serde.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
 hex.workspace = true
+ed25519-dalek.workspace = true
+rand_core = "0.6"
 
 [dev-dependencies]
 anyhow.workspace = true
 tempfile.workspace = true
-ed25519-dalek.workspace = true
 myrhiza-test-utils = { path = "../test-utils" }
 myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
