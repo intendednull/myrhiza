@@ -703,6 +703,7 @@ dependencies = [
  "myrhiza-test-utils",
  "myrhiza-types",
  "myrhiza-wasmtime-backend",
+ "rand_core",
  "serde",
  "tempfile",
  "thiserror 1.0.69",
