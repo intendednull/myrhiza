@@ -27,7 +27,7 @@ identity / bech32m (B-2), module-dep recursion (B-3), revocation topic
 | Sync protocol | Full HeadsSummary + PendingBuffer | Live-gossip only | iroh impl in B-4 drops in without retrofitting sync protocol; spec §4.2 is normative |
 | Drift detection | Include in B-1 | Defer to B-2 | Spec §4.7 commits "v1 ships drift detection"; mechanism orthogonal to peer-identity persistence (in-memory stub suffices) |
 | Topic-ID | Real derivation, manual seed in tests | Hardcode | Covers MVP §15.1 #4 coexistence; `app_bundle_hash` already produced by plan-A manifest pipeline |
-| State-propose | Deferred; test-utils signs | Wire state-propose now | YAGNI for convergence test; state-propose lands when interaction profile does |
+| State-propose | Deferred; test-utils signs | Wire state-propose now | YAGNI for convergence test; state-propose lands when interaction profile does. When it lands, §9.2's `host.random` seed-injection path becomes mandatory — test-utils manual-seed shortcut is B-1-only. |
 | DAG storage | In-memory BTreeMap | sled / redb | Acceptance test in-process; persistence is B-7 |
 | Peer keypair | In-memory stub | Persistent now | Drift needs peer-scoped signing; full persistent identity is B-2 |
 | Acceptance | 2 peers + concurrent multi-author | Single originator | Stronger topo-sort tie-break coverage |
@@ -73,6 +73,13 @@ Types extensions (`crates/types/src/`):
 └── topic.rs                — extends with Topic::derive(...)
 ```
 
+Plan-A's `crates/types/src/event.rs::serde_signature` (a private module
+that serializes `[u8; 64]` as `serde_bytes::Bytes`) is promoted to a
+crate-public helper `crate::serde_signature_64` so `DriftMessage` and
+future structs can reuse it without duplicating the serde glue. The
+plan-A `Event::signature` field continues to use it; behavior
+unchanged.
+
 Test-utils extensions (`crates/test-utils/src/`):
 
 ```
@@ -94,8 +101,8 @@ pub struct EventDag {
 }
 
 pub struct AuthorChain {
-    head_seq: u64,            // 0 if no events yet from this author
-    head_hash: EventHash,     // EventHash::ZERO if no events yet
+    head_seq: u64,            // 0 if no events yet from this author (sentinel)
+    head_hash: EventHash,     // EventHash::ZERO when head_seq == 0; not a real event hash
     seq_to_hash: BTreeMap<u64, EventHash>,
 }
 ```
@@ -105,6 +112,14 @@ All collections sorted for canonical iteration. `by_hash` keyed on
 signature). `parents_to_children` is the inverted edge index used by
 Kahn's algorithm — for each `e ∈ by_hash`, the union of `{e.prev}`
 (unless `prev == EventHash::ZERO`) and `e.deps` are the parents.
+
+Additionally, `EventDag` stores a per-event indegree counter populated at insert time:
+
+```rust
+indegree: BTreeMap<EventHash, usize>,   // # of unvisited parents at insert
+```
+
+`indegree` is the canonical source of truth for parent count, computed exactly once during `insert`. The topo-sort algorithm (§4.3) consumes a snapshot of this map and decrements via `parents_to_children`; it does NOT re-derive parents from event fields. This eliminates the dual-computation hazard (insert-time parent logic must equal topo-sort parent logic — keeping the index as the source of truth makes that invariant structural).
 
 ### 4.2 Insert contract
 
@@ -123,13 +138,26 @@ impl EventDag {
 Validation order (fail-fast):
 
 1. **Signature**: compute `body_hash = event.hash_signed_body()` (BLAKE3 over canonical-encoded `SignedBody` per plan-A `crates/types/src/event.rs`); then `myrhiza_manifest::verify_signature(&event.author.as_bytes(), body_hash.as_bytes(), &event.signature)` (RFC 8032 strict via `VerifyingKey::verify_strict`). Fail → `DagError::InvalidSignature`.
+
+   **Normative**: the Ed25519 signature covers the raw 32 bytes of `body_hash`, NOT the canonical-encoded `SignedBody` pre-image. Signing path MUST be `sk.sign(body_hash.as_bytes())`; verifying path MUST pass the same 32 bytes as `message` to `verify_strict`. The author and verifier must agree on this exact byte string or every event fails verification.
 2. **Duplicate**: `event.wire_hash() ∈ by_hash` → `Ok(AlreadyKnown)`.
 3. **Genesis case** (`event.seq == 1`):
    - `event.prev == EventHash::ZERO` else `DagError::InvalidGenesis("prev != ZERO")`.
    - `event.deps.is_empty()` else `DagError::InvalidGenesis("deps != ∅")`.
-   - Decode `Genesis(seed, founder_pubkey, initial_state)` from payload (variant tagged per app's WIT; B-1 uses test-utils canonical envelope where the payload is `(seed, founder_pubkey, app_state_bytes)` tuple — apps that use a different shape pass that shape's bytes; the seed verification still works because the kernel knows the seed *position* in the canonical encoding per the WIT contract).
-   - `Topic::derive(app_bundle_hash, seed, topic_name)` must equal `self.topic`. Else `DagError::InvalidTopic { expected: self.topic, derived }`.
+   - Decode `event.payload` as the **B-1 Genesis envelope** (versioned wrapper, exact bincode shape — no trailing-bytes-ignored decode):
+     ```rust
+     #[derive(Serialize, Deserialize)]
+     struct GenesisV1 {
+         seed: [u8; 32],
+         founder_pubkey: AuthorPubkey,
+         app_payload: Vec<u8>,    // opaque to kernel; handed to state-apply
+     }
+     ```
+     Decode strictly via `decode_canonical::<GenesisV1>(&event.payload)` (plan-A `myrhiza_types::decode_canonical` — re-encode-and-byte-compare strict decoder). Mismatch → `DagError::InvalidGenesis("payload not a canonical GenesisV1")`.
+   - `Topic::derive(app_bundle_hash, &seed, topic_name)` must equal `self.topic`. Else `DagError::InvalidTopic { expected: self.topic, derived }`.
    - `event.author == founder_pubkey` (the author of the Genesis is the founder).
+
+   The kernel hands the FULL canonical `Event` envelope (with payload = canonical-encoded `GenesisV1`) to state-apply. State-apply decodes `GenesisV1`, reads `app_payload`, and initializes its state from those bytes. App authors writing custom genesis logic embed their app-specific payload INSIDE `app_payload` — never as a sibling field, never as trailing bytes. Future kernel majors may introduce `GenesisV2` with a tag-discriminator byte for migration; v1 commits to `GenesisV1` only.
 4. **Chain integrity** (non-genesis):
    - Look up `chain = by_author.entry(event.author).or_default()`.
    - `event.seq == chain.head_seq + 1` else `DagError::InvalidChain { ... }`.
@@ -144,25 +172,18 @@ Validation order (fail-fast):
 Used by drift-emit (to recompute digest at anchor) and by replay-from-genesis. Algorithm:
 
 ```
-ready = BTreeSet<EventHash>::new();
-visited = BTreeSet<EventHash>::new();
-indegree = BTreeMap<EventHash, usize>::new();
+let mut indegree = self.indegree.clone();          // snapshot the stored index
+let mut ready: BTreeSet<EventHash> = indegree.iter()
+    .filter(|(_, deg)| **deg == 0)
+    .map(|(h, _)| *h)
+    .collect();
 
-for (hash, event) in &by_hash {
-    let parents = parents_of(event);  // {prev} ∪ deps, excluding ZERO
-    indegree.insert(hash, parents.len());
-    if parents.is_empty() {
-        ready.insert(hash);  // genesis
-    }
-}
-
-let mut out = Vec::with_capacity(by_hash.len());
-while let Some(next) = ready.pop_first() {  // BTreeSet::pop_first = lex byte-order tie-break
+let mut out = Vec::with_capacity(self.by_hash.len());
+while let Some(next) = ready.pop_first() {        // BTreeSet::pop_first = lex byte-order tie-break
     out.push(next);
-    visited.insert(next);
-    if let Some(children) = parents_to_children.get(&next) {
+    if let Some(children) = self.parents_to_children.get(&next) {
         for child in children {
-            let deg = indegree.get_mut(child).unwrap();
+            let deg = indegree.get_mut(child).expect("child has indegree entry");
             *deg -= 1;
             if *deg == 0 {
                 ready.insert(*child);
@@ -170,9 +191,11 @@ while let Some(next) = ready.pop_first() {  // BTreeSet::pop_first = lex byte-or
         }
     }
 }
-assert_eq!(out.len(), by_hash.len(), "DAG must be acyclic");
+assert_eq!(out.len(), self.by_hash.len(), "DAG must be acyclic");
 out
 ```
+
+`indegree` and `parents_to_children` are both maintained at insert time; the topo-sort consumes them, never re-derives.
 
 HLC ignored entirely. `BTreeSet::pop_first` is the lex byte-order
 tie-break specified in §4.1. Property test (in `dag.rs`):
@@ -259,16 +282,29 @@ pub trait Network: Send + Sync + 'static {
 
 #[async_trait::async_trait]
 pub trait Subscription: Send {
-    async fn recv(&mut self) -> Option<GossipMessage>;
+    /// Receive the next message, lag signal, or end-of-stream.
+    ///
+    /// Returns `Ok(Some(msg))` for a delivered message,
+    /// `Err(SubError::Lagged(n))` when the underlying transport dropped
+    /// `n` messages (broadcast channel overflow, packet loss buffer
+    /// exhaustion, etc.) — the Runtime treats this as a signal to
+    /// publish a HeadsSummary and recover via backfill, and continues
+    /// calling `recv` afterward,
+    /// `Ok(None)` when the subscription is closed.
+    async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError>;
 }
 
 pub enum NetError {
     SubscribeClosed,
     PublishFailed(String),
 }
+
+pub enum SubError {
+    Lagged(u64),                      // dropped message count; not fatal
+}
 ```
 
-**Why `async_trait` macro** vs native async-fn-in-trait: native async-fn-in-trait (RFC 3185, stable in 1.75) requires `Send` future bounds that the compiler currently can't express ergonomically across `dyn`. `async_trait` adds a `Box<Future>` allocation per call; B-4 may revisit when the `return_type_notation` RFC stabilizes. Decision documented in `crates/network/src/lib.rs` head comment.
+**Why `async_trait` macro** vs native async-fn-in-trait: native async-fn-in-trait (stable in 1.75) requires `Send` future bounds that the compiler currently can't express ergonomically across `dyn` (tracked at rust-lang/rust#100013 and the `async-fn-in-trait` lint family). `async_trait` adds a `Box<Future>` allocation per call; B-4 may revisit once `async fn in trait` `Send`-bound ergonomics stabilize. Decision documented in `crates/network/src/lib.rs` head comment.
 
 **Sender identity not in trait surface**: messages carry their own `signed_by_peer` or `author` field where needed. B-4 iroh impl wraps QUIC connection identity into `GossipMessage` reception via a separate `from_peer` channel if peer-identity validation is needed at transport layer.
 
@@ -328,10 +364,11 @@ impl Network for MemNetwork {
 ```
 
 **Lagged receiver**: tokio broadcast returns `RecvError::Lagged(n)`
-when the receiver fell behind capacity. `MemSubscription::recv`
-converts lag into a `GossipMessage::HeadsSummary` request emitted by
-the Runtime to recover. This models real-world packet loss + bounded
-inbox.
+when the receiver fell behind capacity. `MemSubscription::recv` maps
+this to `Err(SubError::Lagged(n))` (per §6.1 `Subscription` trait
+signature). The Runtime's run loop (§11.2) reacts by publishing a
+HeadsSummary, recovering missing events via backfill. This models
+real-world packet loss + bounded inbox.
 
 ## 7. HeadsSummary sync protocol
 
@@ -373,14 +410,19 @@ The Runtime publishes its own HeadsSummary:
 
 The Runtime, on receiving each message:
 
-- **`Event(e)`**: validate signature → `dag.insert(e)`. On `MissingDeps(set)`, stash in `PendingBuffer` + publish a `HeadsRequest` for the missing events' authors. On `NewlyApplied`, drain `PendingBuffer.newly_satisfied(&known)` and apply each in returned order via `dag.insert`. Trigger `Runtime::replay_full` (or, in B-1, full re-replay) after batch settles. Emit drift-message if `topo_index` triggers anchor.
+- **`Event(e)`**: validate signature → `dag.insert(e)`. On `Pending(missing)`, stash in `PendingBuffer` + publish a `HeadsRequest` for the missing events' authors. On `NewlyApplied`:
+  1. Drain `PendingBuffer.newly_satisfied(&self.dag.known_hashes())` in a loop: insert each returned event into DAG (which may further unblock subsequent stashed events), repeating until `newly_satisfied` returns empty.
+  2. Call `replay_full` ONCE after the drain loop settles — do NOT replay after each individual `dag.insert` in the drain.
+  3. Check the highest `topo_index` produced by the batch against the drift trigger; emit at most one drift-message per batch even if multiple anchors were crossed (skipping intermediate anchors is acceptable — the rate cap §8.3 would suppress them anyway).
 - **`HeadsSummary(remote)`**: compute diff against local `dag.author_heads()`. For each `AuthorHead { author, seq: remote_seq, hash: remote_hash }` in `remote`, compare to `(local_seq, local_hash)`:
   - Local has no entry for `author`, or `local_seq < remote_seq` → request the missing range via `EventRequest(author, local_seq+1, remote_seq)` (with `local_seq = 0` when absent).
-  - `local_seq > remote_seq` → publish events `(remote_seq+1 ..= local_seq)` for that author as individual `Event` messages so the remote catches up.
+  - `local_seq > remote_seq` → **first** check `chain.seq_to_hash[remote_seq] == remote_hash`; if mismatch, flag equivocation (`Runtime::equivocation_log` entry, `peer = Some(sender)`) and DO NOT push events for this author — the chains have diverged at `remote_seq` and pushing past that point would help propagate one branch over the other. If the hash check passes, publish events `(remote_seq+1 ..= local_seq)` for that author as individual `Event` messages.
   - `local_seq == remote_seq && local_hash != remote_hash` → equivocation flag (logged + recorded in `Runtime::equivocation_log`; no events requested).
   - `local_seq == remote_seq && local_hash == remote_hash` → in sync; no action.
 
   For each `author` in local but not in `remote`: publish all events for that author as `Event` messages. Aggregate backward-direction asks into a single `HeadsRequest`.
+
+  **Equivocation detection invariant**: the ahead-by-≥1 hash check above ensures that an equivocating author is flagged regardless of how far ahead one branch has progressed. §4.4.1's "same seq, different hash" requirement is satisfied at any matching seq position, not just at the head.
 - **`HeadsRequest(req)`**: for each `EventRequest { author, from_seq, to_seq }`, look up `chain.seq_to_hash[from_seq..=to_seq]`, fetch each event from `by_hash`, publish as `Event` messages. Bounds-check: refuse `to_seq - from_seq > 256` per single request (anti-amplification). Caller batches.
 - **`Drift(d)`**: §8 drift logic below.
 
@@ -406,10 +448,16 @@ pub struct AuthorSeq {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DriftMessage {
     pub anchor: DriftAnchor,
-    pub digest: [u8; 32],                   // BLAKE3 of state-digest() output
+    pub digest: [u8; 32],                   // BLAKE3 of state-digest() output;
+                                            // fixed-length array (tighter than
+                                            // master-spec WIT's `list<u8>`)
+                                            // since BLAKE3 output is invariant
+                                            // 32 bytes — the type encodes the
+                                            // constraint and avoids a length
+                                            // prefix on the wire
     pub digest_format: String,              // "bincode-1.3" at v1
     pub signed_by_peer: PeerPubkey,
-    #[serde(with = "serde_signature")]
+    #[serde(with = "myrhiza_types::serde_signature_64")]
     pub signature: [u8; 64],
 }
 ```
@@ -417,11 +465,11 @@ pub struct DriftMessage {
 ### 8.2 Emit trigger
 
 After each `dag.insert(...)` returning `NewlyApplied { topo_index, hash }`:
-- If `topo_index % drift_interval == 0` (default `drift_interval = 1024`; test override = 1):
+- If `topo_index % drift_interval == 0` where `drift_interval` is read from the loaded manifest's `[determinism.drift-detection]` `interval-events` field (plan-A `crates/manifest/src/schema.rs::DriftDetectionSection`). The kernel's `InstallFlow::load` extracts this value and injects it into `RuntimeCfg.drift_interval`. Test code overrides via `RuntimeCfg` directly (e.g. `drift_interval = 1` to exercise emit on every event). The manifest field is signed; honoring it is non-optional under spec §10.2's signing contract.
   - Compute `state_digest_bytes = self.handle.state_digest(&self.state)?`
   - `digest = blake3::hash(&state_digest_bytes).into()`
   - Build anchor: `event_hash = hash`, `author_seq_vec = dag.author_heads()`.
-  - Cache `(anchor → digest)` in `Runtime::own_digest_cache: BTreeMap<DriftAnchor, [u8; 32]>` (used for comparison against incoming drift-messages at this anchor).
+  - Cache `(author_seq_vec → digest)` in `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` (keyed on `author_seq_vec` only; `event_hash` is metadata only — see §8.4).
   - Sign: `signature = peer_key.sign(canonical_bincode((anchor, digest_format, digest)))`.
   - Publish `GossipMessage::Drift(DriftMessage { anchor, digest, digest_format: "bincode-1.3".into(), signed_by_peer: peer_key.public, signature })`.
 
@@ -447,15 +495,17 @@ deterministically.
 On `GossipMessage::Drift(d)`:
 
 1. Verify `d.signature` over canonical `(d.anchor, d.digest_format, d.digest)` against `d.signed_by_peer`. Fail → drop.
-2. Match against own state at anchor:
-   - All `AuthorSeq { author, max_seq }` in `d.anchor.author_seq_vec` are present in local DAG with same head hash → anchor matches locally.
-   - Any `(author, max_seq)` exceeds local → anchor not yet materialized → stash in `Runtime::incoming_drift_pending: BTreeMap<DriftAnchor, Vec<DriftMessage>>` (capped at 256; oldest evicted).
-   - Any `(author, max_seq)` matches sequence but local head hash differs at that seq → equivocation context → log as "branch divergence", not drift.
-3. If anchor matches locally: look up `Runtime::own_digest_cache[anchor]`. Compare.
+2. Match against own state. **Anchor identity is `d.anchor.author_seq_vec` only — `event_hash` is informative metadata and MUST NOT be used for anchor equality**. Two peers reaching the same `(author, max_seq)` vector are at the same materialized state regardless of which event triggered the emit (different insertion orderings can pin different `event_hash` values for the same author-seq tuple). Match:
+   - For each `AuthorSeq { author, max_seq }` in `d.anchor.author_seq_vec`:
+     - Local `chain.head_seq < max_seq` → anchor not yet materialized locally → stash and exit.
+     - Local `chain.seq_to_hash[max_seq]` exists and differs from any previously-observed hash at `(author, max_seq)` → equivocation context → log "branch divergence" and exit; do NOT compare digests.
+   - All `(author, max_seq)` present locally → look up own digest cache by `author_seq_vec` key.
+3. Local cache: `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` keyed on `author_seq_vec` (not full `DriftAnchor`). Look up using `d.anchor.author_seq_vec`. Cache miss → anchor was not an emit position locally; compute digest now by topo-sort-then-materialize-up-to-anchor (replay through events with `(author, seq) ≤ (a, max_seq)` for every author in `author_seq_vec`).
+4. Compare cached/computed digest against `d.digest`.
    - Match → log success (no surface; success is silent).
    - Mismatch → push `DriftDetected { peer: d.signed_by_peer, anchor: d.anchor, local_digest: own, remote_digest: d.digest }` to `Runtime::drift_log`. Acceptance tests inspect this.
 
-When own emit advances anchor cache, drain `incoming_drift_pending` for that anchor and process.
+Pending stash for not-yet-materialized anchors: `Runtime::incoming_drift_pending: BTreeMap<Vec<AuthorSeq>, Vec<DriftMessage>>` capped at 256; oldest evicted. When own emit advances state to cover a stashed anchor, drain and process.
 
 ## 9. Topic-ID + genesis
 
@@ -463,6 +513,9 @@ When own emit advances anchor cache, drain `incoming_drift_pending` for that anc
 
 ```rust
 impl Topic {
+    /// Derive a topic ID from the bundle hash + seed + a pre-normalized name.
+    /// Caller MUST pass an NFC-normalized name. Use `Topic::derive_normalized`
+    /// if the name comes from an unnormalized source.
     pub fn derive(app_bundle_hash: &BundleHash, seed: &[u8; 32], name: &str) -> Topic {
         let mut h = blake3::Hasher::new();
         h.update(b"myrhiza/topic/v1");
@@ -474,9 +527,21 @@ impl Topic {
 }
 ```
 
-`name` is caller-supplied; caller is responsible for UTF-8 NFC
-normalization per spec §4.6 (test-utils helper applies NFC; production
-state-propose path applies NFC at the host boundary when that lands).
+**NFC normalization** lives in the layer above `crates/types` to keep
+the types crate's dependency footprint minimal (plan-A's
+`crates/manifest` already depends on `unicode-normalization`; the types
+crate does not). A thin `myrhiza_manifest::derive_topic_normalized(...)`
+helper applies `unicode_normalization::UnicodeNormalization::nfc` to
+the name and forwards to `Topic::derive`. The kernel + test-utils call
+this helper at the boundary; raw `Topic::derive` is reserved for paths
+where the caller has already normalized (or where NFC is guaranteed
+by upstream invariants — e.g. the `Genesis::topic_name` field is
+NFC-canonicalized at install time).
+
+**Why two functions**: `Topic::derive` stays in `crates/types`
+(zero new deps; usable from anywhere). `derive_topic_normalized` is
+in `crates/manifest` (already has the dep). Callers in the kernel use
+the manifest-side helper.
 
 ### 9.2 Genesis payload contract for B-1
 
@@ -592,9 +657,15 @@ async fn run(&mut self, sub: impl Subscription, author_rx: mpsc::Receiver<Author
                 Some(AuthorCommand::Shutdown) => break,
                 None => break,
             },
-            msg = sub.recv() => match msg {
-                Some(m) => self.handle_message(m).await,
-                None => break,
+            recv_result = sub.recv() => match recv_result {
+                Ok(Some(m)) => self.handle_message(m).await,
+                Ok(None) => break,
+                Err(SubError::Lagged(n)) => {
+                    self.peer_warnings.lock().unwrap()
+                        .push(PeerWarning::BroadcastLagged { dropped: n });
+                    self.publish_heads_summary().await;
+                    // continue loop; subsequent recv resumes from new position
+                }
             },
             _ = ticker.tick() => self.publish_heads_summary().await,
         }
@@ -604,6 +675,14 @@ async fn run(&mut self, sub: impl Subscription, author_rx: mpsc::Receiver<Author
 
 `biased` polling: author commands have higher priority than incoming
 messages, so authoring is responsive even under message flood.
+
+**Starvation risk (documented)**: under sustained author flood, the
+`sub.recv()` and `ticker.tick()` arms will be starved. For B-1's
+bounded test-driven authoring this is fine. B-4 (iroh) MUST evaluate
+whether fair `select` or bounded author batching (e.g. drain at most
+K author commands per loop iteration) is needed for production
+network conditions. The decision is logged here so B-4 doesn't ship
+biased select silently into the iroh path.
 
 ### 11.3 Author path
 
@@ -806,7 +885,7 @@ pub enum PeerWarning {
 5. **Drift-message before anchor materialized**: stashed in `incoming_drift_pending` (256-entry cap); processed on reaching anchor.
 6. **MemBus subscriber lag**: `RecvError::Lagged` → publish HeadsSummary to recover.
 7. **Signature verification fail on receive**: drop + log; do not insert.
-8. **Apply-time Reject after pre-check pass**: per §4.4 cross-peer eventual consistency. Event recorded in `dropped_at_apply` map; not removed from DAG; replay on future state-change may re-accept.
+8. **Apply-time Reject after pre-check pass**: per §4.4 cross-peer eventual consistency. Event recorded in `dropped_at_apply` map; not removed from DAG; replay on future state-change may re-accept. **Including on the originator**: after `Runtime::author` signs and self-inserts, the subsequent `replay_full` may produce a `state` that differs from `pre_check`'s `candidate_state` because previously-dropped events (in `dropped_at_apply`) may now be re-accepted under the new topo ordering. The authored event itself may even land in `dropped_at_apply` post-replay. This is expected behavior, not a bug: the pre-check guarantee is "would this event be Accepted against current `self.state`", not "this event will be Accepted in the post-broadcast canonical state." Cross-peer convergence is preserved because all peers run the same canonical topo-sort. Acceptance tests MUST NOT assume the authored event ends up in `state` — they assert `event.wire_hash() ∈ dag.by_hash` and assert digest equality across peers; they do NOT assert the event was applied locally.
 9. **Topo-sort cycle**: structurally impossible (each event's `prev` strictly precedes it in seq; deps are content-hashes which by collision-resistance cannot back-reference). Asserted via `assert_eq!(out.len(), by_hash.len())`.
 
 ## 15. Explicit non-goals at B-1
@@ -822,14 +901,14 @@ pub enum PeerWarning {
 - Equivocation auto-resolution (warrant pattern)
 - Drift recovery
 - Wall-clock drift backstop
-- Per-app manifest `drift_interval` field (defaults baked; manifest field deferred)
+- (Manifest `[determinism.drift-detection]` `interval-events` field is honored by reading it at install — see §8.2)
 - iroh-blobs bundle fetch (B-4)
 
 ## 16. Acceptance evidence at B-1 ship
 
 - `crates/kernel/tests/convergence.rs` — 8 tests pass
 - `just ci` green; no warnings; spec-coverage matrix extended with §4.1, §4.2, §4.4.1, §4.6, §4.7, §4.8 refs
-- Existing 6 plan-A acceptance tests unchanged + green
+- Plan-A acceptance tests in `crates/kernel/tests/acceptance.rs` updated where the counter fixture's wire shape changes (§12.1.1): `kernel_instantiates_and_applies_increment` must be rewritten to construct a canonical `Event` envelope rather than passing hand-rolled increment-payload bytes (the over-importer, pre-check-rejector, infinite-loop, float-banned tests are unaffected because their fixtures do not consume canonical envelopes). All 6 acceptance tests remain green post-rewrite.
 - Property test in `crates/kernel/src/dag.rs` exercises topo-sort determinism
 
 ## 17. Rough schedule
