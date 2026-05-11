@@ -102,7 +102,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 EOF
 
 printf '%s\n' "$parsed_refs" \
-| sort -k1,1 -k2,2 \
+| LC_ALL=C sort -k1,1 -k2,2 \
 | awk -F'\t' '
     BEGIN { last="" }
     NF < 2 { next }

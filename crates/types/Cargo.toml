@@ -18,6 +18,12 @@ blake3.workspace = true
 hex.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# Used by tests/wire_freeze.rs to pin GossipMessage variant tags.
+# Dev-dep only — breaks the otherwise-circular path types -> network -> types
+# (cargo allows dev-dep cycles).
+myrhiza-network = { path = "../network" }
+
 [build-dependencies]
 # Aligned with wasmtime 36 line (transitively pulls wit-parser 0.236.x);
 # pinning here avoids a duplicate wit-parser in the lockfile.

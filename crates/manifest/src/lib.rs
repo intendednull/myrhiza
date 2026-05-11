@@ -28,3 +28,6 @@ pub use canonical::{
 
 pub mod signature;
 pub use signature::{SignatureError, verify_signature};
+
+pub mod topic;
+pub use topic::derive_topic_normalized;
