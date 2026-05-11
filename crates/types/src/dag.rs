@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AuthorPubkey, EventHash};
+use crate::{AuthorPubkey, EventHash, PeerPubkey};
 
 /// Genesis event payload (the bytes inside `Event::payload` when
 /// `event.seq == 1`).
@@ -145,5 +145,154 @@ mod tests_anchor {
         let bytes = canonical_bincode().serialize(&h).expect("encode");
         let decoded: AuthorHead = canonical_bincode().deserialize(&bytes).expect("decode");
         assert_eq!(h, decoded);
+    }
+}
+
+/// Drift-message wire shape per convergence.md §4.7 + plan-B-1 spec §8.1.
+///
+/// The `signature` field covers [`DriftSignedPayload`] canonical bytes
+/// (NOT the full `DriftMessage`); see spec §8.1.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DriftMessage {
+    /// "After this event" point being announced; informative
+    /// `event_hash` plus per-author max-seq tuples.
+    pub anchor: DriftAnchor,
+    /// Digest of the state-equivalence summary at `anchor`. Format
+    /// identified by [`Self::digest_format`].
+    pub digest: [u8; 32],
+    /// Format identifier for [`Self::digest`] (e.g. `"bincode-1.3"`).
+    /// Versioned to allow future digest-scheme migration.
+    pub digest_format: String,
+    /// Ed25519 pubkey of the peer that emitted this drift message.
+    /// Excluded from the signed payload — the signer asserts the
+    /// (`anchor`, `digest`, `digest_format`) triple, not the emitter
+    /// identity.
+    pub signed_by_peer: PeerPubkey,
+    /// Ed25519 signature over the canonical bincode encoding of
+    /// [`DriftSignedPayload`] constructed from this message's first
+    /// three fields. See spec §8.1.
+    #[serde(with = "crate::serde_helpers::serde_signature_64")]
+    pub signature: [u8; 64],
+}
+
+/// Exact byte target signed by [`DriftMessage::signature`].
+///
+/// Field order matches the first three fields of [`DriftMessage`] —
+/// emit-side and verify-side MUST construct this struct identically
+/// to produce the same canonical-bincode bytes (spec §8.1 normative).
+/// `signed_by_peer` and `signature` are excluded from the signed
+/// payload.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DriftSignedPayload {
+    /// Mirrors [`DriftMessage::anchor`].
+    pub anchor: DriftAnchor,
+    /// Mirrors [`DriftMessage::digest`].
+    pub digest: [u8; 32],
+    /// Mirrors [`DriftMessage::digest_format`].
+    pub digest_format: String,
+}
+
+/// `HeadsSummary` per convergence.md §4.2.
+///
+/// Periodic per-author DAG-tip snapshot used by peers to detect when
+/// they are behind on some authors and need to issue [`HeadsRequest`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeadsSummary {
+    /// Per-author DAG-tip entries. Order is significant for canonical
+    /// encoding; consult §7.1 for the sorting rule.
+    pub authors: Vec<AuthorHead>,
+    /// Version of the kernel's fuel table at the time of emission.
+    /// Recipients with a different version know their pre-check
+    /// metering may diverge from the authority verdict.
+    pub kernel_fuel_table_version: u32,
+}
+
+/// Range request issued by a peer that detected it is behind on some
+/// authors via a [`HeadsSummary`] diff.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EventRequest {
+    /// Author whose event-range the requester wants to receive.
+    pub author: AuthorPubkey,
+    /// Inclusive lower bound on the requested sequence range.
+    pub from_seq: u64,
+    /// Inclusive upper bound on the requested sequence range.
+    pub to_seq: u64,
+}
+
+/// Bundle of [`EventRequest`] values sent in a single wire message.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeadsRequest {
+    /// Range requests included in this bundle. Recipients SHOULD treat
+    /// the bundle as a unit but MAY service entries independently.
+    pub requests: Vec<EventRequest>,
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests_drift_heads {
+    use super::*;
+    use crate::canonical_bincode;
+    use bincode::Options;
+
+    #[test]
+    fn drift_signed_payload_round_trips() {
+        let p = DriftSignedPayload {
+            anchor: DriftAnchor {
+                event_hash: EventHash::blake3(b"e"),
+                author_seq_vec: vec![],
+            },
+            digest: [0xAA; 32],
+            digest_format: "bincode-1.3".into(),
+        };
+        let bytes = canonical_bincode().serialize(&p).expect("encode");
+        let decoded: DriftSignedPayload = canonical_bincode().deserialize(&bytes).expect("decode");
+        assert_eq!(decoded.digest, p.digest);
+        assert_eq!(decoded.digest_format, p.digest_format);
+    }
+
+    #[test]
+    fn drift_message_round_trips() {
+        let m = DriftMessage {
+            anchor: DriftAnchor {
+                event_hash: EventHash::ZERO,
+                author_seq_vec: vec![],
+            },
+            digest: [0x33; 32],
+            digest_format: "bincode-1.3".into(),
+            signed_by_peer: PeerPubkey::from_bytes([0x44; 32]),
+            signature: [0x55; 64],
+        };
+        let bytes = canonical_bincode().serialize(&m).expect("encode");
+        let _decoded: DriftMessage = canonical_bincode().deserialize(&bytes).expect("decode");
+    }
+
+    #[test]
+    fn heads_summary_round_trips() {
+        let h = HeadsSummary {
+            authors: vec![AuthorHead {
+                author: AuthorPubkey::from_bytes([1; 32]),
+                seq: 7,
+                hash: EventHash::ZERO,
+            }],
+            kernel_fuel_table_version: 1,
+        };
+        let bytes = canonical_bincode().serialize(&h).expect("encode");
+        let decoded: HeadsSummary = canonical_bincode().deserialize(&bytes).expect("decode");
+        assert_eq!(decoded.kernel_fuel_table_version, 1);
+        assert_eq!(decoded.authors.len(), 1);
+    }
+
+    #[test]
+    fn heads_request_round_trips() {
+        let r = HeadsRequest {
+            requests: vec![EventRequest {
+                author: AuthorPubkey::from_bytes([8; 32]),
+                from_seq: 1,
+                to_seq: 10,
+            }],
+        };
+        let bytes = canonical_bincode().serialize(&r).expect("encode");
+        let decoded: HeadsRequest = canonical_bincode().deserialize(&bytes).expect("decode");
+        assert_eq!(decoded.requests.len(), 1);
     }
 }
