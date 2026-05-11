@@ -103,10 +103,13 @@ async fn concurrent_multi_author_converges() {
         .await
         .expect("genesis");
 
-    // Wait deterministically for B to ingest genesis before B authors.
+    // Wait up to 5s for B to ingest genesis before B authors.
     // (B must see A's chain head before it can sign seq=2 events against
     // its own author key with the right prev; this test exercises concurrent
-    // authoring from a SHARED post-genesis state.)
+    // authoring from a SHARED post-genesis state.) `await_digest` is a
+    // timeout-bounded poll on the digest watch channel — under tokio's
+    // paused clock it advances when no other task is ready, but the
+    // recv side is still racing publish, hence the explicit deadline.
     let initial_state = 0_i64.to_be_bytes().to_vec();
     assert!(
         peer_b

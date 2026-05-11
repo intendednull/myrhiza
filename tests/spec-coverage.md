@@ -28,42 +28,42 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:81
 
 ## convergence.md §4.2
-- crates/kernel/tests/convergence.rs:154
-- crates/kernel/tests/convergence.rs:384
+- crates/kernel/tests/convergence.rs:157
+- crates/kernel/tests/convergence.rs:387
 
 ## convergence.md §4.2 (deterministic variant per review M-9)
-- crates/kernel/tests/convergence.rs:418
+- crates/kernel/tests/convergence.rs:421
 
 ## convergence.md §4.2 — when an inbound event reveals the receiver is
-- crates/kernel/tests/convergence.rs:506
+- crates/kernel/tests/convergence.rs:509
 
 ## convergence.md §4.3
 - crates/kernel/src/digest.rs:70
 
 ## convergence.md §4.3 (deterministic topo-sort under arbitrary
-- crates/kernel/src/dag.rs:843
+- crates/kernel/src/dag.rs:844
 
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:276
 - crates/kernel/tests/acceptance.rs:71
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
-- crates/kernel/tests/convergence.rs:852
+- crates/kernel/tests/convergence.rs:855
 
 ## convergence.md §4.4.1
-- crates/kernel/tests/convergence.rs:337
+- crates/kernel/tests/convergence.rs:340
 
 ## convergence.md §4.4.1 + review-finding M-8
-- crates/kernel/tests/convergence.rs:665
+- crates/kernel/tests/convergence.rs:668
 
 ## convergence.md §4.6
-- crates/kernel/tests/convergence.rs:200
+- crates/kernel/tests/convergence.rs:203
 
 ## convergence.md §4.7
-- crates/kernel/tests/convergence.rs:277
+- crates/kernel/tests/convergence.rs:280
 
 ## convergence.md §4.8
-- crates/kernel/tests/convergence.rs:384
+- crates/kernel/tests/convergence.rs:387
 
 ## determinism.md §5.1
 - crates/kernel/src/state_apply.rs:213
@@ -100,7 +100,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:81
 
 ## mvp.md §15.1 #4
-- crates/kernel/tests/convergence.rs:200
+- crates/kernel/tests/convergence.rs:203
 
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:188
@@ -133,4 +133,4 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:276
 
 ## verification.md §22.8 — `PeerHandle::await_digest` must NOT
-- crates/kernel/tests/convergence.rs:811
+- crates/kernel/tests/convergence.rs:814

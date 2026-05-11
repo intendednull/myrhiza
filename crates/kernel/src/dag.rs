@@ -576,13 +576,15 @@ mod tests_genesis {
     use myrhiza_types::{Hlc, canonical_bincode};
     use std::collections::BTreeSet;
 
-    pub(super) fn build_genesis(
-        kp: &AuthorKeypair,
-        bundle_hash: BundleHash,
-        seed: [u8; 32],
-        topic_name: &str,
-        app_payload: Vec<u8>,
-    ) -> Event {
+    /// Build a self-signed Genesis event for tests.
+    ///
+    /// Parameters intentionally do not include `bundle_hash` or
+    /// `topic_name`: they are derived inputs to `Topic::derive` at the
+    /// caller, not fields of the event itself, and the helper does not
+    /// need them to produce a well-formed Genesis. Callers that want to
+    /// assert topic-derivation should do so directly via
+    /// `Topic::derive`.
+    pub(super) fn build_genesis(kp: &AuthorKeypair, seed: [u8; 32], app_payload: Vec<u8>) -> Event {
         let payload = GenesisV1 {
             seed,
             founder_pubkey: kp.author,
@@ -603,7 +605,6 @@ mod tests_genesis {
         };
         let body_hash = body.hash_signed_body();
         let sig = kp.sign_body_hash(body_hash);
-        let _ = (bundle_hash, topic_name);
         Event {
             signature: sig,
             ..body
@@ -617,7 +618,7 @@ mod tests_genesis {
         let topic = Topic::derive(&bundle_hash, &seed, "main");
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
-        let ev = build_genesis(&kp, bundle_hash, seed, "main", vec![0x00; 8]);
+        let ev = build_genesis(&kp, seed, vec![0x00; 8]);
 
         let r = dag.insert(ev).expect("insert");
         assert!(matches!(r, Inserted::NewlyApplied { topo_index: 0, .. }));
@@ -632,7 +633,7 @@ mod tests_genesis {
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
         // Build genesis with wrong seed (so derived topic differs).
-        let ev = build_genesis(&kp, bundle_hash, other_seed, "main", vec![]);
+        let ev = build_genesis(&kp, other_seed, vec![]);
         let r = dag.insert(ev).expect_err("must reject");
         assert!(matches!(r, DagError::InvalidTopic { .. }));
     }
@@ -644,7 +645,7 @@ mod tests_genesis {
         let topic = Topic::derive(&bundle_hash, &seed, "main");
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
-        let mut ev = build_genesis(&kp, bundle_hash, seed, "main", vec![]);
+        let mut ev = build_genesis(&kp, seed, vec![]);
         ev.signature[0] ^= 0xFF; // tamper
         let r = dag.insert(ev).expect_err("must reject");
         assert!(matches!(r, DagError::InvalidSignature));
@@ -657,7 +658,7 @@ mod tests_genesis {
         let topic = Topic::derive(&bundle_hash, &seed, "main");
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
-        let ev = build_genesis(&kp, bundle_hash, seed, "main", vec![]);
+        let ev = build_genesis(&kp, seed, vec![]);
         dag.insert(ev.clone()).expect("first insert");
         let r = dag.insert(ev).expect("second insert");
         assert!(matches!(r, Inserted::AlreadyKnown));
@@ -700,7 +701,7 @@ mod tests_chain {
         let topic = Topic::derive(&bundle_hash, &seed, "main");
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
-        let g = build_genesis(&kp, bundle_hash, seed, "main", vec![]);
+        let g = build_genesis(&kp, seed, vec![]);
         dag.insert(g.clone()).expect("genesis");
         (dag, kp, g)
     }
@@ -738,8 +739,8 @@ mod tests_chain {
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
 
-        let g1 = build_genesis(&kp, bundle_hash, seed, "main", vec![0xAA]);
-        let g2 = build_genesis(&kp, bundle_hash, seed, "main", vec![0xBB]); // different payload
+        let g1 = build_genesis(&kp, seed, vec![0xAA]);
+        let g2 = build_genesis(&kp, seed, vec![0xBB]); // different payload
         assert_ne!(g1.wire_hash(), g2.wire_hash());
 
         dag.insert(g1.clone()).expect("first genesis");
@@ -785,7 +786,7 @@ mod tests_topo {
         let mut dag = EventDag::new(topic, bundle_hash, "main".into());
         let kp = AuthorKeypair::deterministic(1);
 
-        let g = super::tests_genesis::build_genesis(&kp, bundle_hash, seed, "main", vec![]);
+        let g = super::tests_genesis::build_genesis(&kp, seed, vec![]);
         dag.insert(g.clone()).expect("genesis");
         let mut hashes = vec![g.wire_hash()];
 
@@ -869,7 +870,7 @@ mod tests_topo {
 
         // Founder authors the genesis + 3 follow-on events (4 total).
         let founder = AuthorKeypair::deterministic(0xF0);
-        let genesis = build_genesis(&founder, bundle_hash, seed, topic_name, vec![]);
+        let genesis = build_genesis(&founder, seed, vec![]);
 
         // Build the full event list deterministically.
         //   - founder chain: genesis (seq=1) + seq=2..=4 = 4 events

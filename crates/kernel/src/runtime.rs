@@ -2,14 +2,14 @@
 //!
 //! See `docs/specs/2026-05-10-plan-b-1-dag-memnet-design.md` §11.
 //!
-//! ## Scope of this file (Task 16)
-//!
-//! Types only — [`RuntimeCfg`], [`RuntimeError`], [`EquivocationFlag`],
-//! [`PeerWarning`], [`AuthorCommand`], [`RuntimeHandle`]. The `Runtime`
-//! struct, its `start` constructor, the `run` loop, and message
-//! handlers land in Tasks 17-19. The import list here is intentionally
-//! limited to symbols referenced by these type definitions; later
-//! tasks extend it as the impl lands.
+//! This module owns:
+//! - configuration ([`RuntimeCfg`]) and error / observation types
+//!   ([`RuntimeError`], [`EquivocationFlag`], [`PeerWarning`]);
+//! - the per-topic [`Runtime`] task that ingests events from the
+//!   network + author commands, runs the DAG / state-apply pipeline,
+//!   and emits drift messages;
+//! - the public-facing [`RuntimeHandle`] used by hosts and tests to
+//!   author events, inspect observation logs, and watch state digests.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -795,6 +795,11 @@ impl Runtime {
     /// Also pushes our events for authors the remote doesn't know
     /// about, and surfaces a `KernelFuelTableMismatch` warning when
     /// fuel-table versions disagree (§11.7, non-fatal).
+    // TODO(B-2): split into behind/equal/ahead/local sub-fns. The four
+    // diff cases each have their own state-mutation pattern and the
+    // single-function shape obscures it; the `clippy::too_many_lines`
+    // allow below is a placeholder until that refactor lands
+    // (carry-over from review-finding N-12).
     #[allow(clippy::too_many_lines)]
     async fn handle_heads_summary(&mut self, remote: HeadsSummary) -> Result<(), RuntimeError> {
         if remote.kernel_fuel_table_version != self.cfg.kernel_fuel_table_version {
