@@ -15,12 +15,15 @@ myrhiza-types = { path = "../types" }
 myrhiza-manifest = { path = "../manifest" }
 myrhiza-backend = { path = "../backend" }
 myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
+myrhiza-network = { path = "../network" }
 serde.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
 hex.workspace = true
 ed25519-dalek.workspace = true
 rand_core = "0.6"
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+async-trait.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
