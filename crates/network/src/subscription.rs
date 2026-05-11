@@ -34,3 +34,19 @@ impl Subscription for MemSubscription {
         }
     }
 }
+
+/// Blanket impl so a `Box<dyn Subscription + Send>` satisfies
+/// [`Subscription`] without re-boxing per `recv` call.
+///
+/// This is the receive-side complement to the `Network::Subscription`
+/// erasure pattern used by callers that hold a `dyn Network` with a
+/// uniform concrete subscription type: they box the inner impl's
+/// `Subscription` as `Box<dyn Subscription + Send>`, and rely on this
+/// blanket impl to forward `recv` through the box. Lives here rather
+/// than in a downstream crate because of the orphan rule.
+#[async_trait::async_trait]
+impl<S: Subscription + Send + ?Sized> Subscription for Box<S> {
+    async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError> {
+        (**self).recv().await
+    }
+}
