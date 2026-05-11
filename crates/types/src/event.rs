@@ -8,7 +8,7 @@
 //!
 //! Rejecting events whose `signature` bytes are not 64 bytes is
 //! enforced at decode time by bincode's fixint length prefix via the
-//! 64-byte `try_into` in [`serde_signature::deserialize`].
+//! 64-byte `try_into` in [`crate::serde_helpers::serde_signature_64::deserialize`].
 
 use std::collections::BTreeSet;
 
@@ -38,23 +38,8 @@ pub struct Event {
     #[serde(with = "serde_bytes")]
     pub payload: Vec<u8>,
     /// Ed25519 signature over BLAKE3 of the signed body.
-    #[serde(with = "serde_signature")]
+    #[serde(with = "crate::serde_helpers::serde_signature_64")]
     pub signature: [u8; 64],
-}
-
-mod serde_signature {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    pub fn serialize<S: Serializer>(b: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
-        serde_bytes::Bytes::new(b).serialize(s)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
-        let v: serde_bytes::ByteBuf = serde_bytes::ByteBuf::deserialize(d)?;
-        let arr: [u8; 64] = v
-            .as_ref()
-            .try_into()
-            .map_err(|_| serde::de::Error::invalid_length(v.len(), &"64 bytes"))?;
-        Ok(arr)
-    }
 }
 
 /// Mirror of [`Event`] minus `signature`. Used to derive the BLAKE3

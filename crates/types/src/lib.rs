@@ -6,6 +6,8 @@
 pub mod encoding;
 pub use encoding::{CanonicalOptions, EncodingError, canonical_bincode, decode_canonical};
 
+pub mod serde_helpers;
+
 pub mod hash;
 pub use hash::{BundleHash, EventHash};
 
