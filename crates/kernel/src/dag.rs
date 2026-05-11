@@ -840,7 +840,7 @@ mod tests_topo {
         assert_eq!(heads[0].hash, *hashes.last().expect("non-empty"));
     }
 
-    /// Covers: plan-B-1 spec §4.3 (deterministic topo-sort under arbitrary
+    /// Covers: convergence.md §4.3 (deterministic topo-sort under arbitrary
     /// insertion order). Review I-5.
     ///
     /// Build a fixed multi-author DAG (founder + 4 non-founders, each a

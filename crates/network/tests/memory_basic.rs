@@ -80,7 +80,7 @@ async fn mem_network_lag_surfaces_as_sub_error() {
     );
 }
 
-/// Covers: spec §6.3 — `MemBus::inject_lag(topic)` test affordance for
+/// Covers: networking.md §11.3 — `MemBus::inject_lag(topic)` test affordance for
 /// deterministic lag-recovery testing (review-finding M-3).
 ///
 /// Without this affordance, the existing

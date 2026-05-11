@@ -30,17 +30,31 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.2
 - crates/kernel/tests/convergence.rs:154
 - crates/kernel/tests/convergence.rs:384
+
+## convergence.md §4.2 (deterministic variant per review M-9)
 - crates/kernel/tests/convergence.rs:418
+
+## convergence.md §4.2 — when an inbound event reveals the receiver is
+- crates/kernel/tests/convergence.rs:506
 
 ## convergence.md §4.3
 - crates/kernel/src/digest.rs:70
+
+## convergence.md §4.3 (deterministic topo-sort under arbitrary
+- crates/kernel/src/dag.rs:843
 
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:276
 - crates/kernel/tests/acceptance.rs:71
 
+## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
+- crates/kernel/tests/convergence.rs:852
+
 ## convergence.md §4.4.1
 - crates/kernel/tests/convergence.rs:337
+
+## convergence.md §4.4.1 + review-finding M-8
+- crates/kernel/tests/convergence.rs:665
 
 ## convergence.md §4.6
 - crates/kernel/tests/convergence.rs:200
@@ -97,6 +111,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:48
 - crates/kernel/tests/acceptance.rs:71
 
+## networking.md §11.3 — `MemBus::inject_lag(topic)` test affordance for
+- crates/network/tests/memory_basic.rs:83
+
 ## verification.md §22.1
 - crates/kernel/tests/acceptance.rs:48
 
@@ -114,3 +131,6 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## verification.md §22.5
 - crates/kernel/tests/acceptance.rs:276
+
+## verification.md §22.8 — `PeerHandle::await_digest` must NOT
+- crates/kernel/tests/convergence.rs:811

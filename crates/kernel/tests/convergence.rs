@@ -503,7 +503,7 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
     );
 }
 
-/// Covers: spec §7.2 — when an inbound event reveals the receiver is
+/// Covers: convergence.md §4.2 — when an inbound event reveals the receiver is
 /// behind on the event's author chain, the recovery action MUST be a
 /// targeted `HeadsRequest` for that author's missing range, NOT a
 /// generic `HeadsSummary` nudge (review-finding I-1).
@@ -808,7 +808,7 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
         .await;
 }
 
-/// Covers: review-finding Q-3 — `PeerHandle::await_digest` must NOT
+/// Covers: verification.md §22.8 — `PeerHandle::await_digest` must NOT
 /// return `true` solely because the digest already equals the expected
 /// value at call time. The function should always wait for at least one
 /// fresh `changed()` notification before performing the equality check;
@@ -849,7 +849,7 @@ async fn await_digest_does_not_return_on_stale_already_equal_state() {
     );
 }
 
-/// Covers: review-finding M-4 + spec §4.4 / §14 edge-case 8.
+/// Covers: convergence.md §4.4 — `dropped_at_apply` (review-finding M-4).
 ///
 /// Events rejected by `state-apply` during `replay_full` must be
 /// recorded in `RuntimeHandle::dropped_at_apply`, not silently dropped.
