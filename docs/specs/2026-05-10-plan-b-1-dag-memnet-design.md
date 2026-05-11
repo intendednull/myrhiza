@@ -109,6 +109,12 @@ pub struct EventDag {
     parents_to_children: BTreeMap<EventHash, BTreeSet<EventHash>>,
     topic: Topic,
     app_bundle_hash: BundleHash,
+    /// Set on the first successful Genesis insert (step 6 of §4.2 with
+    /// `event.seq == 1` having passed step 3). Used by step 3 to
+    /// distinguish "topic Genesis" (founder's seq=1) from "author-chain
+    /// start" (non-founder's seq=1) — see §4.2 step 3. `None` means no
+    /// Genesis has been observed yet.
+    genesis_author: Option<AuthorPubkey>,
 }
 
 pub struct AuthorChain {
@@ -202,7 +208,26 @@ Validation order (fail-fast):
 
    **Normative**: the Ed25519 signature covers the raw 32 bytes of `body_hash`, NOT the canonical-encoded `SignedBody` pre-image. Signing path MUST be `sk.sign(body_hash.as_bytes())`; verifying path MUST pass the same 32 bytes as `message` to `verify_strict`. The author and verifier must agree on this exact byte string or every event fails verification.
 2. **Duplicate**: `event.wire_hash() ∈ by_hash` → `Ok(AlreadyKnown)`.
-3. **Genesis case** (`event.seq == 1`):
+3. **Genesis case** — applicability rule (normative):
+
+   Per master spec §4 ("Event chain: monotonic per-author starting at 1"),
+   EVERY author's per-author chain starts at `seq == 1`. The "topic
+   Genesis" is the founder's seq=1; non-founders also publish a seq=1
+   event as the head of their own per-author chain, but those events
+   are NOT the topic Genesis and MUST NOT be validated as such.
+
+   Step 3 applies ONLY when both of the following hold:
+   - `event.seq == 1`, AND
+   - `self.genesis_author.is_none() || self.genesis_author == Some(event.author)`.
+
+   If `self.genesis_author == Some(other)` and `event.author != other`,
+   skip step 3 entirely and fall through to step 4 (chain integrity).
+   Non-founder seq=1 events therefore do NOT undergo Genesis validation:
+   their payload is NOT decoded as `GenesisV1`, `deps` MAY be non-empty
+   (causal joins across authors are permitted at the head of an author
+   chain), and state-apply receives the non-Genesis payload verbatim.
+
+   When step 3 applies, the following bullets are normative:
    - `event.prev == EventHash::ZERO` else `DagError::InvalidGenesis("prev != ZERO")`.
    - `event.deps.is_empty()` else `DagError::InvalidGenesis("deps != ∅")`.
    - Decode `event.payload` as the **B-1 Genesis envelope** (versioned wrapper, exact bincode shape — no trailing-bytes-ignored decode):
@@ -219,13 +244,35 @@ Validation order (fail-fast):
    - `event.author == founder_pubkey` (the author of the Genesis is the founder).
 
    The kernel hands the FULL canonical `Event` envelope (with payload = canonical-encoded `GenesisV1`) to state-apply. State-apply decodes `GenesisV1`, reads `app_payload`, and initializes its state from those bytes. App authors writing custom genesis logic embed their app-specific payload INSIDE `app_payload` — never as a sibling field, never as trailing bytes. Future kernel majors may introduce `GenesisV2` with a tag-discriminator byte for migration; v1 commits to `GenesisV1` only.
+
+   **On successful insert (step 6)**: if step 3 was applied AND passed
+   (i.e. this event is the topic Genesis), set
+   `self.genesis_author = Some(event.author)`. The field is write-once:
+   once set, subsequent founder seq=1 events fall under step 4's
+   direct-receive equivocation check (the only way to reach step 6 again
+   with the same author at seq=1 is a duplicate, which step 2 catches,
+   or an equivocation, which step 4 catches).
+
+   **Pre-Genesis ordering**: if `self.genesis_author.is_none()` and a
+   non-founder's seq=1 event arrives first, it enters step 3 (the
+   applicability gate's first disjunct is true), fails Genesis
+   validation (the payload is not a canonical `GenesisV1`, or the author
+   does not match the decoded `founder_pubkey`), and is rejected. This
+   is acceptable: peers MUST see Genesis before non-founder events.
+   Production recovers via the `HeadsSummary` backfill path (§7) —
+   non-founder events arriving out of order against a peer that already
+   has Genesis enter the `PendingBuffer` (§5) on missing deps, then
+   re-drain. For tests, fixtures explicitly await Genesis ingestion
+   before authoring from non-founders.
 4. **Chain integrity** (genesis and non-genesis):
    - Look up `chain = by_author.entry(event.author).or_default()`.
    - **Direct-receive equivocation check**: if `chain.seq_to_hash.get(&event.seq).is_some()` (we already have a different event from this author at this seq — the duplicate-wire-hash check at step 2 would have caught an identical event, so a hash exists at this seq AND it's not equal to `event.wire_hash()`), this is equivocation. Push `EquivocationFlag { author: event.author, seq: event.seq, local_hash: chain.seq_to_hash[event.seq], remote_hash: event.wire_hash(), peer: None }` to the caller's `equivocation_log` via the returned `DagError::Equivocation { ... }` variant. **This catches direct-receive equivocation at any seq, including the seq=1 (genesis) case** where step 3's validation has already passed but a different genesis with the same `seq=1` was already inserted. Without this check, second-genesis would silently fail step 4's `seq == head_seq + 1` (expected 2, got 1) as `InvalidChain` and never log as equivocation.
    - **Chain advance**: `event.seq == chain.head_seq + 1` else `DagError::InvalidChain { ... }`.
    - `event.prev == chain.head_hash` else `DagError::InvalidChain { ... }`.
 
-   For genesis (seq=1): step 3 validates payload + topic; step 4's equivocation check catches a second genesis from the same author against an existing genesis; the chain-advance condition (`seq == 1 == head_seq + 1` requires `head_seq == 0`) implicitly enforces "no prior event from this author."
+   For the topic Genesis (founder's seq=1, step 3 applied): step 3 validates payload + topic; step 4's equivocation check catches a second genesis from the same author against an existing genesis; the chain-advance condition (`seq == 1 == head_seq + 1` requires `head_seq == 0`) implicitly enforces "no prior event from this author."
+
+   For non-founder seq=1 (step 3 skipped via the applicability rule): step 4 still enforces chain integrity — `expected_seq = chain.head_seq + 1 = 1` and `expected_prev = chain.head_hash = EventHash::ZERO` for an empty per-author chain. The author's `event.prev` MUST therefore be `EventHash::ZERO`; that constraint is enforced structurally by step 4 (not by a Genesis bullet) so non-founder chain heads are validated identically to founder Genesis at the chain-shape level. `event.deps` MAY be non-empty for non-founder seq=1 (cross-author causal joins are permitted at chain heads — step 5 verifies their presence).
 5. **Deps presence**: for each `d ∈ event.deps`, `d ∈ by_hash`. Any missing → `Ok(Inserted::Pending(missing_set))`. Caller stashes into `PendingBuffer`.
 6. **Commit**: insert into all three maps; advance `AuthorChain`; return `NewlyApplied { topo_index, hash }`. `topo_index` is the monotonic count of events inserted to this DAG instance (used by drift-emit modulo trigger).
 
@@ -954,13 +1001,24 @@ flags this: plan-B's event-ingestion path MUST pass the FULL canonical
 counter fixture's `apply` export must be rewritten in B-1 to:
 
 1. Decode the incoming event slice via canonical bincode 1.3.x as `Event`.
-2. Detect Genesis: if `event.seq == 1 && event.prev == EventHash::ZERO`,
+2. Detect Genesis: if `event.seq == 1 && prior_state.is_empty()` —
+   i.e., this is the founder's seq=1 against a never-applied state —
    decode `event.payload` via `decode_canonical::<GenesisV1>` (the
    strict decoder defined in §4.2 step 3); the fixture uses `app_payload`
    as the initial state bytes (canonical 8-byte big-endian `0_i64` for
    the counter). Return `Accept` with `new_state = app_payload`.
-3. For non-Genesis: decode payload as big-endian i64 increment; add
-   to current state's i64; return updated state.
+
+   **Why `prior_state.is_empty()` and not `event.seq == 1` alone**: per
+   §4.2 step 3 applicability rule, non-founder authors also publish
+   seq=1 events (the head of their own per-author chain) AFTER Genesis
+   has been applied. For those events `prior_state` is non-empty (it is
+   the post-Genesis 8-byte i64 counter), and the payload is an i64
+   increment — not a `GenesisV1`. Using `seq == 1` alone as the
+   discriminator would attempt to decode an i64 increment as a
+   `GenesisV1` and reject the event.
+3. For non-Genesis (`seq >= 2`, OR `seq == 1 && !prior_state.is_empty()`):
+   decode payload as big-endian i64 increment; add to current state's
+   i64; return updated state.
 
 Same float-ban discipline applies (no `serde_core::de::Visitor::visit_f64`
 in dependency closure; the existing hand-rolled big-endian i64

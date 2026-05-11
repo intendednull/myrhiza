@@ -149,6 +149,12 @@ pub struct EventDag {
     /// verification. Callers MUST normalize before constructing.
     topic_name: String,
     next_topo_index: u64,
+    /// Set on the first successful Genesis insert (per spec §4.2 step 3
+    /// applicability rule). Used to distinguish "topic Genesis"
+    /// (founder's seq=1) from "author-chain start" (non-founder's
+    /// seq=1) — the latter skips Genesis validation and falls through
+    /// to step 4 (chain integrity). `None` means no Genesis observed yet.
+    genesis_author: Option<AuthorPubkey>,
 }
 
 impl EventDag {
@@ -168,6 +174,7 @@ impl EventDag {
             app_bundle_hash,
             topic_name,
             next_topo_index: 0,
+            genesis_author: None,
         }
     }
 
@@ -216,8 +223,19 @@ impl EventDag {
             return Ok(Inserted::AlreadyKnown);
         }
 
-        // Step 3: genesis-specific validation.
-        if event.seq == 1 {
+        // Step 3: Genesis-specific validation, gated by the
+        // applicability rule (spec §4.2 step 3): only run when the
+        // event could plausibly BE the topic Genesis — i.e., we have
+        // not yet recorded a Genesis (`genesis_author.is_none()`), or
+        // this event's author already IS the recorded Genesis author
+        // (re-presented Genesis: step 2 catches the duplicate, step 4
+        // catches equivocation, but the validation itself still has to
+        // run for completeness). Non-founder seq=1 events fall through
+        // to step 4 — their per-author chain head is validated as a
+        // chain head, not as the topic Genesis.
+        let runs_genesis_validation =
+            event.seq == 1 && self.genesis_author.is_none_or(|a| a == event.author);
+        if runs_genesis_validation {
             if event.prev != EventHash::ZERO {
                 return Err(DagError::InvalidGenesis("prev != ZERO"));
             }
@@ -296,7 +314,17 @@ impl EventDag {
         chain.seq_to_hash.insert(event.seq, wire_hash);
         let topo_index = self.next_topo_index;
         self.next_topo_index += 1;
+        let event_author = event.author;
         self.by_hash.insert(wire_hash, event);
+
+        // Per §4.2 step 3 applicability rule: a successful insert of an
+        // event that ran (and passed) Genesis validation IS the topic
+        // Genesis. Record the author so subsequent non-founder seq=1
+        // events skip step 3. Write-once: a second founder seq=1 fails
+        // step 4's equivocation check before reaching here.
+        if runs_genesis_validation && self.genesis_author.is_none() {
+            self.genesis_author = Some(event_author);
+        }
 
         Ok(Inserted::NewlyApplied {
             topo_index,

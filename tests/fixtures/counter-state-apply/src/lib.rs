@@ -114,13 +114,19 @@ export!(Component);
 // hands us an envelope with non-empty deps we Reject — the fixture's
 // contract is "single-author linear counter".
 //
-// GenesisV1 payload layout (seq == 1):
+// GenesisV1 payload layout (founder's seq == 1 with empty prior_state):
 //   seed            : [u8; 32]      => 32 raw bytes (no length prefix in
 //                                       canonical bincode for fixed arrays)
 //   founder_pubkey  : AuthorPubkey, serde_bytes => 8 + 32 = 40 bytes
 //   app_payload     : Vec<u8> serde_bytes => 8-byte len + N bytes
 //
-// Non-genesis payload (seq > 1): an 8-byte BE i64 increment.
+// Non-genesis payload: an 8-byte BE i64 increment. This covers both
+// `seq >= 2` AND `seq == 1` for non-founder authors (per-author chains
+// start at seq=1; only the founder's seq=1 is the topic Genesis — see
+// plan-B-1 spec §4.2 step 3 applicability rule). The discriminator is
+// `prior_state.is_empty()`: only the founder's seq=1 sees empty prior
+// state, since the kernel applies events in topo order and Genesis is
+// the first event applied.
 //
 // State wire format:
 //   The initial state IS the Genesis `app_payload` verbatim — the
@@ -182,8 +188,12 @@ impl Guest for Component {
             return reject("payload extends past event bytes");
         };
 
-        if seq == 1 {
-            // Genesis: decode GenesisV1 and return app_payload as initial state.
+        if seq == 1 && prior_state.is_empty() {
+            // Topic Genesis (founder's seq=1 against never-applied state):
+            // decode GenesisV1 and return app_payload as initial state.
+            // Non-founder seq=1 events have non-empty prior_state (the
+            // post-Genesis counter) and fall through to the i64
+            // increment path — see plan-B-1 spec §12.1.1.
             if payload.len() < GENESIS_APP_PAYLOAD_LEN_OFFSET + 8 {
                 return reject("genesis payload shorter than fixed prefix");
             }
@@ -202,8 +212,10 @@ impl Guest for Component {
             return (Verdict::Accept, app_payload.to_vec());
         }
 
-        // Non-genesis: payload is 8-byte BE i64 increment, prior_state is
-        // 8-byte BE i64 counter. Sum and return.
+        // Non-genesis (either seq >= 2, OR seq == 1 from a non-founder
+        // author whose chain head is being applied against the existing
+        // post-Genesis state): payload is 8-byte BE i64 increment,
+        // prior_state is 8-byte BE i64 counter. Sum and return.
         if payload.len() != 8 {
             return reject("non-genesis payload must be 8 bytes");
         }
