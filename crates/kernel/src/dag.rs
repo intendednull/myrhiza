@@ -814,4 +814,161 @@ mod tests_topo {
         assert_eq!(heads[0].seq, 4);
         assert_eq!(heads[0].hash, *hashes.last().expect("non-empty"));
     }
+
+    /// Covers: plan-B-1 spec §4.3 (deterministic topo-sort under arbitrary
+    /// insertion order). Review I-5.
+    ///
+    /// Build a fixed multi-author DAG (founder + 4 non-founders, each a
+    /// 4-event chain = 21 events incl. genesis). Insert in a reference
+    /// order, capture the topo-sort. Then perform N=100 random shuffles
+    /// of the *tail* of the insertion order (genesis stays at index 0 —
+    /// no other event is insertable before it because every other event
+    /// transitively requires it). For each shuffle, insert into a fresh
+    /// DAG and assert byte-identical topo-sort output vs. the reference.
+    ///
+    /// A failure here means the per-event tie-break (lex byte-order on
+    /// `EventHash` via `BTreeSet::pop_first`) is no longer the sole
+    /// determinant of ordering — i.e., insertion order is leaking into
+    /// the output, which would break cross-peer convergence.
+    #[test]
+    fn topo_sort_is_invariant_under_insertion_order_shuffle() {
+        use super::tests_chain::build_next;
+        use super::tests_genesis::build_genesis;
+        use rand::SeedableRng;
+        use rand::seq::SliceRandom;
+
+        let bundle_hash = BundleHash::from_bytes([0xAA; 32]);
+        let seed = [0x11; 32];
+        let topic_name = "main";
+        let topic = Topic::derive(&bundle_hash, &seed, topic_name);
+
+        // Founder authors the genesis + 3 follow-on events (4 total).
+        let founder = AuthorKeypair::deterministic(0xF0);
+        let genesis = build_genesis(&founder, bundle_hash, seed, topic_name, vec![]);
+
+        // Build the full event list deterministically.
+        //   - founder chain: genesis (seq=1) + seq=2..=4 = 4 events
+        //   - 4 non-founder chains: seq=1..=4 each = 16 events
+        //   - extra founder event seq=5 (so founder also has 5 events)
+        //   total: 21
+        // Layout chosen to match plan-B-1 spec §4.3 ("5-author × 4-event
+        // chain + genesis = 21 events"): 5 authors total, founder's
+        // chain has 5 events including genesis, the other 4 have 4.
+        let mut all_events: Vec<Event> = vec![genesis.clone()];
+        let mut founder_prev = genesis.clone();
+        for _ in 0..4 {
+            let e = build_next(&founder, &founder_prev, vec![]);
+            all_events.push(e.clone());
+            founder_prev = e;
+        }
+        for seed_byte in [1u8, 2, 3, 4] {
+            let a = AuthorKeypair::deterministic(u64::from(seed_byte));
+            // Non-founder seq=1: prev = ZERO, deps = empty.
+            // DAG adds the implicit genesis edge at insert time.
+            let seq1 = build_non_founder_seq1(&a);
+            all_events.push(seq1.clone());
+            let mut prev = seq1;
+            for _ in 0..3 {
+                let e = build_next(&a, &prev, vec![]);
+                all_events.push(e.clone());
+                prev = e;
+            }
+        }
+        assert_eq!(
+            all_events.len(),
+            21,
+            "1 founder chain (5) + 4 non-founder chains (4 each) = 21 events"
+        );
+
+        // Reference: insert in declared order, record topo-sort.
+        let reference: Vec<EventHash> = {
+            let mut dag = EventDag::new(topic, bundle_hash, topic_name.into());
+            for e in &all_events {
+                let _ = dag.insert(e.clone()).expect("reference insert");
+            }
+            dag.topo_sort()
+        };
+        assert_eq!(
+            reference.len(),
+            all_events.len(),
+            "reference topo-sort must cover every inserted event"
+        );
+
+        // 100 shuffles of the tail (genesis stays at index 0 — without
+        // it, downstream events fail chain validation and never apply).
+        //
+        // For each shuffle, we mirror the runtime's pending-buffer
+        // discipline: events whose chain predecessor is not yet present
+        // are deferred to a re-try list. Pass over events, insert any
+        // that succeed (or are AlreadyKnown), defer the rest. Repeat
+        // until a pass makes no progress. Convergence is finite because
+        // each successful insert strictly reduces the deferred set.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xB1_5F_FE);
+        for trial in 0..100 {
+            let mut shuffled = all_events.clone();
+            shuffled[1..].shuffle(&mut rng);
+
+            let mut dag = EventDag::new(topic, bundle_hash, topic_name.into());
+            let mut deferred: Vec<Event> = shuffled;
+            loop {
+                let mut next_deferred = Vec::with_capacity(deferred.len());
+                let mut progressed = false;
+                for e in deferred.drain(..) {
+                    match dag.insert(e.clone()) {
+                        Ok(Inserted::NewlyApplied { .. }) => progressed = true,
+                        Ok(Inserted::AlreadyKnown) => {}
+                        // InvalidChain / Pending: retry next pass.
+                        _ => next_deferred.push(e),
+                    }
+                }
+                deferred = next_deferred;
+                if !progressed {
+                    break;
+                }
+            }
+            assert!(
+                deferred.is_empty(),
+                "trial {trial}: {} events failed to insert after convergence",
+                deferred.len(),
+            );
+
+            let actual = dag.topo_sort();
+            assert_eq!(
+                actual.len(),
+                reference.len(),
+                "trial {trial}: topo-sort length mismatch ({} != {})",
+                actual.len(),
+                reference.len(),
+            );
+            assert_eq!(
+                actual, reference,
+                "trial {trial}: topo-sort diverged from reference under shuffled insertion order"
+            );
+        }
+    }
+
+    /// Build a non-founder seq=1 event (prev=ZERO, deps=empty). The DAG
+    /// adds the implicit Genesis parent edge at insert time per
+    /// `EventDag::insert` step 6 — the event itself does not name it.
+    fn build_non_founder_seq1(kp: &AuthorKeypair) -> Event {
+        use myrhiza_types::Hlc;
+        let body = Event {
+            author: kp.author,
+            seq: 1,
+            prev: EventHash::ZERO,
+            deps: BTreeSet::new(),
+            hlc: Hlc {
+                wall_ms: 0,
+                logical: 0,
+            },
+            payload: vec![],
+            signature: [0; 64],
+        };
+        let body_hash = body.hash_signed_body();
+        let sig = kp.sign_body_hash(body_hash);
+        Event {
+            signature: sig,
+            ..body
+        }
+    }
 }
