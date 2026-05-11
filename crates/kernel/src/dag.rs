@@ -12,7 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use myrhiza_types::{
-    AuthorPubkey, BundleHash, Event, EventHash, GenesisV1, Topic, decode_canonical,
+    AuthorHead, AuthorPubkey, AuthorSeq, BundleHash, Event, EventHash, GenesisV1, Topic,
+    decode_canonical,
 };
 use thiserror::Error;
 
@@ -302,6 +303,164 @@ impl EventDag {
             hash: wire_hash,
         })
     }
+
+    /// Topo-sort the full DAG.
+    ///
+    /// Kahn's algorithm with a [`BTreeSet`] ready-set: ties between
+    /// events whose dependencies have all resolved are broken by
+    /// `EventHash` lex byte-order (per plan-B-1 spec §4.1, §4.3).
+    /// The result is canonical across peers given the same DAG
+    /// contents, which is what makes cross-peer convergence checkable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the DAG is corrupted (cycle / orphan in indegree map).
+    /// The structural invariant — per-author `prev` strictly points
+    /// earlier in seq, cross-author `deps` are content-hashes which by
+    /// collision resistance cannot back-reference — guarantees the
+    /// DAG is acyclic by construction. A `len` mismatch here therefore
+    /// signals memory corruption, not a recoverable input error.
+    /// Aborting via panic is the correct response: returning a partial
+    /// sort would silently violate convergence.
+    #[must_use]
+    pub fn topo_sort(&self) -> Vec<EventHash> {
+        let mut indegree = self.indegree.clone();
+        let mut ready: BTreeSet<EventHash> = indegree
+            .iter()
+            .filter(|(_, deg)| **deg == 0)
+            .map(|(h, _)| *h)
+            .collect();
+        let mut out = Vec::with_capacity(self.by_hash.len());
+        while let Some(next) = ready.pop_first() {
+            out.push(next);
+            if let Some(children) = self.parents_to_children.get(&next) {
+                for child in children {
+                    if let Some(deg) = indegree.get_mut(child) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            ready.insert(*child);
+                        }
+                    }
+                }
+            }
+        }
+        // CLAUDE.md "no panics in non-test code" — but a corrupted DAG
+        // is unrecoverable; halting via panic is the correct response.
+        // `manual_assert` is allowed because the explicit if/panic form
+        // is what the spec body prescribes and reads more clearly than
+        // `assert!(a == b, msg, ...)` for the structural-invariant case.
+        #[allow(clippy::panic, clippy::manual_assert)]
+        if out.len() != self.by_hash.len() {
+            panic!(
+                "DAG topo-sort produced {} events from {} total — DAG corrupted (cycle?)",
+                out.len(),
+                self.by_hash.len()
+            );
+        }
+        out
+    }
+
+    /// Topo-sort a SUBSET of events selected by `filter`.
+    ///
+    /// Used by anchor-bounded replay (plan-B-1 spec §8.4 step 3):
+    /// callers pick a slice of the DAG (e.g. events at or below a
+    /// `DriftAnchor`) and ask for that slice in canonical order.
+    ///
+    /// Implementation: a local `sub_indegree` map is built counting
+    /// only those parents that are themselves in the subset. The
+    /// children-decrement step uses `get_mut` (not `expect`) so that
+    /// children outside the subset are silently skipped — they are
+    /// not errors, they are just not part of this sort.
+    pub fn topo_sort_subset<F: Fn(&Event) -> bool>(&self, filter: F) -> Vec<EventHash> {
+        // Build local sub_indegree from in-subset parents only.
+        let in_subset: BTreeSet<EventHash> = self
+            .by_hash
+            .iter()
+            .filter(|(_, e)| filter(e))
+            .map(|(h, _)| *h)
+            .collect();
+
+        let mut sub_indegree: BTreeMap<EventHash, usize> = BTreeMap::new();
+        for hash in &in_subset {
+            let event = &self.by_hash[hash];
+            let mut count = 0usize;
+            if event.prev != EventHash::ZERO && in_subset.contains(&event.prev) {
+                count += 1;
+            }
+            for d in &event.deps {
+                if in_subset.contains(d) {
+                    count += 1;
+                }
+            }
+            sub_indegree.insert(*hash, count);
+        }
+
+        let mut ready: BTreeSet<EventHash> = sub_indegree
+            .iter()
+            .filter(|(_, deg)| **deg == 0)
+            .map(|(h, _)| *h)
+            .collect();
+        let mut out = Vec::with_capacity(in_subset.len());
+        while let Some(next) = ready.pop_first() {
+            out.push(next);
+            if let Some(children) = self.parents_to_children.get(&next) {
+                for child in children {
+                    // get_mut, NOT expect: children outside the subset
+                    // are not in sub_indegree and must be skipped, not
+                    // panicked on.
+                    if let Some(deg) = sub_indegree.get_mut(child) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            ready.insert(*child);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Build the canonical `Vec<AuthorSeq>` used in [`DriftAnchor`].
+    ///
+    /// Authors with no events yet (`head_seq == 0`) are filtered out:
+    /// a `DriftAnchor` only meaningfully constrains authors that have
+    /// actually published. The result is ordered by author pubkey
+    /// (lex byte-order, inherited from the `BTreeMap` backing
+    /// `by_author`).
+    ///
+    /// [`DriftAnchor`]: myrhiza_types::DriftAnchor
+    #[must_use]
+    pub fn author_seq_vec(&self) -> Vec<AuthorSeq> {
+        self.by_author
+            .iter()
+            .filter(|(_, c)| c.head_seq > 0)
+            .map(|(author, c)| AuthorSeq {
+                author: *author,
+                max_seq: c.head_seq,
+            })
+            .collect()
+    }
+
+    /// Build the `Vec<AuthorHead>` used in [`HeadsSummary`].
+    ///
+    /// Like [`Self::author_seq_vec`] but carries the head wire-hash as
+    /// well — used by gossip peers to detect head-divergence and
+    /// trigger event requests. Authors with no events are filtered
+    /// out.
+    ///
+    /// [`HeadsSummary`]: myrhiza_types::HeadsSummary
+    #[must_use]
+    pub fn author_heads(&self) -> Vec<AuthorHead> {
+        self.by_author
+            .iter()
+            .filter(|(_, c)| c.head_seq > 0)
+            .map(|(author, c)| AuthorHead {
+                author: *author,
+                seq: c.head_seq,
+                hash: c.head_hash,
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -506,5 +665,74 @@ mod tests_chain {
         dag.insert(e2a.clone()).expect("first");
         let r = dag.insert(e2b.clone()).expect_err("equivocation");
         assert!(matches!(r, DagError::Equivocation { seq: 2, .. }));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests_topo {
+    use super::*;
+    use crate::identity::AuthorKeypair;
+
+    fn build_dag_chain(n: usize) -> (EventDag, Vec<EventHash>) {
+        let bundle_hash = BundleHash::from_bytes([0xAA; 32]);
+        let seed = [0x11; 32];
+        let topic = Topic::derive(&bundle_hash, &seed, "main");
+        let mut dag = EventDag::new(topic, bundle_hash, "main".into());
+        let kp = AuthorKeypair::deterministic(1);
+
+        let g = super::tests_genesis::build_genesis(&kp, bundle_hash, seed, "main", vec![]);
+        dag.insert(g.clone()).expect("genesis");
+        let mut hashes = vec![g.wire_hash()];
+
+        let mut prev = g;
+        for _ in 1..n {
+            let e = super::tests_chain::build_next(&kp, &prev, vec![]);
+            hashes.push(e.wire_hash());
+            dag.insert(e.clone()).expect("insert");
+            prev = e;
+        }
+        (dag, hashes)
+    }
+
+    #[test]
+    fn topo_sort_linear_chain_is_in_insertion_order() {
+        let (dag, hashes) = build_dag_chain(5);
+        let sorted = dag.topo_sort();
+        assert_eq!(sorted, hashes, "linear chain topo-sort == insertion order");
+    }
+
+    #[test]
+    fn topo_sort_subset_excludes_filtered_events() {
+        let (dag, hashes) = build_dag_chain(5);
+        // Subset: first 3 events only.
+        let allowed: BTreeSet<_> = hashes.iter().take(3).copied().collect();
+        let sorted = dag.topo_sort_subset(|e| allowed.contains(&e.wire_hash()));
+        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted, hashes[..3]);
+    }
+
+    #[test]
+    fn topo_sort_subset_empty_filter_returns_empty() {
+        let (dag, _) = build_dag_chain(3);
+        let sorted = dag.topo_sort_subset(|_| false);
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn author_seq_vec_matches_chain_heads() {
+        let (dag, _) = build_dag_chain(4);
+        let asv = dag.author_seq_vec();
+        assert_eq!(asv.len(), 1);
+        assert_eq!(asv[0].max_seq, 4);
+    }
+
+    #[test]
+    fn author_heads_matches_chain_heads_with_hash() {
+        let (dag, hashes) = build_dag_chain(4);
+        let heads = dag.author_heads();
+        assert_eq!(heads.len(), 1);
+        assert_eq!(heads[0].seq, 4);
+        assert_eq!(heads[0].hash, *hashes.last().expect("non-empty"));
     }
 }
