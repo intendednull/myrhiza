@@ -575,8 +575,8 @@ impl Runtime {
                 self.maybe_emit_drift(last_emit_index, last_emit_hash).await;
             }
             Ok(Inserted::Pending(missing)) => {
-                self.pending.insert(event.clone(), missing.clone());
-                self.request_missing_authors(&missing).await;
+                self.pending.insert(event.clone(), missing);
+                self.request_missing_for(&event).await;
             }
             Err(DagError::Equivocation {
                 author,
@@ -596,22 +596,92 @@ impl Runtime {
                         peer: None,
                     });
             }
+            // Same-author chain skip — we received an event whose seq is
+            // ahead of our known head for that author. The event itself
+            // is a byzantine-or-out-of-order signal; either way, the
+            // recovery action is the same as the missing-deps path:
+            // request the author's chain gap (spec §7.2). Without this,
+            // a peer that joins mid-stream and observes only the tail
+            // would never request the missing prefix.
+            Err(DagError::InvalidChain {
+                author,
+                expected_seq,
+                got_seq,
+                ..
+            }) if got_seq > expected_seq => {
+                self.request_author_chain_gap(author, expected_seq, got_seq.saturating_sub(1))
+                    .await;
+            }
             // AlreadyKnown: no-op.
-            // Other DagErrors (sig / genesis / chain): drop silently —
-            // byzantine input, no convergence impact.
+            // Other DagErrors (sig / genesis / equivocation w/ same seq,
+            // or InvalidChain with seq <= expected which is past-only):
+            // drop silently — byzantine or duplicate input, no
+            // convergence impact.
             Ok(Inserted::AlreadyKnown) | Err(_) => {}
         }
         Ok(())
     }
 
-    /// Request missing causal dependencies by broadcasting a
-    /// `HeadsSummary` — the peer holding the missing events will see
-    /// they are ahead of us on some author and push the gap. We don't
-    /// know which authors own which missing hashes, so we use the
-    /// heads-summary nudge rather than a targeted `HeadsRequest`.
-    async fn request_missing_authors(&mut self, missing: &BTreeSet<EventHash>) {
-        let _ = self.publish_heads_summary().await;
-        let _ = missing;
+    /// Recovery handler for [`Inserted::Pending`] (event well-formed but
+    /// missing one or more declared deps).
+    ///
+    /// Per spec §7.2 (review-finding I-1): publish a targeted
+    /// [`HeadsRequest`] for the *event's author* when we are behind on
+    /// that author's chain (i.e., the missing deps are likely on the
+    /// same author's history). Otherwise — the cross-author case where
+    /// the missing deps belong to a different author whose chain we
+    /// can't identify from a bare hash set — fall back to a
+    /// [`HeadsSummary`] nudge so peers can diff their tips against ours
+    /// and push what we're behind on.
+    ///
+    /// Design A (per `docs/plans/2026-05-11-plan-b-1-fixes.md` Task 4):
+    /// no change to [`Inserted::Pending`] enum shape; runtime derives
+    /// the author from `event.author`. Design B (carrying explicit
+    /// `author_hints` on the Pending variant) is a B-2 ergonomic
+    /// improvement.
+    async fn request_missing_for(&mut self, event: &Event) {
+        let known_head_seq = self
+            .dag
+            .author_chain(&event.author)
+            .map_or(0, |c| c.head_seq);
+        if event.seq > known_head_seq + 1 {
+            // Same-author gap: ask for the author's chain range.
+            self.request_author_chain_gap(
+                event.author,
+                known_head_seq + 1,
+                event.seq.saturating_sub(1),
+            )
+            .await;
+        } else {
+            // Cross-author Pending (deps from a different author we
+            // can't identify from a bare hash): nudge via HeadsSummary.
+            let _ = self.publish_heads_summary().await;
+        }
+    }
+
+    /// Publish a [`HeadsRequest`] asking `author` for the inclusive
+    /// `from_seq..=to_seq` range of their chain.
+    ///
+    /// Used by [`Self::request_missing_for`] (Pending path) and the
+    /// `InvalidChain` arm of [`Self::handle_event`] (same-author
+    /// chain-skip path). No-op if the computed range is empty or
+    /// inverted.
+    async fn request_author_chain_gap(&mut self, author: AuthorPubkey, from_seq: u64, to_seq: u64) {
+        if to_seq < from_seq || to_seq == 0 {
+            return;
+        }
+        let mut requests = Vec::new();
+        Self::paginate_into(author, from_seq, to_seq, &mut requests);
+        if requests.is_empty() {
+            return;
+        }
+        let _ = self
+            .network
+            .publish(
+                self.topic,
+                GossipMessage::HeadsRequest(HeadsRequest { requests }),
+            )
+            .await;
     }
 
     /// Diff remote per-author tips against ours (§7.1):

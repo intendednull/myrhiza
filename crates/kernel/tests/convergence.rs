@@ -478,3 +478,162 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
         peer_b.current_digest(),
     );
 }
+
+/// Covers: spec §7.2 — when an inbound event reveals the receiver is
+/// behind on the event's author chain, the recovery action MUST be a
+/// targeted `HeadsRequest` for that author's missing range, NOT a
+/// generic `HeadsSummary` nudge (review-finding I-1).
+///
+/// Setup: peer B subscribes to a shared bus. Peer A is *not* spawned as
+/// a runtime — instead, the test manually constructs A's signed events
+/// (genesis seq=1, seq=2, seq=3) via `EventBuilder` and injects ONLY
+/// event 3 directly onto the bus. B has never observed A before, so the
+/// DAG's chain-integrity check rejects event 3 with
+/// `DagError::InvalidChain { expected_seq: 1, got_seq: 3 }`. Per spec
+/// §7.2 the runtime must publish a `HeadsRequest` covering
+/// `from_seq=1..=2` on author A's chain.
+///
+/// (Strictly, `Inserted::Pending` is only returned when explicit
+/// `deps` are unknown; same-author chain gaps surface as
+/// `DagError::InvalidChain`. The recovery path is identical for both —
+/// publish a targeted `HeadsRequest` — and the fix routes both arms
+/// through `request_author_chain_gap`.)
+///
+/// A third "tap" subscription on the bus captures B's outbound gossip
+/// and we assert at least one captured message is `HeadsRequest` with
+/// the expected (author, range). This proves the protocol shape rather
+/// than just the eventual-convergence outcome.
+#[tokio::test]
+async fn pending_event_triggers_heads_request_not_heads_summary() {
+    use myrhiza_kernel::identity::AuthorKeypair;
+    use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
+    use myrhiza_test_utils::EventBuilder;
+    use myrhiza_types::{BundleHash, Topic};
+
+    // Build a bus + topic + bundle shared between B, the publisher, and the tap.
+    let bus = MemBus::new(256);
+    let app_bundle_hash = BundleHash::from_bytes([0xAB; 32]);
+    let topic_name = "main".to_string();
+    let seed = [0x77u8; 32];
+    let topic = Topic::derive(&app_bundle_hash, &seed, &topic_name);
+
+    // Use a long heads-summary tick so B's periodic ticker doesn't
+    // emit a HeadsSummary during the test window; we want to observe
+    // ONLY the missing-deps recovery emission.
+    let cfg = RuntimeCfg {
+        drift_interval: 1,
+        drift_min_interval: Duration::from_secs(0),
+        drift_daily_cap: u32::MAX,
+        heads_summary_tick: Duration::from_hours(1),
+        pending_cfg: PendingCfg::default(),
+        broadcast_capacity: 256,
+        kernel_fuel_table_version: 1,
+        drift_stash_cap: 256,
+    };
+
+    // Spawn peer B (read-only — it never authors).
+    let net_b = MemNetwork::new(bus.clone());
+    let runtime_b = myrhiza_kernel::runtime::Runtime::start(
+        net_b,
+        topic,
+        app_bundle_hash,
+        topic_name.clone(),
+        helpers::counter_handle(),
+        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        None,
+        cfg,
+    )
+    .await
+    .expect("runtime_b");
+
+    // Give B's startup HeadsSummary a chance to flush so the tap (started
+    // below) doesn't capture it and confuse the assertion. 50ms is enough
+    // for the spawned task's first `publish_heads_summary().await` to
+    // run on the in-process bus.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Now open the tap — captures everything published from this point on.
+    let net_tap = MemNetwork::new(bus.clone());
+    let mut tap = net_tap.subscribe(topic).await.expect("tap subscribe");
+
+    // Construct A's events manually (A is NOT a running runtime).
+    let kp_a = AuthorKeypair::deterministic(1);
+    let builder = EventBuilder::new(&kp_a);
+    let g_payload = 0_i64.to_be_bytes().to_vec();
+    let e1 = builder.genesis(&app_bundle_hash, seed, &topic_name, g_payload);
+    let e2 = builder.next(
+        &e1,
+        std::collections::BTreeSet::new(),
+        1_i64.to_be_bytes().to_vec(),
+    );
+    let e3 = builder.next(
+        &e2,
+        std::collections::BTreeSet::new(),
+        2_i64.to_be_bytes().to_vec(),
+    );
+
+    // Inject ONLY event 3 onto the bus. B's DAG returns
+    // InvalidChain { author: A, expected_seq: 1, got_seq: 3 }, and the
+    // runtime's same-author-chain-skip arm publishes a HeadsRequest for
+    // A's missing range [1..=2].
+    let net_pub = MemNetwork::new(bus.clone());
+    net_pub
+        .publish(topic, GossipMessage::Event(e3.clone()))
+        .await
+        .expect("publish e3");
+
+    // Drain the tap for up to ~300ms looking for B's recovery emission.
+    // Filter out the Event(e3) we just published. Look for HeadsRequest.
+    let deadline = std::time::Instant::now() + Duration::from_millis(300);
+    let mut saw_heads_request_for_a = false;
+    let mut saw_heads_summary = false;
+    let mut captured: Vec<GossipMessage> = Vec::new();
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let r = tokio::time::timeout(remaining.min(Duration::from_millis(50)), tap.recv()).await;
+        match r {
+            Ok(Ok(Some(msg))) => {
+                match &msg {
+                    GossipMessage::HeadsRequest(req) => {
+                        // Look for a request covering A's author chain
+                        // with a range that includes [1..=2] (i.e.,
+                        // from_seq <= 1 and to_seq >= 2). Spec requires
+                        // from_seq = known_head_seq + 1 = 1 and
+                        // to_seq = event.seq - 1 = 2.
+                        for entry in &req.requests {
+                            if entry.author == kp_a.author
+                                && entry.from_seq <= 1
+                                && entry.to_seq >= 2
+                            {
+                                saw_heads_request_for_a = true;
+                            }
+                        }
+                    }
+                    GossipMessage::HeadsSummary(_) => {
+                        saw_heads_summary = true;
+                    }
+                    _ => {}
+                }
+                captured.push(msg);
+            }
+            // None = subscription closed, Err = lagged/closed — both end the drain.
+            Ok(Ok(None) | Err(_)) => break,
+            Err(_) => {
+                // poll timeout — keep looping until deadline
+            }
+        }
+    }
+
+    assert!(
+        saw_heads_request_for_a,
+        "B must publish a HeadsRequest covering A's chain (from_seq=1, to_seq=2) on \
+         a Pending insert, per spec §7.2. Saw HeadsSummary instead: {saw_heads_summary}. \
+         Captured messages: {captured:#?}"
+    );
+
+    // Cleanup: shutdown B's runtime so the test exits cleanly.
+    let _ = runtime_b
+        .author_tx
+        .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
+        .await;
+}
