@@ -167,7 +167,10 @@ pub enum PeerWarning {
     },
 
     /// Local drift-emit suppressed by the rate limiter.
-    DriftRateLimited(RateLimitKind),
+    DriftRateLimited {
+        /// Which rate-limit rule rejected the emit.
+        kind: RateLimitKind,
+    },
 
     /// Subscription consumer lagged and dropped messages.
     BroadcastLagged {
@@ -1029,7 +1032,7 @@ impl Runtime {
             self.peer_warnings
                 .lock()
                 .expect("peer_warnings mutex poisoned")
-                .push(PeerWarning::DriftRateLimited(kind));
+                .push(PeerWarning::DriftRateLimited { kind });
             return;
         }
 
