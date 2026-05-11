@@ -601,6 +601,14 @@ impl Runtime {
                                 local_hash,
                                 remote_hash,
                             }) => {
+                                // TODO(B-2): pending events do not carry
+                                // their originating peer identity, so
+                                // equivocations surfaced during the
+                                // pending-drain path log `peer: None`.
+                                // Plan B-2 extends `PendingBuffer`
+                                // entries to record the source peer so
+                                // this log is fully attributable
+                                // (carry-over from review-finding Q-4).
                                 #[allow(clippy::expect_used)]
                                 self.equivocation_log
                                     .lock()
