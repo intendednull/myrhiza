@@ -273,3 +273,63 @@ async fn coexistence_two_topics_no_event_crossing() {
         "runtime_b on topic_b must NOT receive runtime_a's topic_a events; saw digest {b_digest:?}"
     );
 }
+
+/// Covers: convergence.md §4.7
+#[tokio::test]
+async fn drift_detected_when_state_apply_corrupted() {
+    let harness = InProcessHarness::new(256, [0x44; 32]);
+    let cfg = fast_cfg();
+    let peer_a = harness
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .await;
+    // Peer B uses a corrupting state-apply that flips one digest byte at apply #3.
+    let peer_b = harness
+        .spawn_peer(2, None, helpers::corrupting_counter_handle(3), cfg)
+        .await;
+
+    let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
+    let genesis = GenesisV1 {
+        seed: harness.seed,
+        founder_pubkey: kp_a.author,
+        app_payload: 0_i64.to_be_bytes().to_vec(),
+    };
+    peer_a
+        .author(
+            canonical_bincode().serialize(&genesis).expect("encode"),
+            std::collections::BTreeSet::new(),
+        )
+        .await
+        .expect("genesis");
+    // Author 4 increments — enough events that B applies past the corruption threshold.
+    for delta in [1_i64, 1, 1, 1] {
+        peer_a
+            .author(
+                delta.to_be_bytes().to_vec(),
+                std::collections::BTreeSet::new(),
+            )
+            .await
+            .expect("inc");
+    }
+
+    // Wait deterministically for drift gossip to settle: poll the drift_log
+    // on both peers until at least one records a divergence, or the deadline
+    // expires. This mirrors the `await_digest` pattern (M-5 style) and avoids
+    // a brittle fixed-sleep that races with cross-peer drift-message flight.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let (drift_a, drift_b) = loop {
+        let drift_a = peer_a.drift_log();
+        let drift_b = peer_b.drift_log();
+        if !drift_a.is_empty() || !drift_b.is_empty() {
+            break (drift_a, drift_b);
+        }
+        if std::time::Instant::now() >= deadline {
+            break (drift_a, drift_b);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+
+    assert!(
+        !drift_a.is_empty() || !drift_b.is_empty(),
+        "at least one peer must detect drift within deadline: a={drift_a:?} b={drift_b:?}"
+    );
+}
