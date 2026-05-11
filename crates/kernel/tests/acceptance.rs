@@ -26,6 +26,10 @@ use myrhiza_test_utils::manifest::{
 use myrhiza_types::EventHash;
 use myrhiza_wasmtime_backend::WasmtimeBackend;
 
+use bincode::Options;
+use myrhiza_types::{AuthorPubkey, Event, GenesisV1, Hlc, canonical_bincode};
+use std::collections::BTreeSet;
+
 /// Path to the counter-state-apply fixture built by `just build-fixtures`.
 fn counter_fixture_path() -> PathBuf {
     // Tests run with cwd = crate dir. Walk up to the workspace root
@@ -37,25 +41,6 @@ fn counter_fixture_path() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above kernel crate manifest")
         .join("tests/fixtures/built/counter-state-apply.wasm")
-}
-
-/// Encode an Increment event for the counter fixture's hand-rolled
-/// wire format (see `tests/fixtures/counter-state-apply/src/lib.rs`):
-/// 1 tag byte + 8 bytes big-endian i64.
-fn encode_increment(by: i64) -> Vec<u8> {
-    let mut v = Vec::with_capacity(9);
-    v.push(0u8); // TAG_INCREMENT
-    v.extend_from_slice(&by.to_be_bytes());
-    v
-}
-
-/// Decode the fixture's state bytes: empty (zero) or 8 bytes big-endian i64.
-fn decode_state(bytes: &[u8]) -> i64 {
-    if bytes.is_empty() {
-        return 0;
-    }
-    let arr: [u8; 8] = bytes.try_into().expect("state bytes must be 0 or 8");
-    i64::from_be_bytes(arr)
 }
 
 /// Build a signed counter-state-apply bundle on disk. Used by the load
@@ -108,13 +93,23 @@ fn kernel_loads_signed_bundle() {
 /// Covers: mvp.md §15.1, convergence.md §4.4
 ///
 /// Plan-A criterion #1 part 2: the full loop. Load + instantiate via
-/// `WasmtimeBackend`, drive a real state-apply call (Increment by 42),
-/// decode the returned state bytes, assert the counter reads 42.
+/// `WasmtimeBackend`, drive real state-apply calls against canonical
+/// `Event` envelopes (per plan-B-1 Task 20's fixture rewrite):
+///   1. Apply a Genesis event whose `GenesisV1::app_payload` is the
+///      8-byte BE i64 zero — the fixture returns that as the initial
+///      state.
+///   2. Apply a non-genesis +5 increment event whose `payload` is the
+///      8-byte BE i64 delta — the fixture adds it to the prior state.
+///
 /// This exercises:
 ///   - `InstallFlow::load` (signature verify),
 ///   - `WasmtimeBackend::instantiate_state_apply` (linker + fuel + memcap),
 ///   - `StateApplyHandle::apply` (bindgen-typed call),
-///   - canonical-bincode round-trip of app-defined state.
+///   - canonical-bincode decode of the wire `Event` envelope inside the
+///     fixture.
+///
+/// `signature` is left zero: `handle.apply` does not verify signatures
+/// (kernel verifies at insert).
 #[test]
 fn kernel_instantiates_and_applies_increment() {
     let (_bundle, addr) = build_signed_counter_bundle();
@@ -128,18 +123,76 @@ fn kernel_instantiates_and_applies_increment() {
         .expect("instantiate counter state-apply");
     let mut handle = StateApplyHandle::new(instance);
 
-    let event = encode_increment(42);
-    let result = handle
-        .apply(b"", &event)
-        .expect("apply Increment{by:42} succeeds");
+    let author = AuthorPubkey::from_bytes([1; 32]);
 
+    // Build the Genesis event: app_payload is the canonical 8-byte BE
+    // i64 zero, which the fixture returns verbatim as initial state.
+    let initial_state = 0_i64.to_be_bytes().to_vec();
+    let genesis_payload = GenesisV1 {
+        seed: [0x11; 32],
+        founder_pubkey: author,
+        app_payload: initial_state.clone(),
+    };
+    let genesis_payload_bytes = canonical_bincode()
+        .serialize(&genesis_payload)
+        .expect("encode genesis payload");
+    let genesis = Event {
+        author,
+        seq: 1,
+        prev: EventHash::ZERO,
+        deps: BTreeSet::new(),
+        hlc: Hlc {
+            wall_ms: 0,
+            logical: 0,
+        },
+        payload: genesis_payload_bytes,
+        signature: [0; 64],
+    };
+    let genesis_bytes = canonical_bincode()
+        .serialize(&genesis)
+        .expect("encode genesis event");
+    let result = handle
+        .apply(&[], &genesis_bytes)
+        .expect("genesis apply succeeds");
     assert!(
         matches!(result.outcome, ApplyOutcome::Accepted),
-        "expected Accepted verdict, got {:?}",
+        "expected Accepted verdict for genesis, got {:?}",
         result.outcome
     );
-    let value = decode_state(&result.new_state);
-    assert_eq!(value, 42);
+    assert_eq!(
+        result.new_state, initial_state,
+        "fixture must return genesis app_payload as initial state"
+    );
+
+    // Apply a +5 increment as a non-genesis event referencing genesis.
+    let increment = Event {
+        author,
+        seq: 2,
+        prev: genesis.wire_hash(),
+        deps: BTreeSet::new(),
+        hlc: Hlc {
+            wall_ms: 0,
+            logical: 0,
+        },
+        payload: 5_i64.to_be_bytes().to_vec(),
+        signature: [0; 64],
+    };
+    let increment_bytes = canonical_bincode()
+        .serialize(&increment)
+        .expect("encode increment event");
+    let result = handle
+        .apply(&result.new_state, &increment_bytes)
+        .expect("increment apply succeeds");
+    assert!(
+        matches!(result.outcome, ApplyOutcome::Accepted),
+        "expected Accepted verdict for increment, got {:?}",
+        result.outcome
+    );
+    assert_eq!(
+        result.new_state,
+        5_i64.to_be_bytes().to_vec(),
+        "0 + 5 = 5 (8-byte BE i64)"
+    );
 }
 
 /// Path to the over-importer fixture. See

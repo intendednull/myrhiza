@@ -103,7 +103,8 @@ export!(Component);
 //   prev            : EventId,      serde_bytes => 8-byte len (=32) + 32 bytes = 40
 //   deps_len        : u64 list-len  => 8 bytes BE
 //   deps[..]        : EventId * N   => 40 bytes each (only N=0 supported)
-//   hlc             : Hlc           => 16 bytes (struct of u64 + u64)
+//   hlc             : Hlc           => 12 bytes (u64 wall_ms + u32 logical;
+//                                       bincode does not pad)
 //   payload_len     : u64           => 8 bytes BE
 //   payload[..]     : Vec<u8> serde_bytes contents
 //   signature_len   : u64           => 8 bytes BE (=64)
@@ -132,7 +133,9 @@ const PREV_OFFSET: usize = SEQ_OFFSET + 8;
 const DEPS_LEN_OFFSET: usize = PREV_OFFSET + 40;
 // Assumes deps_len == 0 (B-1 fixture contract).
 const HLC_OFFSET: usize = DEPS_LEN_OFFSET + 8;
-const PAYLOAD_LEN_OFFSET: usize = HLC_OFFSET + 16;
+// `Hlc { wall_ms: u64, logical: u32 }` encodes to 12 bytes under canonical
+// bincode (fixint BE, no padding) — see `crates/types/src/hlc.rs::tests`.
+const PAYLOAD_LEN_OFFSET: usize = HLC_OFFSET + 12;
 
 // GenesisV1 payload offsets.
 const GENESIS_APP_PAYLOAD_LEN_OFFSET: usize = 32 + 40; // seed + founder_pubkey
