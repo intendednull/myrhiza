@@ -333,3 +333,50 @@ async fn drift_detected_when_state_apply_corrupted() {
         "at least one peer must detect drift within deadline: a={drift_a:?} b={drift_b:?}"
     );
 }
+
+/// Covers: convergence.md §4.4.1
+#[tokio::test]
+async fn equivocating_author_chain_first_seen_wins() {
+    use std::collections::BTreeSet;
+
+    use myrhiza_kernel::dag::{DagError, EventDag};
+    use myrhiza_test_utils::EventBuilder;
+    use myrhiza_types::Topic;
+
+    let bundle_hash = myrhiza_types::BundleHash::from_bytes([0xAA; 32]);
+    let seed = [0x55; 32];
+    let topic = Topic::derive(&bundle_hash, &seed, "main");
+    let mut dag = EventDag::new(topic, bundle_hash, "main".into());
+
+    let kp = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
+    let builder = EventBuilder::new(&kp);
+
+    let g1 = builder.genesis(&bundle_hash, seed, "main", vec![0xAA]);
+    let g2 = builder.genesis(&bundle_hash, seed, "main", vec![0xBB]);
+    assert_ne!(g1.wire_hash(), g2.wire_hash());
+
+    dag.insert(g1.clone()).expect("first genesis");
+    let r = dag.insert(g2.clone()).expect_err("equivocation");
+    match r {
+        DagError::Equivocation {
+            author,
+            seq,
+            local_hash,
+            remote_hash,
+        } => {
+            assert_eq!(author, kp.author);
+            assert_eq!(seq, 1);
+            assert_eq!(local_hash, g1.wire_hash());
+            assert_eq!(remote_hash, g2.wire_hash());
+        }
+        other => panic!("expected Equivocation, got {other:?}"),
+    }
+
+    // Non-genesis equivocation.
+    let e2a = builder.next(&g1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
+    let e2b = builder.next(&g1, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
+    assert_ne!(e2a.wire_hash(), e2b.wire_hash());
+    dag.insert(e2a.clone()).expect("first non-genesis");
+    let r = dag.insert(e2b).expect_err("equivocation");
+    assert!(matches!(r, DagError::Equivocation { seq: 2, .. }));
+}
