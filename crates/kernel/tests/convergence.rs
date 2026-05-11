@@ -415,10 +415,21 @@ fn pending_buffer_evicts_oldest_under_capacity() {
     assert_eq!(pb.len(), 3, "PendingBuffer must cap at max_total = 3");
 }
 
-/// Covers: convergence.md §4.2
+/// Covers: convergence.md §4.2 (deterministic variant per review M-9).
+///
+/// Uses `MemBus::inject_lag` (spec §6.3 / M-3) to force a single
+/// `SubError::Lagged` on B's subscription, replacing the prior
+/// natural-capacity-overflow setup whose timing was
+/// consumer-speed-dependent. With the deterministic affordance both
+/// indicators must be observable: B records a `BroadcastLagged`
+/// warning AND B converges to the full A-authored state via the
+/// `HeadsSummary` recovery nudge.
 #[tokio::test]
 async fn lagged_broadcast_recovers_via_heads_summary() {
-    let harness = InProcessHarness::new(2, [0x66; 32]);
+    // Bus capacity is comfortably above the event count so natural
+    // overflow cannot accidentally fire; the only lag in the test is
+    // the one injected below.
+    let harness = InProcessHarness::new(64, [0x66; 32]);
     let cfg = fast_cfg();
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
@@ -426,6 +437,13 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
     let mut peer_b = harness
         .spawn_peer(2, None, helpers::counter_handle(), cfg)
         .await;
+
+    // Arm a single forced Lagged on B's topic BEFORE A publishes any
+    // event. The flag is set on the shared MemBus; B's next `recv`
+    // that starts after this call consumes the flag and surfaces
+    // `SubError::Lagged(1)`, triggering the HeadsSummary recovery
+    // path in handle_subscription_error.
+    harness.bus.inject_lag(harness.topic);
 
     let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
     let genesis = GenesisV1 {
@@ -441,7 +459,10 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
         .await
         .expect("genesis");
 
-    // Flood many increments rapidly to exceed bus capacity.
+    // Author 10 increments. The injected lag causes B to miss some
+    // initial deliveries (depending on the precise interleave) and
+    // observe `Lagged` on a subsequent recv; the recovery HeadsSummary
+    // B then publishes drives A to backfill the gap so B converges.
     for delta in [1_i64; 10] {
         peer_a
             .author(
@@ -452,17 +473,15 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
             .expect("inc");
     }
 
-    // Recovery indicator: either B converges fully to state==10 (the
-    // happy-path) OR B records a BroadcastLagged warning (proving the
-    // lag-detection path fired and triggered a recovery HeadsSummary).
-    //
-    // Per plan hint: bus capacity=2 + flood=10 is intrinsically
-    // consumer-speed-dependent, so we accept *either* indicator. Both
-    // demonstrate that the lag → recovery path is wired correctly per
-    // convergence.md §4.2.
+    // Both indicators must hold deterministically: the lag warning
+    // proves the lag-detection path fired, and full convergence
+    // proves the HeadsSummary recovery actually backfilled. The
+    // earlier `converged || lagged_seen` relaxation was a workaround
+    // for the non-deterministic natural-overflow setup — no longer
+    // necessary now that inject_lag is available (review M-9).
     let expected = 10_i64.to_be_bytes().to_vec();
     let converged = peer_b
-        .await_digest(expected.clone(), Duration::from_secs(2))
+        .await_digest(expected.clone(), Duration::from_secs(5))
         .await;
     let warnings = peer_b.peer_warnings();
     let lagged_seen = warnings.iter().any(|w| {
@@ -472,8 +491,13 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
         )
     });
     assert!(
-        converged || lagged_seen,
-        "B must either converge to state==10 OR record a BroadcastLagged warning; \
+        lagged_seen,
+        "B must record a BroadcastLagged warning after inject_lag; \
+         saw warnings={warnings:?}",
+    );
+    assert!(
+        converged,
+        "B must converge to state==10 after lag-recovery HeadsSummary; \
          saw digest={:?} warnings={warnings:?}",
         peer_b.current_digest(),
     );
