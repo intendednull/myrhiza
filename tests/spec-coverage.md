@@ -34,6 +34,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.2 (deterministic variant per review M-9)
 - crates/kernel/tests/convergence.rs:421
 
+## convergence.md §4.2 — `MemBus::inject_lag(topic)` test affordance for
+- crates/network/tests/memory_basic.rs:83
+
 ## convergence.md §4.2 — when an inbound event reveals the receiver is
 - crates/kernel/tests/convergence.rs:509
 
@@ -110,9 +113,6 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:408
 - crates/kernel/tests/acceptance.rs:48
 - crates/kernel/tests/acceptance.rs:71
-
-## networking.md §11.3 — `MemBus::inject_lag(topic)` test affordance for
-- crates/network/tests/memory_basic.rs:83
 
 ## verification.md §22.1
 - crates/kernel/tests/acceptance.rs:48

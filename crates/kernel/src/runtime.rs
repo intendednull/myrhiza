@@ -278,12 +278,6 @@ pub struct RuntimeHandle {
 /// The boxed `dyn Network` field with a uniform [`Subscription`] type is
 /// established via the [`NetworkErased`] wrapper below — see its doc for
 /// the rationale.
-//
-// Fields below are populated here so the struct layout is stable across
-// the Task 17 / 18 / 19 commit boundary. The handle / state / cache
-// fields are read only by `Runtime::author` (Task 18) and
-// `Runtime::handle_message` (Task 19); the stubs in this commit leave
-// them inert.
 #[allow(dead_code)]
 pub struct Runtime {
     /// Network handle, type-erased so multiple `Network` implementors
@@ -543,13 +537,6 @@ impl<N: Network> Network for NetworkErased<N> {
 // relies on that impl to forward `recv` through the box.
 
 impl Runtime {
-    // Tasks 18-19 replace these stubs with the real implementations.
-    // Keeping them here as no-ops lets the Task 17 scaffold compile
-    // without the author / handle-message bodies being in scope yet.
-    // The `async` is load-bearing on the real impls (network publish,
-    // state-apply call into a Send future) so we keep the signature
-    // stable across the Task 17 / 18 / 19 commit boundary.
-
     /// Dispatch an inbound gossip message to the variant-specific
     /// handler. See plan-B-1 spec §11.5 (Event), §7.1
     /// (`HeadsSummary` + `HeadsRequest`), §8.4 (Drift).

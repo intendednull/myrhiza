@@ -624,13 +624,22 @@ After each `dag.insert(...)` returning `NewlyApplied { topo_index, hash }`:
 
 ```rust
 pub struct DriftRateLimit {
-    min_interval: Duration,        // 1 minute production; configurable in tests
-    daily_cap: u32,                // 1024 per day
+    min_interval: Duration,                 // 1 minute production; configurable in tests
+    daily_cap: u32,                         // 1024 per day
     last_emit: Option<Instant>,
-    today_count: u32,
-    today_started: Instant,
+    recent_emits: VecDeque<Instant>,        // trailing-24h sliding window of emit times
 }
 ```
+
+`recent_emits` is a true trailing-24h sliding window: on each
+`try_emit(now)`, entries with `now - front >= 24h` are popped from
+the front, then the daily-cap test is `recent_emits.len() >=
+daily_cap`. This avoids the resetting-window flaw where a burst of
+`daily_cap` emits just before rollover and another burst immediately
+after would admit `2 * daily_cap` emits in an arbitrarily short
+real-time window. The deque is lazily grown — initial capacity is 0
+so that pathological `daily_cap == u32::MAX` test configurations do
+not pre-allocate.
 
 Both gates applied at emit. Over cap → silently drop emission. Logged
 to `Runtime::peer_warnings` for visibility. Production caps per
@@ -1107,8 +1116,25 @@ pub enum PeerWarning {
     KernelFuelTableMismatch { peer: Option<PeerPubkey>, remote_version: u32, local_version: u32 },
     DriftRateLimited { kind: RateLimitKind },
     BroadcastLagged { dropped: u64 },
+    /// Equivocation observed during a HeadsSummary local-ahead diff but
+    /// the local chain's `seq_to_hash` had no entry at `seq`. Surfaces a
+    /// chain-bookkeeping invariant violation rather than a peer fault.
+    /// Closes review-finding from §17 follow-ups round 1.
+    ChainHashLookupMissing { author: AuthorPubkey, seq: u64 },
+    /// Drain of `PendingBuffer` produced an `Inserted::Pending` or
+    /// `Err(_)` outcome that should be unreachable for honest input
+    /// (the `newly_satisfied` filter on `is_subset(known)` precludes
+    /// it). Surfaces a DAG/PendingBuffer invariant drift; the event is
+    /// re-buffered (Pending) or dropped (Err) and the anomaly logged.
+    /// Closes review-finding Q-2.
+    PendingDrainAnomaly { author: AuthorPubkey, seq: u64, reason: String },
 }
 ```
+
+The enum is open-ended: future diagnostics may extend it. Consumers
+SHOULD `match` non-exhaustively (e.g. via `_ => {}`) to avoid breaking
+on extension. Wire encoding for any future on-wire `PeerWarning` would
+need an explicit ABI freeze; B-1 keeps it local-only.
 
 ## 14. Edge cases handled
 
