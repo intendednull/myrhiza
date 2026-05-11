@@ -661,3 +661,149 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
         .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
         .await;
 }
+
+/// Covers: convergence.md §4.4.1 + review-finding M-8.
+///
+/// Runtime-level companion to `equivocating_author_chain_first_seen_wins`
+/// (which exercises `EventDag::insert` directly). This test proves that
+/// equivocation also surfaces end-to-end through the `Runtime` +
+/// `MemBus` ingest path — i.e., that `handle_event` records a
+/// `DagError::Equivocation` into `equivocation_log` rather than
+/// swallowing it.
+///
+/// Setup: a single read-only runtime B subscribes to a shared bus. The
+/// test acts as a hostile publisher and injects TWO genesis events
+/// (seq=1) signed by the SAME author key K but carrying different
+/// `app_payload` bytes → different `body_hash` → different `wire_hash`.
+/// B accepts the first as genesis and flags the second as
+/// `DagError::Equivocation`. The runtime's equivocation arm pushes one
+/// `EquivocationFlag` onto the log.
+///
+/// (A second runtime for the author K is intentionally omitted — its
+/// equivocation log would also fire, but B is the interesting "third
+/// party" observer because it didn't author either event.)
+#[tokio::test]
+async fn equivocation_via_membus_surfaces_in_peer_warnings() {
+    use myrhiza_kernel::identity::AuthorKeypair;
+    use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network};
+    use myrhiza_test_utils::EventBuilder;
+    use myrhiza_types::{BundleHash, Topic};
+
+    // Shared bus + topic + bundle.
+    let bus = MemBus::new(256);
+    let app_bundle_hash = BundleHash::from_bytes([0xCD; 32]);
+    let topic_name = "main".to_string();
+    let seed = [0x88u8; 32];
+    let topic = Topic::derive(&app_bundle_hash, &seed, &topic_name);
+
+    // Long heads-summary tick + permissive drift so neither the periodic
+    // ticker nor the rate limiter perturbs the test surface.
+    let cfg = RuntimeCfg {
+        drift_interval: 1,
+        drift_min_interval: Duration::from_secs(0),
+        drift_daily_cap: u32::MAX,
+        heads_summary_tick: Duration::from_hours(1),
+        pending_cfg: PendingCfg::default(),
+        broadcast_capacity: 256,
+        kernel_fuel_table_version: 1,
+        drift_stash_cap: 256,
+    };
+
+    // Spawn read-only B. No author key — B never authors, only observes.
+    let net_b = MemNetwork::new(bus.clone());
+    let runtime_b = myrhiza_kernel::runtime::Runtime::start(
+        net_b,
+        topic,
+        app_bundle_hash,
+        topic_name.clone(),
+        helpers::counter_handle(),
+        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        None,
+        cfg,
+    )
+    .await
+    .expect("runtime_b");
+
+    // Give B's subscription + startup HeadsSummary a chance to settle so
+    // the next publishes are actually delivered to B's recv loop.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Build two conflicting genesis events signed by the SAME author key
+    // but with different `app_payload` bytes. Different payload →
+    // different body_hash → different wire_hash, so each is a distinct
+    // event from the DAG's perspective; same (author, seq=1) makes the
+    // second one an equivocation against the first.
+    let kp = AuthorKeypair::deterministic(1);
+    let builder = EventBuilder::new(&kp);
+    let g1 = builder.genesis(&app_bundle_hash, seed, &topic_name, vec![0xAA]);
+    let g2 = builder.genesis(&app_bundle_hash, seed, &topic_name, vec![0xBB]);
+    assert_ne!(
+        g1.wire_hash(),
+        g2.wire_hash(),
+        "the two conflicting genesis events must have distinct wire hashes"
+    );
+
+    // Publish both directly onto the bus (hostile publisher path — NOT
+    // going through a Runtime::author call, which would refuse to author
+    // two seq=1 events).
+    let net_pub = MemNetwork::new(bus.clone());
+    net_pub
+        .publish(topic, GossipMessage::Event(g1.clone()))
+        .await
+        .expect("publish g1");
+    net_pub
+        .publish(topic, GossipMessage::Event(g2.clone()))
+        .await
+        .expect("publish g2");
+
+    // Poll B's equivocation_log until it records the conflict, or the
+    // deadline expires. This mirrors the `drift_detected_when_state_apply_corrupted`
+    // poll pattern and avoids racing the runtime's recv loop with a
+    // brittle fixed-sleep.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let log = loop {
+        let log = runtime_b
+            .equivocation_log
+            .lock()
+            .expect("equivocation_log mutex")
+            .clone();
+        if !log.is_empty() {
+            break log;
+        }
+        if std::time::Instant::now() >= deadline {
+            break log;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+
+    assert_eq!(
+        log.len(),
+        1,
+        "B must record exactly one equivocation flag for the conflicting seq=1 \
+         genesis from author K; saw log={log:?}"
+    );
+    let flag = &log[0];
+    assert_eq!(flag.author, kp.author, "equivocation author must be K");
+    assert_eq!(flag.seq, 1, "equivocation seq must be 1 (genesis)");
+    // `local_hash` is whichever event B accepted first; `remote_hash` is
+    // the conflicting event observed second. Since we published g1
+    // before g2, local should be g1 and remote should be g2 — but bus
+    // delivery preserves publish order on a single subscriber, so this
+    // ordering is deterministic.
+    assert_eq!(
+        flag.local_hash,
+        g1.wire_hash(),
+        "local_hash must be g1 (accepted first)"
+    );
+    assert_eq!(
+        flag.remote_hash,
+        g2.wire_hash(),
+        "remote_hash must be g2 (conflicting, observed second)"
+    );
+
+    // Cleanup: shutdown B's runtime so the test exits cleanly.
+    let _ = runtime_b
+        .author_tx
+        .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
+        .await;
+}
