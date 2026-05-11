@@ -807,3 +807,44 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
         .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
         .await;
 }
+
+/// Covers: review-finding Q-3 — `PeerHandle::await_digest` must NOT
+/// return `true` solely because the digest already equals the expected
+/// value at call time. The function should always wait for at least one
+/// fresh `changed()` notification before performing the equality check;
+/// otherwise tests can pass vacuously (no fresh signal, no actual
+/// cross-peer delivery exercised).
+///
+/// Setup: spawn read-only peer B on an empty harness. Its
+/// `digest_watch` is initialized to `Vec::<u8>::new()` and no events
+/// ever arrive, so the watch never observes a `changed()` signal.
+/// Call `await_digest(vec![], 100ms)`:
+/// - Buggy code: returns `true` immediately because the pre-wait
+///   equality check matches (`*borrow() == expected`).
+/// - Fixed code: blocks on `changed()` until the 100ms timeout, then
+///   returns `false`.
+///
+/// We assert `false`. If `true` is observed, the pre-wait race is
+/// still present.
+#[tokio::test]
+async fn await_digest_does_not_return_on_stale_already_equal_state() {
+    let harness = InProcessHarness::new(64, [0x99; 32]);
+    let cfg = fast_cfg();
+    let mut peer_b = harness
+        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .await;
+
+    // B has never received any event; its digest_watch holds the
+    // initial empty Vec. The target matches the initial value, but
+    // since no fresh `changed()` has arrived, `await_digest` must
+    // block until the timeout (it must NOT return on the stale match).
+    let target: Vec<u8> = Vec::new();
+    let returned = peer_b
+        .await_digest(target, Duration::from_millis(100))
+        .await;
+    assert!(
+        !returned,
+        "await_digest must NOT return true on the stale initial digest \
+         — it must wait for a fresh changed() signal first (review Q-3)"
+    );
+}

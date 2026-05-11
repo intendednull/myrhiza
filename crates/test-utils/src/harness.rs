@@ -16,12 +16,25 @@
 //!
 //! ## `await_digest` semantics
 //!
-//! [`PeerHandle::await_digest`] uses the round-1 plan-review M-5 fix: it
-//! calls [`tokio::sync::watch::Receiver::mark_unchanged`] on entry so
-//! that [`tokio::sync::watch::Receiver::changed`] only resolves on a
-//! *new* value (not the snapshot already present at call time), and
-//! uses a saturating deadline so callers can pass any [`Duration`]
-//! without underflow risk.
+//! [`PeerHandle::await_digest`] combines the round-1 plan-review M-5 fix
+//! with the round-2 review-Q-3 fix:
+//!
+//! - If the watch already has an UNOBSERVED update pending at call time
+//!   ([`tokio::sync::watch::Receiver::has_changed`] is true), that
+//!   update is consumed via
+//!   [`tokio::sync::watch::Receiver::borrow_and_update`] and compared
+//!   to `expected` — a match returns `true` immediately, because the
+//!   pending update IS the evidence of delivery.
+//! - Otherwise [`tokio::sync::watch::Receiver::mark_unchanged`] marks
+//!   the current snapshot as seen, and the function then loops on
+//!   [`tokio::sync::watch::Receiver::changed`], comparing against
+//!   `expected` only after each fresh signal resolves. This rules out
+//!   the Q-3 "vacuous pass" where state coincidentally equals
+//!   `expected` (e.g. both at the construction-default empty
+//!   `Vec<u8>`) without any real delivery having occurred.
+//!
+//! A saturating deadline lets callers pass any [`Duration`] without
+//! underflow risk.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -88,29 +101,62 @@ impl PeerHandle {
     /// Block until this peer's `digest_watch` reports `expected`, or
     /// `timeout` elapses.
     ///
-    /// Implements the round-1 plan-review M-5 fix:
+    /// Implements the round-1 plan-review M-5 fix combined with the
+    /// round-2 review-Q-3 fix:
     ///
     /// 1. [`mark_unchanged`](tokio::sync::watch::Receiver::mark_unchanged)
-    ///    is called on entry so that [`changed`](tokio::sync::watch::Receiver::changed)
-    ///    only resolves on a genuinely *new* value — without this, the
-    ///    receiver always sees the snapshot present at construction as
-    ///    "changed" and the loop busy-waits.
-    /// 2. A saturating deadline (`Instant::now() + timeout` plus
+    ///    is called on entry only when no real update is pending — so
+    ///    that [`changed`](tokio::sync::watch::Receiver::changed) only
+    ///    resolves on a genuinely *new* value rather than busy-waiting
+    ///    on the construction snapshot.
+    /// 2. The pre-wait equality check is gated on
+    ///    [`has_changed`](tokio::sync::watch::Receiver::has_changed)
+    ///    being `true` (review Q-3). A bare pre-wait `*borrow() ==
+    ///    expected` admitted vacuous passes: any test where the watch
+    ///    happened to already hold `expected` at call time — including
+    ///    the construction-default value, e.g. an empty `Vec<u8>` — got
+    ///    `true` back without any delivery having actually occurred.
+    ///    By requiring an unobserved update to be present, we
+    ///    distinguish "state coincidentally matches construction
+    ///    default" (no update ever fired → block) from "state was
+    ///    updated to `expected` just before the call" (an update is
+    ///    pending → return true, that update IS the evidence of
+    ///    delivery).
+    /// 3. A saturating deadline (`Instant::now() + timeout` plus
     ///    `Instant::saturating_duration_since`) guards against overflow
     ///    on extreme `Duration` inputs.
     ///
-    /// Returns `true` if the expected digest was observed before the
-    /// deadline (including the final check after the sender drops),
-    /// `false` on timeout.
+    /// Returns `true` either when an already-pending update equals
+    /// `expected` (consumed via
+    /// [`borrow_and_update`](tokio::sync::watch::Receiver::borrow_and_update))
+    /// or when a subsequent `changed()` notification arrives whose
+    /// post-mutation value equals `expected`. Returns `false` on
+    /// timeout. Sender-drop is treated as a final-equality check.
     pub async fn await_digest(&mut self, expected: Vec<u8>, timeout: Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
-        // Mark current snapshot as seen so changed() only resolves on
-        // genuinely new values (avoids busy-wait when value hasn't changed).
-        self.runtime.digest_watch.mark_unchanged();
-        loop {
-            if *self.runtime.digest_watch.borrow() == expected {
+        // Pre-wait check: only honored if the watch has an UNOBSERVED
+        // update pending. `has_changed()` returns `Err` only if the
+        // sender is dropped — treat that as "no pending change" and
+        // fall through to the loop, which will observe sender-drop on
+        // the next changed().await.
+        if self.runtime.digest_watch.has_changed().unwrap_or(false) {
+            // borrow_and_update both reads the current value and marks
+            // it as observed; combined with the has_changed guard
+            // above, this returns true only when a real update brought
+            // the digest to `expected` (review Q-3).
+            if *self.runtime.digest_watch.borrow_and_update() == expected {
                 return true;
             }
+            // Otherwise the pending update did not match; the next
+            // loop iteration waits for the next changed() signal.
+        } else {
+            // No pending change — mark the current snapshot as seen so
+            // changed() only resolves on a genuinely new value (avoids
+            // the busy-wait that would occur if a never-updated
+            // receiver returned immediately from changed()).
+            self.runtime.digest_watch.mark_unchanged();
+        }
+        loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 return false;
@@ -121,9 +167,25 @@ impl PeerHandle {
             )
             .await;
             // r is Ok(Ok(())) on change, Ok(Err(_)) on sender dropped, Err(_) on timeout.
-            if let Ok(Err(_)) = r {
-                // Sender dropped (Runtime halted); final check then exit.
-                return *self.runtime.digest_watch.borrow() == expected;
+            match r {
+                Ok(Ok(())) => {
+                    // Fresh signal observed — now the equality check is meaningful.
+                    if *self.runtime.digest_watch.borrow() == expected {
+                        return true;
+                    }
+                    // Different value — keep waiting for the next change.
+                }
+                Ok(Err(_)) => {
+                    // Sender dropped (Runtime halted). One final
+                    // equality check against the last-published value;
+                    // safe to consult `borrow()` here because no
+                    // further change can race in.
+                    return *self.runtime.digest_watch.borrow() == expected;
+                }
+                Err(_) => {
+                    // Per-iteration poll timeout — fall through to the
+                    // top of the loop, where the deadline is re-checked.
+                }
             }
         }
     }
