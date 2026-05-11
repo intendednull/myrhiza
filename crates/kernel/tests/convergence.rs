@@ -848,3 +848,156 @@ async fn await_digest_does_not_return_on_stale_already_equal_state() {
          — it must wait for a fresh changed() signal first (review Q-3)"
     );
 }
+
+/// Covers: review-finding M-4 + spec §4.4 / §14 edge-case 8.
+///
+/// Events rejected by `state-apply` during `replay_full` must be
+/// recorded in `RuntimeHandle::dropped_at_apply`, not silently dropped.
+/// The event remains in the DAG (so a future topo ordering may
+/// re-accept it on a peer with different prior state) but never commits
+/// to local `state`. Surfacing the drop makes the spec-mandated map
+/// observable for diagnostics.
+///
+/// ## Test design (approach (c) per plan Task 13)
+///
+/// The pre-check-rejector fixture's wasm `apply` function returns
+/// `Reject("not allowed")` unconditionally. Per spec §4.4, pre-check
+/// and apply are the SAME wasm function called in dry-run vs canonical
+/// modes — both Reject. That makes the originator path unusable for
+/// this test: `Runtime::author` calls `pre_check` before signing, sees
+/// `Rejected`, and returns `RuntimeError::PreCheckRejected` without
+/// ever inserting the event into the DAG. The event never reaches
+/// `replay_full`, so `dropped_at_apply` would stay empty.
+///
+/// The apply-time-only scope is reached by bypassing the originator's
+/// pre-check entirely: hand-construct a signed Event via `EventBuilder`
+/// and publish it onto the bus as a `GossipMessage::Event`. Peer B
+/// (running the pre-check-rejector handle) receives the event via its
+/// recv loop, inserts it into the DAG (DAG insertion does NOT consult
+/// `state-apply`; only sig / chain / equivocation checks gate that),
+/// then runs `replay_full`, which calls `apply` over the topo order
+/// and lands the event in `dropped_at_apply` with the reject reason.
+///
+/// (Alternative approaches considered: (a) build a new wasm fixture
+/// that accepts in pre-check and rejects in apply — heavy: needs a new
+/// fixture, new build step, new manifest. (b) Stub `StateApplyHandle`
+/// without crossing the wasm boundary — requires `StateApplyHandle` to
+/// be `dyn`-friendly or a new test seam. (c) Bypass pre-check via
+/// `MemBus` injection — lightest; mirrors the equivocation-via-membus
+/// test pattern from Batch 5. Chose (c) per plan-task guidance.)
+#[tokio::test]
+async fn dropped_at_apply_records_rejected_events() {
+    use myrhiza_kernel::identity::AuthorKeypair;
+    use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network};
+    use myrhiza_test_utils::EventBuilder;
+    use myrhiza_types::{BundleHash, Topic};
+
+    // Shared bus + topic + bundle. Peer B subscribes to the bus and
+    // runs the pre-check-rejector handle so its `replay_full` rejects
+    // every event.
+    let bus = MemBus::new(256);
+    let app_bundle_hash = BundleHash::from_bytes([0xDE; 32]);
+    let topic_name = "main".to_string();
+    let seed = [0x55u8; 32];
+    let topic = Topic::derive(&app_bundle_hash, &seed, &topic_name);
+
+    // Long heads-summary tick + permissive drift so neither perturbs
+    // the test surface. Matches the equivocation-via-membus pattern.
+    let cfg = RuntimeCfg {
+        drift_interval: 1,
+        drift_min_interval: Duration::from_secs(0),
+        drift_daily_cap: u32::MAX,
+        heads_summary_tick: Duration::from_hours(1),
+        pending_cfg: PendingCfg::default(),
+        broadcast_capacity: 256,
+        kernel_fuel_table_version: 1,
+        drift_stash_cap: 256,
+    };
+
+    // Spawn read-only B with the rejector handle. No author key — B
+    // never authors, only observes the event we inject.
+    let net_b = MemNetwork::new(bus.clone());
+    let runtime_b = myrhiza_kernel::runtime::Runtime::start(
+        net_b,
+        topic,
+        app_bundle_hash,
+        topic_name.clone(),
+        helpers::pre_check_rejector_handle(),
+        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        None,
+        cfg,
+    )
+    .await
+    .expect("runtime_b");
+
+    // Give B's subscription + startup HeadsSummary a chance to settle
+    // so the injected event is actually delivered to B's recv loop.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Hand-construct a signed genesis event from a hostile-publisher
+    // perspective (not going through `Runtime::author`, which would
+    // be vetoed by pre-check). The pre-check-rejector fixture rejects
+    // every event regardless of payload bytes, so the payload shape is
+    // not load-bearing here — but using a well-formed `GenesisV1`
+    // payload keeps the test surface honest (an event that passed the
+    // DAG's structural checks would reach `replay_full` in real
+    // deployment too).
+    let kp_a = AuthorKeypair::deterministic(1);
+    let builder = EventBuilder::new(&kp_a);
+    let genesis = builder.genesis(
+        &app_bundle_hash,
+        seed,
+        &topic_name,
+        0_i64.to_be_bytes().to_vec(),
+    );
+    let genesis_hash = genesis.wire_hash();
+
+    // Publish the event directly onto the bus. B's recv loop will pick
+    // it up, the DAG accepts it (sig + chain valid; DAG does NOT run
+    // state-apply), then `replay_full` rejects it and records the drop.
+    let net_pub = MemNetwork::new(bus.clone());
+    net_pub
+        .publish(topic, GossipMessage::Event(genesis.clone()))
+        .await
+        .expect("publish genesis");
+
+    // Poll B's dropped_at_apply until it records the rejection, or the
+    // deadline expires. This mirrors the equivocation-via-membus poll
+    // pattern and avoids racing the recv loop with a fixed-sleep.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let map = loop {
+        let snapshot = runtime_b
+            .dropped_at_apply
+            .lock()
+            .expect("dropped_at_apply mutex")
+            .clone();
+        if !snapshot.is_empty() {
+            break snapshot;
+        }
+        if std::time::Instant::now() >= deadline {
+            break snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+
+    assert_eq!(
+        map.len(),
+        1,
+        "B must record exactly one dropped_at_apply entry for the \
+         injected event the pre-check-rejector handle refused to \
+         apply; saw map={map:?}"
+    );
+    let reason = map
+        .get(&genesis_hash)
+        .expect("dropped_at_apply must be keyed by the event's wire_hash");
+    assert_eq!(
+        reason, "not allowed",
+        "reject reason must match the fixture's hard-coded string"
+    );
+
+    // Cleanup: shutdown B's runtime so the test exits cleanly.
+    let _ = runtime_b
+        .author_tx
+        .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
+        .await;
+}

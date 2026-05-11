@@ -11,7 +11,7 @@
 //! limited to symbols referenced by these type definitions; later
 //! tasks extend it as the impl lands.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -248,6 +248,18 @@ pub struct RuntimeHandle {
     /// Append-only log of non-fatal peer warnings.
     pub peer_warnings: Arc<Mutex<Vec<PeerWarning>>>,
 
+    /// Map of events rejected by `state-apply` during `replay_full`,
+    /// keyed by [`EventHash`] (the event's `wire_hash`) and valued with
+    /// the reject reason returned by the component.
+    ///
+    /// Per spec §4.4 / §14 edge-case 8: a Reject at apply time does not
+    /// remove the event from the DAG — it remains for future
+    /// re-evaluation under a different topo ordering — but it is not
+    /// committed into `state`. Surfacing the map here (review-finding
+    /// M-4) makes those drops observable for diagnostics rather than
+    /// silently swallowed.
+    pub dropped_at_apply: Arc<Mutex<HashMap<EventHash, String>>>,
+
     /// Latest state-digest published by the runtime.
     pub digest_watch: watch::Receiver<Vec<u8>>,
 
@@ -314,6 +326,15 @@ pub struct Runtime {
     equivocation_log: Arc<Mutex<Vec<EquivocationFlag>>>,
     /// Observation log — surfaced via [`RuntimeHandle::peer_warnings`].
     peer_warnings: Arc<Mutex<Vec<PeerWarning>>>,
+    /// Observation log — surfaced via [`RuntimeHandle::dropped_at_apply`].
+    ///
+    /// Populated by [`Runtime::replay_full`] whenever `state-apply`
+    /// returns [`ApplyOutcome::Rejected`] for an event already in the
+    /// DAG. Per spec §4.4 / §14 edge-case 8: the event is *not* removed
+    /// from the DAG (future state ordering may re-accept it); only the
+    /// state-materialization step skips it. Recording the reject reason
+    /// here (review-finding M-4) keeps the drop diagnosable.
+    dropped_at_apply: Arc<Mutex<HashMap<EventHash, String>>>,
     /// Watch-side of the digest stream; published on every replay.
     digest_watch_tx: watch::Sender<Vec<u8>>,
     /// Watch-side of the halt signal; populated on fatal runtime error.
@@ -358,6 +379,7 @@ impl Runtime {
         let drift_log = Arc::new(Mutex::new(Vec::new()));
         let equivocation_log = Arc::new(Mutex::new(Vec::new()));
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
+        let dropped_at_apply = Arc::new(Mutex::new(HashMap::new()));
         let (digest_watch_tx, digest_watch) = watch::channel(Vec::<u8>::new());
         let (halt_watch_tx, halt_watch) = watch::channel(None::<String>);
 
@@ -387,6 +409,7 @@ impl Runtime {
             drift_log: drift_log.clone(),
             equivocation_log: equivocation_log.clone(),
             peer_warnings: peer_warnings.clone(),
+            dropped_at_apply: dropped_at_apply.clone(),
             digest_watch_tx,
             halt_watch_tx,
             hlc_logical_counter: 0,
@@ -407,6 +430,7 @@ impl Runtime {
             drift_log,
             equivocation_log,
             peer_warnings,
+            dropped_at_apply,
             digest_watch,
             halt_watch,
         })
@@ -1042,16 +1066,38 @@ impl Runtime {
     fn replay_full(&mut self) -> Result<(), RuntimeError> {
         let order = self.dag.topo_sort();
         let mut state = Vec::new();
+        // Drops accumulated this replay. We clear `dropped_at_apply`
+        // wholesale at the end rather than during the loop so observers
+        // never see a transient empty map mid-replay; the publish is
+        // atomic from the consumer's perspective (single mutex op). Per
+        // spec §4.4 / §14 edge-case 8 a reject is per-replay, not
+        // sticky — future replays with a different topo ordering may
+        // accept the same event.
+        let mut drops: HashMap<EventHash, String> = HashMap::new();
         for hash in order {
             if let Some(event) = self.dag.get(&hash) {
                 let bytes = canonical_bincode().serialize(event)?;
                 let r = self.handle.apply(&state, &bytes)?;
-                if let ApplyOutcome::Accepted = r.outcome {
-                    state = r.new_state;
+                match r.outcome {
+                    ApplyOutcome::Accepted => state = r.new_state,
+                    ApplyOutcome::Rejected(reason) => {
+                        drops.insert(hash, reason);
+                    }
                 }
             }
         }
         state.clone_into(&mut self.state);
+        // Atomic publish of the new drops snapshot. Mutex poisoning
+        // would mean another task panicked while holding the map —
+        // unreachable because the runtime task is the only writer.
+        #[allow(clippy::expect_used)]
+        {
+            let mut guard = self
+                .dropped_at_apply
+                .lock()
+                .expect("dropped_at_apply mutex poisoned");
+            *guard = drops;
+        }
         let _ = self.digest_watch_tx.send(state);
         Ok(())
     }
