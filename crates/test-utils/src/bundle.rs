@@ -3,12 +3,14 @@
 use std::path::PathBuf;
 
 use bincode::Options;
+use myrhiza_kernel::BundleAddress;
 use myrhiza_manifest::schema::Manifest;
 use myrhiza_types::{EventHash, canonical_bincode};
 use tempfile::TempDir;
 
 use crate::manifest::{
-    deterministic_signing_key, helpers_only_state_apply_manifest_with_extra_cap, sign_manifest,
+    deterministic_signing_key, helpers_only_state_apply_manifest,
+    helpers_only_state_apply_manifest_with_extra_cap, sign_manifest,
 };
 
 /// A built test bundle: tempdir + manifest path + content bytes.
@@ -70,6 +72,60 @@ pub fn write_bundle(m: &Manifest, component_bytes: &[u8]) -> std::io::Result<Tes
         manifest_path: manifest_rel,
         content_bytes: component_bytes.to_vec(),
     })
+}
+
+/// Path to the counter-state-apply fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/counter-state-apply.wasm`
+/// via `CARGO_MANIFEST_DIR`. Test-utils sits at `crates/test-utils/`, so
+/// walking up two ancestors reaches the workspace root — same shape as
+/// every other crate under `crates/`.
+#[allow(clippy::expect_used)]
+fn counter_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/counter-state-apply.wasm")
+}
+
+/// Build a signed counter-state-apply bundle from the
+/// reproducibly-built fixture at `tests/fixtures/built/counter-state-apply.wasm`.
+/// Returns the [`TestBundle`] (with on-disk artifacts retained via the
+/// inner [`TempDir`]) and its [`BundleAddress`] (suitable for
+/// [`myrhiza_kernel::InstallFlow::load`]).
+///
+/// Requires `just build-fixtures` to have produced the wasm artifact.
+/// Used by both plan-A acceptance tests and plan-B-1 convergence tests.
+///
+/// # Panics
+/// Panics if the fixture wasm is missing or unreadable, or if the
+/// tempdir bundle write fails. Both indicate a broken test environment
+/// (forgot `just build-fixtures`, /tmp unwriteable) rather than a
+/// runtime condition the test should recover from. The matching
+/// `#[allow]` is the documented escape hatch per workspace
+/// `Cargo.toml` — `test-utils` is dev-only (`publish = false`).
+#[allow(clippy::expect_used, clippy::panic)]
+pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
+    let component_bytes = std::fs::read(counter_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "counter fixture missing at {}: {e} — run `just build-fixtures`",
+            counter_fixture_path().display()
+        )
+    });
+    let content_hash = EventHash::blake3(&component_bytes);
+
+    let mut manifest = helpers_only_state_apply_manifest();
+    let key = deterministic_signing_key(7);
+    sign_manifest(&mut manifest, &content_hash, &key);
+
+    let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
+    let addr = BundleAddress {
+        bundle_dir: test_bundle.bundle_dir.clone(),
+        manifest_path: test_bundle.manifest_path.clone(),
+    };
+    (test_bundle, addr)
 }
 
 /// Build a signed [`TestBundle`] around `component_bytes` whose manifest

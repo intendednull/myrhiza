@@ -19,7 +19,9 @@ use std::path::PathBuf;
 
 use myrhiza_backend::{Backend, BackendError};
 use myrhiza_kernel::{ApplyOutcome, BundleAddress, InstallFlow, StateApplyHandle};
-use myrhiza_test_utils::bundle::{build_counter_bundle_with_extra_cap, write_bundle};
+use myrhiza_test_utils::bundle::{
+    build_counter_bundle_with_extra_cap, build_signed_counter_bundle, write_bundle,
+};
 use myrhiza_test_utils::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest, sign_manifest,
 };
@@ -41,30 +43,6 @@ fn counter_fixture_path() -> PathBuf {
         .nth(2)
         .expect("workspace root is two levels above kernel crate manifest")
         .join("tests/fixtures/built/counter-state-apply.wasm")
-}
-
-/// Build a signed counter-state-apply bundle on disk. Used by the load
-/// + instantiate tests. Returns the test bundle (kept alive for tempdir
-///   RAII) and the bundle address pointing into it.
-fn build_signed_counter_bundle() -> (myrhiza_test_utils::bundle::TestBundle, BundleAddress) {
-    let component_bytes = std::fs::read(counter_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "counter fixture missing at {}: {e} — run `just build-fixtures`",
-            counter_fixture_path().display()
-        )
-    });
-    let content_hash = EventHash::blake3(&component_bytes);
-
-    let mut manifest = helpers_only_state_apply_manifest();
-    let key = deterministic_signing_key(7);
-    sign_manifest(&mut manifest, &content_hash, &key);
-
-    let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
-        bundle_dir: test_bundle.bundle_dir.clone(),
-        manifest_path: test_bundle.manifest_path.clone(),
-    };
-    (test_bundle, addr)
 }
 
 /// Covers: mvp.md §15.1, verification.md §22.1, distribution.md §10.5
