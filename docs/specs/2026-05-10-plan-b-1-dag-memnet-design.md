@@ -581,6 +581,7 @@ deterministically.
 
 On `GossipMessage::Drift(d)`:
 
+0. **Loopback filter (normative)**: if `d.signed_by_peer == self.peer_key.public`, this is the runtime's own emit returning via the broadcast channel. Drop silently — do NOT verify, do NOT compare, do NOT log. tokio broadcast (and any iroh-gossip equivalent in B-4) delivers messages to all subscribers including the publisher; without this filter, every emitted drift-message round-trips through verify + cache lookup + digest compare. Functionally a no-op (own digest matches own digest, silent success per step 4), but wasted CPU. Loopback filter is normative for predictable acceptance-test counting (e.g. tests that assert `peer_warnings` or `drift_log` entry counts).
 1. Verify `d.signature` over `canonical_bincode().serialize(&DriftSignedPayload { anchor: d.anchor.clone(), digest: d.digest, digest_format: d.digest_format.clone() })` against `d.signed_by_peer` (using `myrhiza_manifest::verify_signature`). Field order matches §8.1 declaration (anchor, digest, digest_format) — MUST match the emit-side order in §8.2. Fail → drop.
 2. Match against own state. **Anchor identity is `d.anchor.author_seq_vec` only — `event_hash` is informative metadata and MUST NOT be used for anchor equality**. Two peers reaching the same `(author, max_seq)` vector are at the same materialized state regardless of which event triggered the emit (different insertion orderings can pin different `event_hash` values for the same author-seq tuple). Match:
    - For each `AuthorSeq { author, max_seq }` in `d.anchor.author_seq_vec`:
@@ -600,6 +601,24 @@ On `GossipMessage::Drift(d)`:
 Pending stash for not-yet-materialized anchors: `Runtime::incoming_drift_pending: BTreeMap<Vec<AuthorSeq>, Vec<DriftMessage>>` capped at 256; oldest evicted.
 
 **Drain trigger** (normative): after every `replay_full` completes (i.e., after every event-batch insertion advances `self.state`), the runtime invokes `drain_drift_stash()`. This function builds the current `current_seq_map: BTreeMap<AuthorPubkey, u64>` from `dag.author_seq_vec()`, then iterates `incoming_drift_pending`. For each stashed anchor whose `author_seq_vec` is **covered** by current state — defined as: for every `AuthorSeq { author, max_seq }` in the stashed anchor, `current_seq_map.get(&author).copied().unwrap_or(0) >= max_seq` — remove from stash and re-run §8.4 step 2 onward on each stashed `DriftMessage`.
+
+**Implementation idiom (normative)**: Rust's borrow checker forbids iterating a `BTreeMap` while removing entries. Collect covered keys into a `Vec` first, then iterate the `Vec` to remove + process:
+
+```rust
+let covered_keys: Vec<Vec<AuthorSeq>> = self.incoming_drift_pending.keys()
+    .filter(|asv| asv.iter().all(|a| {
+        current_seq_map.get(&a.author).copied().unwrap_or(0) >= a.max_seq
+    }))
+    .cloned()
+    .collect();
+for key in covered_keys {
+    if let Some(msgs) = self.incoming_drift_pending.remove(&key) {
+        for m in msgs { self.process_drift_message(m).await; }
+    }
+}
+```
+
+`process_drift_message` is §8.4 steps 1-4 (or 2-4 if signature already verified at stash time — the spec leaves this an implementation choice; verifying once at stash time is the default to avoid recomputing the same Ed25519 verify per drain).
 
 **Why decoupled from emit**: own emit only fires at `topo_index % drift_interval == 0`. Coupling stash drain to emit means anchors materialized between emits sit unprocessed for up to `drift_interval - 1` events. Production configs with `drift_interval = 1024` would delay stashed drift comparisons by ~1024 events. Decoupled drain runs at every state advancement, ensuring timely comparison regardless of emit cadence.
 
@@ -745,6 +764,36 @@ Single-task ownership of `Runtime` internals; no `Mutex` on `EventDag`.
 External observation via `Arc<Mutex<Vec<_>>>` log handles + `watch`
 channels.
 
+**`StateApplyHandle` purity guarantee (normative, load-bearing)**:
+`StateApplyHandle::apply(prior_state, event_bytes) -> ApplyResult` and
+`StateApplyHandle::pre_check(...)` MUST be pure functions of their
+input bytes. Each invocation MUST:
+- Initialize the WASM linear memory's view of state from the
+  `prior_state` argument bytes (no carrying over from prior calls).
+- Reset the wasmtime `Store`'s fuel counter to the per-event budget
+  (`MAX_FUEL_V1 = 10_000_000` per determinism.md §5.3) before
+  executing the guest call.
+- Return `new_state` as fresh bytes derived from the guest function's
+  output (no in-place mutation of `prior_state`).
+
+The wasmtime `Store` MAY be reused across calls for `Engine` /
+`InstancePre` caching (cold-instantiation cost dominance per
+browser-native.md §14.5), but its **per-event observable state**
+(linear memory of state, fuel) MUST be reset between calls. This is
+the foundational guarantee on which B-1's drift-drain design rests:
+`drain_drift_stash`'s cache-miss subset replay (§8.4 step 3) drives
+the handle through an arbitrary event subset, then the main loop's
+next `replay_full` drives it through the full canonical sequence.
+Both paths share the same `StateApplyHandle`; correctness depends on
+each call being independent.
+
+Plan-A's `crates/kernel/src/state_apply.rs::StateApplyHandle::apply`
+already satisfies this contract (its signature passes `prior_state`
+by reference and returns `new_state` by value); B-1 explicitly states
+the guarantee as a load-bearing invariant. Any implementer adding
+cross-call Store mutation in B-1 or later violates this invariant and
+breaks drift comparison correctness.
+
 ### 11.2 Loop
 
 ```rust
@@ -824,6 +873,7 @@ async fn author(&mut self, payload: Vec<u8>, deps: BTreeSet<EventHash>)
     let inserted = self.dag.insert(event.clone())?;
     if matches!(inserted, Inserted::NewlyApplied { .. }) {
         self.replay_full()?;
+        self.drain_drift_stash().await;   // same trigger as §7.2 step 3
         self.maybe_emit_drift(event.wire_hash()).await;
     }
     // Broadcast.
