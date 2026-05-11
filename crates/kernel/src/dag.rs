@@ -400,3 +400,111 @@ mod tests_genesis {
         assert!(matches!(r, Inserted::AlreadyKnown));
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests_chain {
+    use super::tests_genesis::build_genesis;
+    use super::*;
+    use crate::identity::AuthorKeypair;
+    use myrhiza_types::{Event, Hlc};
+    use std::collections::BTreeSet;
+
+    pub(super) fn build_next(kp: &AuthorKeypair, prev: &Event, payload: Vec<u8>) -> Event {
+        let body = Event {
+            author: kp.author,
+            seq: prev.seq + 1,
+            prev: prev.wire_hash(),
+            deps: BTreeSet::new(),
+            hlc: Hlc {
+                wall_ms: 0,
+                logical: 0,
+            },
+            payload,
+            signature: [0; 64],
+        };
+        let body_hash = body.hash_signed_body();
+        let sig = kp.sign_body_hash(body_hash);
+        Event {
+            signature: sig,
+            ..body
+        }
+    }
+
+    pub(super) fn fresh_dag_with_genesis() -> (EventDag, AuthorKeypair, Event) {
+        let bundle_hash = BundleHash::from_bytes([0xAA; 32]);
+        let seed = [0x11; 32];
+        let topic = Topic::derive(&bundle_hash, &seed, "main");
+        let mut dag = EventDag::new(topic, bundle_hash, "main".into());
+        let kp = AuthorKeypair::deterministic(1);
+        let g = build_genesis(&kp, bundle_hash, seed, "main", vec![]);
+        dag.insert(g.clone()).expect("genesis");
+        (dag, kp, g)
+    }
+
+    #[test]
+    fn next_event_inserts_after_genesis() {
+        let (mut dag, kp, g) = fresh_dag_with_genesis();
+        let e2 = build_next(&kp, &g, vec![0xCA]);
+        let r = dag.insert(e2).expect("insert");
+        assert!(matches!(r, Inserted::NewlyApplied { topo_index: 1, .. }));
+    }
+
+    #[test]
+    fn out_of_order_seq_rejected_as_invalid_chain() {
+        let (mut dag, kp, g) = fresh_dag_with_genesis();
+        let e2 = build_next(&kp, &g, vec![]);
+        // skip ahead — build e3 against e2 BUT don't insert e2.
+        let e3 = build_next(&kp, &e2, vec![]);
+        let r = dag.insert(e3).expect_err("must reject");
+        assert!(matches!(
+            r,
+            DagError::InvalidChain {
+                expected_seq: 2,
+                got_seq: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn equivocation_at_genesis_seq_one_returns_equivocation_error() {
+        let bundle_hash = BundleHash::from_bytes([0xAA; 32]);
+        let seed = [0x11; 32];
+        let topic = Topic::derive(&bundle_hash, &seed, "main");
+        let mut dag = EventDag::new(topic, bundle_hash, "main".into());
+        let kp = AuthorKeypair::deterministic(1);
+
+        let g1 = build_genesis(&kp, bundle_hash, seed, "main", vec![0xAA]);
+        let g2 = build_genesis(&kp, bundle_hash, seed, "main", vec![0xBB]); // different payload
+        assert_ne!(g1.wire_hash(), g2.wire_hash());
+
+        dag.insert(g1.clone()).expect("first genesis");
+        let r = dag.insert(g2.clone()).expect_err("must reject");
+        match r {
+            DagError::Equivocation {
+                author,
+                seq,
+                local_hash,
+                remote_hash,
+            } => {
+                assert_eq!(author, kp.author);
+                assert_eq!(seq, 1);
+                assert_eq!(local_hash, g1.wire_hash());
+                assert_eq!(remote_hash, g2.wire_hash());
+            }
+            other => panic!("expected Equivocation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn equivocation_at_non_genesis_seq_returns_equivocation_error() {
+        let (mut dag, kp, g) = fresh_dag_with_genesis();
+        let e2a = build_next(&kp, &g, vec![0xCA]);
+        let e2b = build_next(&kp, &g, vec![0xFE]);
+        assert_ne!(e2a.wire_hash(), e2b.wire_hash());
+        dag.insert(e2a.clone()).expect("first");
+        let r = dag.insert(e2b.clone()).expect_err("equivocation");
+        assert!(matches!(r, DagError::Equivocation { seq: 2, .. }));
+    }
+}
