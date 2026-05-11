@@ -28,6 +28,6 @@ pub mod event;
 pub use event::Event;
 
 pub mod dag;
-pub use dag::GenesisV1;
+pub use dag::{AuthorHead, AuthorSeq, DriftAnchor, GenesisV1};
 
 pub mod limits;
