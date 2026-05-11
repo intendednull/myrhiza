@@ -165,6 +165,20 @@ impl EventDag {
     /// pointing outside the subset (which would deadlock if we used
     /// the full-DAG indegree).
     ///
+    /// **Child-decrement step (normative)**: when popping a node from
+    /// the ready set and decrementing its children, iterate
+    /// `self.parents_to_children[&next]` and decrement ONLY those
+    /// children present in `sub_indegree` (i.e. `sub_indegree.get_mut(child)`
+    /// returns `Some`); silently skip children not in `sub_indegree`
+    /// (they are outside the subset). A naive copy of `topo_sort`'s
+    /// `.expect("child has indegree entry")` would panic on non-subset
+    /// children — `topo_sort_subset` MUST use `if let Some(deg) =
+    /// sub_indegree.get_mut(child) { ... }` instead.
+    ///
+    /// **Empty subset**: if `filter` returns false for every event,
+    /// `sub_indegree` is empty, the ready set is empty, the loop does
+    /// not execute, and the function returns an empty `Vec`.
+    ///
     /// Returns subset events in canonical topo-order (lex byte-tie-break
     /// on `EventHash`, same as `topo_sort`).
     pub fn topo_sort_subset<F: Fn(&Event) -> bool>(&self, filter: F) -> Vec<EventHash>;
@@ -460,7 +474,8 @@ The Runtime, on receiving each message:
   - `Ok(NewlyApplied)`:
     1. Drain `PendingBuffer.newly_satisfied(&self.dag.known_hashes())` in a loop: insert each returned event into DAG (which may further unblock subsequent stashed events), repeating until `newly_satisfied` returns empty. Equivocation errors during drain are logged-and-continued same as direct receive.
     2. Call `replay_full` ONCE after the drain loop settles — do NOT replay after each individual `dag.insert` in the drain.
-    3. Check the highest `topo_index` produced by the batch against the drift trigger; emit at most one drift-message per batch even if multiple anchors were crossed (skipping intermediate anchors is acceptable — the rate cap §8.3 would suppress them anyway).
+    3. Call `drain_drift_stash()` (per §8.4) to process any stashed drift-messages whose anchors are now covered by the updated `author_seq_vec`. Independent of emit cadence.
+    4. Check the highest `topo_index` produced by the batch against the drift trigger; emit at most one drift-message per batch even if multiple anchors were crossed (skipping intermediate anchors is acceptable — the rate cap §8.3 would suppress them anyway).
 - **`HeadsSummary(remote)`**: compute diff against local `dag.author_heads()`. For each `AuthorHead { author, seq: remote_seq, hash: remote_hash }` in `remote`, compare to `(local_seq, local_hash)`:
   - Local has no entry for `author`, or `local_seq < remote_seq` → request the missing range via `EventRequest(author, local_seq+1, remote_seq)` (with `local_seq = 0` when absent).
   - `local_seq > remote_seq` → **first** check `chain.seq_to_hash[remote_seq] == remote_hash`; if mismatch, flag equivocation (`Runtime::equivocation_log` entry, `peer = Some(sender)`) and DO NOT push events for this author — the chains have diverged at `remote_seq` and pushing past that point would help propagate one branch over the other. If the hash check passes, publish events `(remote_seq+1 ..= local_seq)` for that author as individual `Event` messages.
@@ -542,7 +557,7 @@ After each `dag.insert(...)` returning `NewlyApplied { topo_index, hash }`:
   - `digest = blake3::hash(&state_digest_bytes).into()`
   - Build anchor: `event_hash = hash`, `author_seq_vec = dag.author_seq_vec()`.
   - Cache `(author_seq_vec → digest)` in `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` (keyed on `author_seq_vec` only; `event_hash` is metadata only — see §8.4).
-  - Sign: build `DriftSignedPayload { anchor: anchor.clone(), digest_format: "bincode-1.3".into(), digest }`, serialize via `canonical_bincode().serialize(&payload)`, then `signature = peer_key.sign(&serialized_bytes)`.
+  - Sign: build `DriftSignedPayload { anchor: anchor.clone(), digest, digest_format: "bincode-1.3".into() }` (field order matches §8.1 declaration: anchor, digest, digest_format), serialize via `canonical_bincode().serialize(&payload)`, then `signature = peer_key.sign(&serialized_bytes)`.
   - Publish `GossipMessage::Drift(DriftMessage { anchor, digest, digest_format: "bincode-1.3".into(), signed_by_peer: peer_key.public, signature })`.
 
 ### 8.3 Rate cap
@@ -566,7 +581,7 @@ deterministically.
 
 On `GossipMessage::Drift(d)`:
 
-1. Verify `d.signature` over `canonical_bincode().serialize(&DriftSignedPayload { anchor: d.anchor.clone(), digest_format: d.digest_format.clone(), digest: d.digest })` against `d.signed_by_peer` (using `myrhiza_manifest::verify_signature`). Fail → drop.
+1. Verify `d.signature` over `canonical_bincode().serialize(&DriftSignedPayload { anchor: d.anchor.clone(), digest: d.digest, digest_format: d.digest_format.clone() })` against `d.signed_by_peer` (using `myrhiza_manifest::verify_signature`). Field order matches §8.1 declaration (anchor, digest, digest_format) — MUST match the emit-side order in §8.2. Fail → drop.
 2. Match against own state. **Anchor identity is `d.anchor.author_seq_vec` only — `event_hash` is informative metadata and MUST NOT be used for anchor equality**. Two peers reaching the same `(author, max_seq)` vector are at the same materialized state regardless of which event triggered the emit (different insertion orderings can pin different `event_hash` values for the same author-seq tuple). Match:
    - For each `AuthorSeq { author, max_seq }` in `d.anchor.author_seq_vec`:
      - Local `chain.head_seq < max_seq` → anchor not yet materialized locally → stash and exit.
@@ -575,13 +590,18 @@ On `GossipMessage::Drift(d)`:
 3. Local cache: `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` keyed on `author_seq_vec` (not full `DriftAnchor`). Look up using `d.anchor.author_seq_vec`. Cache miss → anchor was not an emit position locally; compute digest now by anchor-bounded replay:
    - **Build a lookup map** from the anchor's `Vec<AuthorSeq>`: `let bound: BTreeMap<AuthorPubkey, u64> = d.anchor.author_seq_vec.iter().map(|a| (a.author, a.max_seq)).collect();` — converts the canonical `Vec` into an O(log n) lookup for the filter.
    - **Replay subset**: call `dag.topo_sort_subset(|e| bound.get(&e.author).map_or(false, |max| e.seq <= *max))`. **Authors NOT listed in `author_seq_vec` are EXCLUDED entirely — `bound.get(&e.author) == None` → filter returns false → event omitted.** Events from listed authors with `seq > max_seq` are also excluded. `topo_sort_subset` handles the indegree correctly (per §4.2 — events with deps pointing outside the subset have those deps treated as absent, so they still reach indegree 0 within the subset).
-   - **Materialize**: replay through the subset events via `handle.apply(state, canonical(event))` accumulating state; call `handle.state_digest(&state)`; hash with BLAKE3.
+   - **Materialize**: initialize `let mut state: Vec<u8> = Vec::new();` (identical to `replay_full` in §4.4 — the subset always includes the genesis event, which initializes state from the genesis payload). For each event hash in subset-topo-order: `state = handle.apply(&state, canonical_bincode().serialize(event)?)?.new_state`. After the loop, compute `state_digest_bytes = handle.state_digest(&state)?` and `digest = blake3::hash(&state_digest_bytes).into()`.
    - **Why excluded**: the emitter computed its digest from a state materialized at the moment its own `author_seq_vec` was the head set. Including events outside that frontier produces a digest the emitter never saw.
+   - **Performance note** (carry-over to B-4): the cache-miss replay path is a blocking O(N) wasmtime call sequence inside an async task. For B-1's bounded test scale this is fine, but B-4 should evaluate offloading to `spawn_blocking` for production conditions where anchor-bounded replay may take seconds. Same pattern as §11.2's biased-select starvation note.
 4. Compare cached/computed digest against `d.digest`.
    - Match → log success (no surface; success is silent).
    - Mismatch → push `DriftDetected { peer: d.signed_by_peer, anchor: d.anchor, local_digest: own, remote_digest: d.digest }` to `Runtime::drift_log`. Acceptance tests inspect this.
 
-Pending stash for not-yet-materialized anchors: `Runtime::incoming_drift_pending: BTreeMap<Vec<AuthorSeq>, Vec<DriftMessage>>` capped at 256; oldest evicted. When own emit advances state to cover a stashed anchor, drain and process.
+Pending stash for not-yet-materialized anchors: `Runtime::incoming_drift_pending: BTreeMap<Vec<AuthorSeq>, Vec<DriftMessage>>` capped at 256; oldest evicted.
+
+**Drain trigger** (normative): after every `replay_full` completes (i.e., after every event-batch insertion advances `self.state`), the runtime invokes `drain_drift_stash()`. This function builds the current `current_seq_map: BTreeMap<AuthorPubkey, u64>` from `dag.author_seq_vec()`, then iterates `incoming_drift_pending`. For each stashed anchor whose `author_seq_vec` is **covered** by current state — defined as: for every `AuthorSeq { author, max_seq }` in the stashed anchor, `current_seq_map.get(&author).copied().unwrap_or(0) >= max_seq` — remove from stash and re-run §8.4 step 2 onward on each stashed `DriftMessage`.
+
+**Why decoupled from emit**: own emit only fires at `topo_index % drift_interval == 0`. Coupling stash drain to emit means anchors materialized between emits sit unprocessed for up to `drift_interval - 1` events. Production configs with `drift_interval = 1024` would delay stashed drift comparisons by ~1024 events. Decoupled drain runs at every state advancement, ensuring timely comparison regardless of emit cadence.
 
 ## 9. Topic-ID + genesis
 
