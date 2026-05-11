@@ -88,81 +88,143 @@ struct Component;
 
 export!(Component);
 
-// Hand-rolled fixed-width big-endian wire format. We deliberately do
-// NOT use serde+bincode here even though the production state-apply
-// path will use canonical bincode at the application level — the
-// reason is that linking serde_core into a wasm32-unknown-unknown
-// `#![no_std]` binary unconditionally pulls in `<f64 as Display>::fmt`
-// (visit_f64 / visit_f32 trait methods, error-message format paths)
-// even when the deriving struct uses no float types. Those float
-// instructions trip the byte-level float-ban lint per
-// determinism.md §5.2 at instantiation time.
+// Hand-rolled byte-offset decoder for canonical bincode Event envelopes.
+// We deliberately do NOT pull in the canonical serde+bincode derive
+// here: linking `serde_core` into a wasm32-unknown-unknown `#![no_std]`
+// binary unconditionally pulls in `<f64 as Display>::fmt` (visit_f64 /
+// visit_f32 trait methods, error-message format paths) even when the
+// deriving structs use no float types. Those float instructions trip
+// the byte-level float-ban lint per determinism.md §5.2 at
+// instantiation time.
 //
-// State wire format (little-endian-tagged but content is big-endian
-// to match the spec's canonical-bincode discipline as closely as a
-// hand rolled encoder can):
-//   state    = empty | i64-be(value)        // 0 or 8 bytes
-//   event    = 0u8 i64-be(by) | 1u8         // 1+8 bytes (Increment) or 1 byte (Reset)
+// Canonical bincode (big-endian fixint) Event layout:
+//   author          : AuthorPubkey, serde_bytes => 8-byte len (=32) + 32 bytes = 40
+//   seq             : u64           => 8 bytes BE
+//   prev            : EventId,      serde_bytes => 8-byte len (=32) + 32 bytes = 40
+//   deps_len        : u64 list-len  => 8 bytes BE
+//   deps[..]        : EventId * N   => 40 bytes each (only N=0 supported)
+//   hlc             : Hlc           => 16 bytes (struct of u64 + u64)
+//   payload_len     : u64           => 8 bytes BE
+//   payload[..]     : Vec<u8> serde_bytes contents
+//   signature_len   : u64           => 8 bytes BE (=64)
+//   signature[..]   : 64 bytes
 //
-// This is a single global counter; no per-key map. The kernel-tier
-// acceptance test that exercises this fixture knows the shape and
-// asserts the resulting 8 raw bytes decode to 42.
+// For B-1 fixture-authored events deps is always empty. If the kernel
+// hands us an envelope with non-empty deps we Reject — the fixture's
+// contract is "single-author linear counter".
+//
+// GenesisV1 payload layout (seq == 1):
+//   seed            : [u8; 32]      => 32 raw bytes (no length prefix in
+//                                       canonical bincode for fixed arrays)
+//   founder_pubkey  : AuthorPubkey, serde_bytes => 8 + 32 = 40 bytes
+//   app_payload     : Vec<u8> serde_bytes => 8-byte len + N bytes
+//
+// Non-genesis payload (seq > 1): an 8-byte BE i64 increment.
+//
+// State wire format:
+//   The initial state IS the Genesis `app_payload` verbatim — the
+//   acceptance test seeds Genesis with `0_i64.to_be_bytes()` so the
+//   resulting state is always 8 bytes containing the running i64
+//   counter in big-endian.
 
-const TAG_INCREMENT: u8 = 0;
-const TAG_RESET: u8 = 1;
+const SEQ_OFFSET: usize = 40;
+const PREV_OFFSET: usize = SEQ_OFFSET + 8;
+const DEPS_LEN_OFFSET: usize = PREV_OFFSET + 40;
+// Assumes deps_len == 0 (B-1 fixture contract).
+const HLC_OFFSET: usize = DEPS_LEN_OFFSET + 8;
+const PAYLOAD_LEN_OFFSET: usize = HLC_OFFSET + 16;
 
-fn decode_state(bytes: &[u8]) -> Option<i64> {
-    if bytes.is_empty() {
-        return Some(0);
-    }
-    let arr: &[u8; 8] = bytes.try_into().ok()?;
-    Some(i64::from_be_bytes(*arr))
+// GenesisV1 payload offsets.
+const GENESIS_APP_PAYLOAD_LEN_OFFSET: usize = 32 + 40; // seed + founder_pubkey
+
+fn reject(msg: &str) -> (Verdict, Vec<u8>) {
+    (
+        Verdict::Reject(alloc::string::String::from(msg)),
+        Vec::new(),
+    )
 }
 
-fn encode_state(value: i64) -> Vec<u8> {
-    value.to_be_bytes().to_vec()
+fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let slice = bytes.get(offset..end)?;
+    let arr: [u8; 8] = slice.try_into().ok()?;
+    Some(u64::from_be_bytes(arr))
 }
 
 impl Guest for Component {
     fn apply(prior_state: Vec<u8>, event: Vec<u8>) -> (Verdict, Vec<u8>) {
-        let Some(state) = decode_state(&prior_state) else {
-            return (Verdict::Reject(alloc::string::String::from("malformed prior state")), Vec::new());
+        if event.len() < PAYLOAD_LEN_OFFSET + 8 {
+            return reject("event envelope shorter than fixed prefix");
+        }
+        let Some(seq) = read_u64_be(&event, SEQ_OFFSET) else {
+            return reject("failed to read seq");
+        };
+        let Some(deps_len) = read_u64_be(&event, DEPS_LEN_OFFSET) else {
+            return reject("failed to read deps_len");
+        };
+        if deps_len != 0 {
+            // B-1 fixture only handles linear single-author chains.
+            return reject("non-empty deps not supported");
+        }
+        let Some(payload_len) = read_u64_be(&event, PAYLOAD_LEN_OFFSET) else {
+            return reject("failed to read payload_len");
+        };
+        let payload_len = payload_len as usize;
+        let payload_start = PAYLOAD_LEN_OFFSET + 8;
+        let payload_end = match payload_start.checked_add(payload_len) {
+            Some(e) => e,
+            None => return reject("payload length overflow"),
+        };
+        let Some(payload) = event.get(payload_start..payload_end) else {
+            return reject("payload extends past event bytes");
         };
 
-        let Some((tag, rest)) = event.split_first() else {
-            return (Verdict::Reject(alloc::string::String::from("empty event")), Vec::new());
-        };
-
-        let new_state = match *tag {
-            TAG_INCREMENT => {
-                let arr: &[u8; 8] = match rest.try_into() {
-                    Ok(a) => a,
-                    Err(_) => {
-                        return (
-                            Verdict::Reject(alloc::string::String::from(
-                                "increment payload not 8 bytes",
-                            )),
-                            Vec::new(),
-                        );
-                    }
-                };
-                let by = i64::from_be_bytes(*arr);
-                state.saturating_add(by)
+        if seq == 1 {
+            // Genesis: decode GenesisV1 and return app_payload as initial state.
+            if payload.len() < GENESIS_APP_PAYLOAD_LEN_OFFSET + 8 {
+                return reject("genesis payload shorter than fixed prefix");
             }
-            TAG_RESET => 0,
-            _ => {
-                return (
-                    Verdict::Reject(alloc::string::String::from("unknown event tag")),
-                    Vec::new(),
-                );
-            }
-        };
+            let Some(app_len) = read_u64_be(payload, GENESIS_APP_PAYLOAD_LEN_OFFSET) else {
+                return reject("failed to read genesis app_payload_len");
+            };
+            let app_len = app_len as usize;
+            let start = GENESIS_APP_PAYLOAD_LEN_OFFSET + 8;
+            let end = match start.checked_add(app_len) {
+                Some(e) => e,
+                None => return reject("genesis app_payload length overflow"),
+            };
+            let Some(app_payload) = payload.get(start..end) else {
+                return reject("genesis app_payload extends past payload");
+            };
+            return (Verdict::Accept, app_payload.to_vec());
+        }
 
-        (Verdict::Accept, encode_state(new_state))
+        // Non-genesis: payload is 8-byte BE i64 increment, prior_state is
+        // 8-byte BE i64 counter. Sum and return.
+        if payload.len() != 8 {
+            return reject("non-genesis payload must be 8 bytes");
+        }
+        if prior_state.len() != 8 {
+            return reject("prior_state must be 8 bytes (i64)");
+        }
+        let increment_arr: [u8; 8] = match payload.try_into() {
+            Ok(a) => a,
+            Err(_) => return reject("increment slice-to-array failed"),
+        };
+        let current_arr: [u8; 8] = match prior_state.as_slice().try_into() {
+            Ok(a) => a,
+            Err(_) => return reject("prior_state slice-to-array failed"),
+        };
+        let increment = i64::from_be_bytes(increment_arr);
+        let current = i64::from_be_bytes(current_arr);
+        let new = current.saturating_add(increment);
+        (Verdict::Accept, new.to_be_bytes().to_vec())
     }
 
     fn state_digest(state: Vec<u8>) -> Vec<u8> {
-        // Already canonical big-endian bytes of the i64 counter.
+        // State is the raw bytes the kernel persists — the acceptance
+        // test seeds Genesis with the canonical 8-byte BE i64 zero, so
+        // this is already a stable digest.
         state
     }
 }
