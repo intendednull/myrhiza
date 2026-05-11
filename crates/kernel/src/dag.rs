@@ -433,6 +433,13 @@ impl EventDag {
     /// children-decrement step uses `get_mut` (not `expect`) so that
     /// children outside the subset are silently skipped — they are
     /// not errors, they are just not part of this sort.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the produced sort is shorter than the input subset.
+    /// By DAG construction the subset is acyclic, so a mismatch
+    /// indicates internal indegree-bookkeeping drift — an unrecoverable
+    /// state. Mirrors [`Self::topo_sort`]'s structural-invariant guard.
     pub fn topo_sort_subset<F: Fn(&Event) -> bool>(&self, filter: F) -> Vec<EventHash> {
         // Build local sub_indegree from in-subset parents only.
         let in_subset: BTreeSet<EventHash> = self
@@ -495,6 +502,24 @@ impl EventDag {
                     }
                 }
             }
+        }
+        // Structural-invariant guard (review M-10): mirror `topo_sort`'s
+        // cardinality check. `out.len() < in_subset.len()` means some
+        // subset member never reached indegree 0 — either the subset
+        // induces a cycle (impossible by DAG construction) or indegree
+        // bookkeeping has drifted from `parents_to_children`. Either way,
+        // returning a truncated sort would silently break the caller's
+        // anchor-bounded replay invariants (spec §8.4 step 3). Panic
+        // here so the bug surfaces at the boundary instead of becoming
+        // a downstream convergence drift.
+        #[allow(clippy::panic, clippy::manual_assert)]
+        if out.len() != in_subset.len() {
+            panic!(
+                "topo_sort_subset produced {} events from a subset of {} — \
+                 subset has a cycle or indegree bookkeeping has drifted",
+                out.len(),
+                in_subset.len(),
+            );
         }
         out
     }
