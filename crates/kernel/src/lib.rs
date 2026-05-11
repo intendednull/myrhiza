@@ -25,3 +25,5 @@ pub mod dag;
 pub use dag::{AuthorChain, DagError, EventDag, Inserted};
 
 pub mod pending;
+
+pub mod drift;
