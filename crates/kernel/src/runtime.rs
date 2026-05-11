@@ -19,7 +19,7 @@ use bincode::Options;
 use myrhiza_network::{GossipMessage, NetError, Network, SubError, Subscription};
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DriftAnchor, DriftMessage, DriftSignedPayload, Event,
-    EventHash, HeadsSummary, Hlc, PeerPubkey, Topic, canonical_bincode,
+    EventHash, HeadsRequest, HeadsSummary, Hlc, PeerPubkey, Topic, canonical_bincode,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -486,9 +486,305 @@ impl Runtime {
     // state-apply call into a Send future) so we keep the signature
     // stable across the Task 17 / 18 / 19 commit boundary.
 
-    /// Stub: drops the inbound message. Replaced in Task 19.
-    #[allow(clippy::unused_async)]
-    async fn handle_message(&mut self, _msg: GossipMessage) -> Result<(), RuntimeError> {
+    /// Dispatch an inbound gossip message to the variant-specific
+    /// handler. See plan-B-1 spec §11.5 (Event), §7.1
+    /// (`HeadsSummary` + `HeadsRequest`), §8.4 (Drift).
+    async fn handle_message(&mut self, msg: GossipMessage) -> Result<(), RuntimeError> {
+        match msg {
+            GossipMessage::Event(e) => self.handle_event(e).await?,
+            GossipMessage::HeadsSummary(h) => self.handle_heads_summary(h).await?,
+            GossipMessage::HeadsRequest(r) => self.handle_heads_request(r).await?,
+            GossipMessage::Drift(d) => self.process_drift_message(d).await,
+        }
+        Ok(())
+    }
+
+    /// Insert an inbound event into the DAG, drain any pending events
+    /// that may now be insertable, then replay + drift-drain + maybe
+    /// emit a single drift message for the entire batch.
+    ///
+    /// §7.2: equivocation is non-fatal — log + continue (both for the
+    /// direct-receive insert and any during-drain inserts).
+    /// §11.5 / plan-review C-3: at most one drift emission per batch,
+    /// using the highest topological index observed.
+    async fn handle_event(&mut self, event: Event) -> Result<(), RuntimeError> {
+        match self.dag.insert(event.clone()) {
+            Ok(Inserted::NewlyApplied { topo_index, hash }) => {
+                let mut last_emit_index = topo_index;
+                let mut last_emit_hash = hash;
+                // Drain pending events that may now be insertable.
+                loop {
+                    let known = self.dag.known_hashes();
+                    let ready = self.pending.newly_satisfied(&known);
+                    if ready.is_empty() {
+                        break;
+                    }
+                    for e in ready {
+                        match self.dag.insert(e) {
+                            Ok(Inserted::NewlyApplied {
+                                topo_index: ti,
+                                hash: h,
+                            }) => {
+                                last_emit_index = ti;
+                                last_emit_hash = h;
+                            }
+                            Err(DagError::Equivocation {
+                                author,
+                                seq,
+                                local_hash,
+                                remote_hash,
+                            }) => {
+                                #[allow(clippy::expect_used)]
+                                self.equivocation_log
+                                    .lock()
+                                    .expect("equivocation_log mutex poisoned")
+                                    .push(EquivocationFlag {
+                                        author,
+                                        seq,
+                                        local_hash,
+                                        remote_hash,
+                                        peer: None,
+                                    });
+                            }
+                            // AlreadyKnown / Pending: no further action.
+                            // Other DagErrors (sig / genesis / chain):
+                            // drop silently — byzantine input, no
+                            // convergence impact.
+                            Ok(Inserted::AlreadyKnown | Inserted::Pending(_)) | Err(_) => {}
+                        }
+                    }
+                }
+                self.replay_full()?;
+                self.drain_drift_stash().await;
+                // Emit at most one drift per batch — using highest
+                // topo_index seen during the drain (plan-review C-3).
+                self.maybe_emit_drift(last_emit_index, last_emit_hash).await;
+            }
+            Ok(Inserted::Pending(missing)) => {
+                self.pending.insert(event.clone(), missing.clone());
+                self.request_missing_authors(&missing).await;
+            }
+            Err(DagError::Equivocation {
+                author,
+                seq,
+                local_hash,
+                remote_hash,
+            }) => {
+                #[allow(clippy::expect_used)]
+                self.equivocation_log
+                    .lock()
+                    .expect("equivocation_log mutex poisoned")
+                    .push(EquivocationFlag {
+                        author,
+                        seq,
+                        local_hash,
+                        remote_hash,
+                        peer: None,
+                    });
+            }
+            // AlreadyKnown: no-op.
+            // Other DagErrors (sig / genesis / chain): drop silently —
+            // byzantine input, no convergence impact.
+            Ok(Inserted::AlreadyKnown) | Err(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Request missing causal dependencies by broadcasting a
+    /// `HeadsSummary` — the peer holding the missing events will see
+    /// they are ahead of us on some author and push the gap. We don't
+    /// know which authors own which missing hashes, so we use the
+    /// heads-summary nudge rather than a targeted `HeadsRequest`.
+    async fn request_missing_authors(&mut self, missing: &BTreeSet<EventHash>) {
+        let _ = self.publish_heads_summary().await;
+        let _ = missing;
+    }
+
+    /// Diff remote per-author tips against ours (§7.1):
+    /// - Behind on some authors → enqueue paginated `HeadsRequest`s.
+    /// - Tied with mismatched hash → log equivocation.
+    /// - Ahead → verify our `seq_to_hash[remote_seq] == remote_hash`
+    ///   before pushing the gap; flag equivocation if it doesn't.
+    ///
+    /// Also pushes our events for authors the remote doesn't know
+    /// about, and surfaces a `KernelFuelTableMismatch` warning when
+    /// fuel-table versions disagree (§11.7, non-fatal).
+    #[allow(clippy::too_many_lines)]
+    async fn handle_heads_summary(&mut self, remote: HeadsSummary) -> Result<(), RuntimeError> {
+        if remote.kernel_fuel_table_version != self.cfg.kernel_fuel_table_version {
+            #[allow(clippy::expect_used)]
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::KernelFuelTableMismatch {
+                    peer: None,
+                    remote_version: remote.kernel_fuel_table_version,
+                    local_version: self.cfg.kernel_fuel_table_version,
+                });
+        }
+        let local_heads = self.dag.author_heads();
+        let local_map: BTreeMap<AuthorPubkey, (u64, EventHash)> = local_heads
+            .iter()
+            .map(|h| (h.author, (h.seq, h.hash)))
+            .collect();
+        let remote_authors: BTreeSet<AuthorPubkey> =
+            remote.authors.iter().map(|h| h.author).collect();
+
+        let mut requests = Vec::new();
+        for remote_head in &remote.authors {
+            let (local_seq, local_hash) = local_map
+                .get(&remote_head.author)
+                .copied()
+                .unwrap_or((0, EventHash::ZERO));
+            match local_seq.cmp(&remote_head.seq) {
+                std::cmp::Ordering::Less => {
+                    // Behind — request range. Paginate at 256.
+                    let from = local_seq + 1;
+                    let to = remote_head.seq;
+                    Self::paginate_into(remote_head.author, from, to, &mut requests);
+                }
+                std::cmp::Ordering::Equal => {
+                    if local_hash != remote_head.hash {
+                        // Tied seq, divergent hash → equivocation.
+                        #[allow(clippy::expect_used)]
+                        self.equivocation_log
+                            .lock()
+                            .expect("equivocation_log mutex poisoned")
+                            .push(EquivocationFlag {
+                                author: remote_head.author,
+                                seq: remote_head.seq,
+                                local_hash,
+                                remote_hash: remote_head.hash,
+                                peer: None,
+                            });
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    // Local ahead — but first verify the remote-claimed
+                    // hash at `remote_head.seq` matches our history.
+                    // Mismatch here is equivocation, not a backfill
+                    // opportunity (plan-review B-5 / spec C-3 fix).
+                    let chain = self.dag.author_chain(&remote_head.author);
+                    let local_hash_at_remote =
+                        chain.and_then(|c| c.seq_to_hash.get(&remote_head.seq).copied());
+                    if local_hash_at_remote == Some(remote_head.hash) {
+                        // History agrees — push the gap.
+                        for seq in (remote_head.seq + 1)..=local_seq {
+                            if let Some(hash) = chain.and_then(|c| c.seq_to_hash.get(&seq).copied())
+                                && let Some(e) = self.dag.get(&hash)
+                            {
+                                let _ = self
+                                    .network
+                                    .publish(self.topic, GossipMessage::Event(e.clone()))
+                                    .await;
+                            }
+                        }
+                    } else if let Some(local_h) = local_hash_at_remote {
+                        // History disagrees at remote_seq → equivocation.
+                        #[allow(clippy::expect_used)]
+                        self.equivocation_log
+                            .lock()
+                            .expect("equivocation_log mutex poisoned")
+                            .push(EquivocationFlag {
+                                author: remote_head.author,
+                                seq: remote_head.seq,
+                                local_hash: local_h,
+                                remote_hash: remote_head.hash,
+                                peer: None,
+                            });
+                    }
+                }
+            }
+        }
+        // Push events for authors local has but remote does not.
+        for (author, (local_seq, _)) in &local_map {
+            if !remote_authors.contains(author) {
+                let chain = self.dag.author_chain(author);
+                for seq in 1..=*local_seq {
+                    if let Some(hash) = chain.and_then(|c| c.seq_to_hash.get(&seq).copied())
+                        && let Some(e) = self.dag.get(&hash)
+                    {
+                        let _ = self
+                            .network
+                            .publish(self.topic, GossipMessage::Event(e.clone()))
+                            .await;
+                    }
+                }
+            }
+        }
+        if !requests.is_empty() {
+            let _ = self
+                .network
+                .publish(
+                    self.topic,
+                    GossipMessage::HeadsRequest(HeadsRequest { requests }),
+                )
+                .await;
+        }
+        Ok(())
+    }
+
+    /// Split a `(from..=to)` range into pages of at most 256 events
+    /// (inclusive bounds). Plan-review off-by-one fix: a page covers
+    /// `(start, start+255)` — 256 events — and the next page starts at
+    /// `start + 256`. Receiver enforces `to_seq - from_seq <= 255`.
+    //
+    // Stateless: takes no `self`. Free fn would also work, but keeping
+    // it as an associated fn parallels the other DAG-message helpers on
+    // `Runtime` and lets call sites read as `self.paginate_into(...)`
+    // analogues without import churn.
+    fn paginate_into(
+        author: AuthorPubkey,
+        from: u64,
+        to: u64,
+        out: &mut Vec<myrhiza_types::EventRequest>,
+    ) {
+        let mut cur = from;
+        while cur <= to {
+            let page_end = cur.saturating_add(255).min(to);
+            out.push(myrhiza_types::EventRequest {
+                author,
+                from_seq: cur,
+                to_seq: page_end,
+            });
+            if page_end == u64::MAX {
+                break;
+            }
+            cur = page_end + 1;
+        }
+    }
+
+    /// Service inbound range requests by publishing the requested
+    /// events back to the topic.
+    ///
+    /// Bound: a single request may cover at most 256 events
+    /// (`to_seq - from_seq <= 255`); over-sized requests are silently
+    /// dropped (plan-review off-by-one fix).
+    async fn handle_heads_request(&mut self, req: HeadsRequest) -> Result<(), RuntimeError> {
+        for r in req.requests {
+            if r.to_seq < r.from_seq {
+                continue;
+            }
+            if r.to_seq.saturating_sub(r.from_seq) > 255 {
+                continue;
+            }
+            let Some(chain) = self.dag.author_chain(&r.author) else {
+                continue;
+            };
+            // Snapshot the (seq, hash) pairs before any await so we don't
+            // hold an immutable borrow of `self.dag` across .await.
+            let pairs: Vec<(u64, EventHash)> = (r.from_seq..=r.to_seq)
+                .filter_map(|seq| chain.seq_to_hash.get(&seq).copied().map(|h| (seq, h)))
+                .collect();
+            for (_, hash) in pairs {
+                if let Some(e) = self.dag.get(&hash).cloned() {
+                    let _ = self
+                        .network
+                        .publish(self.topic, GossipMessage::Event(e))
+                        .await;
+                }
+            }
+        }
         Ok(())
     }
 
