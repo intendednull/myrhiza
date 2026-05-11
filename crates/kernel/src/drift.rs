@@ -39,25 +39,42 @@ pub struct DriftRateLimit {
     /// Maximum emits per rolling 24h window.
     pub daily_cap: u32,
     last_emit: Option<Instant>,
-    today_count: u32,
-    today_started: Instant,
+    /// Timestamps of emits within the trailing 24h sliding window.
+    ///
+    /// Front is the oldest still-relevant emit; back is the most recent.
+    /// Eviction is lazy: on every `try_emit` call, we pop from the front
+    /// while the head instant sits at or before `now - 24h`.
+    recent_emits: std::collections::VecDeque<Instant>,
 }
 
 impl DriftRateLimit {
     /// Construct a rate-limit with the given minimum interval and daily cap.
+    ///
+    /// `now` is accepted for symmetry with [`try_emit`] — it allows callers
+    /// to inject a deterministic clock reading rather than the previous
+    /// implementation's hidden `Instant::now()` (review-finding N-14).
     #[must_use]
-    pub fn new(min_interval: Duration, daily_cap: u32) -> Self {
+    pub fn new(now: Instant, min_interval: Duration, daily_cap: u32) -> Self {
+        // `now` is accepted for symmetry; the sliding-window state is
+        // entirely event-driven (eviction happens on each `try_emit`).
+        let _ = now;
         Self {
             min_interval,
             daily_cap,
             last_emit: None,
-            today_count: 0,
-            today_started: Instant::now(),
+            // No pre-allocation: callers may pass very large caps
+            // (`u32::MAX` in tests to disable the cap entirely), so we
+            // grow lazily as emits accumulate.
+            recent_emits: std::collections::VecDeque::new(),
         }
     }
 
     /// Try to consume a rate-limit slot. Returns `Ok(())` on grant,
     /// `Err(kind)` if rate-limited.
+    ///
+    /// Implements a true trailing-24h sliding window: an emit is rejected
+    /// iff the count of prior emits within the last 24h is at or above
+    /// `daily_cap`. Prior emits older than 24h are evicted on every call.
     ///
     /// # Errors
     ///
@@ -65,12 +82,16 @@ impl DriftRateLimit {
     /// - [`RateLimitKind::MinInterval`] if `min_interval` has not elapsed
     ///   since the most recent successful emit.
     pub fn try_emit(&mut self, now: Instant) -> Result<(), RateLimitKind> {
-        // Daily-window rollover.
-        if now.duration_since(self.today_started) >= Duration::from_hours(24) {
-            self.today_started = now;
-            self.today_count = 0;
+        let day = Duration::from_hours(24);
+        // Evict timestamps that no longer sit in the trailing 24h window.
+        while let Some(&front) = self.recent_emits.front() {
+            if now.duration_since(front) >= day {
+                self.recent_emits.pop_front();
+            } else {
+                break;
+            }
         }
-        if self.today_count >= self.daily_cap {
+        if self.recent_emits.len() >= self.daily_cap as usize {
             return Err(RateLimitKind::DailyCap);
         }
         if let Some(last) = self.last_emit
@@ -78,8 +99,8 @@ impl DriftRateLimit {
         {
             return Err(RateLimitKind::MinInterval);
         }
+        self.recent_emits.push_back(now);
         self.last_emit = Some(now);
-        self.today_count += 1;
         Ok(())
     }
 }
@@ -168,7 +189,8 @@ mod tests {
 
     #[test]
     fn rate_limit_blocks_on_min_interval() {
-        let mut rl = DriftRateLimit::new(Duration::from_mins(1), 1024);
+        let now = Instant::now();
+        let mut rl = DriftRateLimit::new(now, Duration::from_mins(1), 1024);
         let t0 = Instant::now();
         rl.try_emit(t0).expect("first ok");
         let r = rl.try_emit(t0 + Duration::from_secs(30));
@@ -177,12 +199,48 @@ mod tests {
 
     #[test]
     fn rate_limit_blocks_on_daily_cap() {
-        let mut rl = DriftRateLimit::new(Duration::from_secs(0), 2);
+        let now = Instant::now();
+        let mut rl = DriftRateLimit::new(now, Duration::from_secs(0), 2);
         let t0 = Instant::now();
         rl.try_emit(t0).expect("1");
         rl.try_emit(t0).expect("2");
         let r = rl.try_emit(t0);
         assert!(matches!(r, Err(RateLimitKind::DailyCap)));
+    }
+
+    /// Trailing-24h sliding window: a pre-rollover burst that fills the
+    /// daily cap must still block the first post-rollover emit, because
+    /// all four prior emits still sit inside the trailing 24h window
+    /// from the perspective of `after_rollover`.
+    ///
+    /// Regression for review-finding Q-5 (old implementation reset the
+    /// counter at the 24h boundary, admitting a `2 * daily_cap` burst).
+    #[test]
+    fn daily_cap_does_not_admit_double_burst_across_rollover() {
+        let mut rl = DriftRateLimit::new(
+            Instant::now(),
+            Duration::from_mins(1), // min_interval
+            4,                      // daily_cap
+        );
+        let t0 = Instant::now();
+
+        // Burn the daily cap right before rollover.
+        let near_rollover = (t0 + Duration::from_hours(24))
+            .checked_sub(Duration::from_secs(1))
+            .expect("instant minus 1s is well-defined");
+        let mut t = near_rollover;
+        for _ in 0..4 {
+            rl.try_emit(t).expect("within daily cap");
+            t += Duration::from_mins(1);
+        }
+        // Immediately after rollover, true sliding window should still reject —
+        // because the prior 4 emits all sit inside the trailing 24h window.
+        let after_rollover = t0 + Duration::from_hours(24) + Duration::from_secs(1);
+        let r = rl.try_emit(after_rollover);
+        assert!(
+            matches!(r, Err(RateLimitKind::DailyCap)),
+            "sliding window must still reject across rollover, got {r:?}",
+        );
     }
 
     #[test]
