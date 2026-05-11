@@ -136,6 +136,12 @@ impl EventDag {
     pub fn get(&self, hash: &EventHash) -> Option<&Event>;
     pub fn known_hashes(&self) -> BTreeSet<EventHash>;     // for PendingBuffer drain
 
+    /// Borrow an author's chain. Returns `None` if the author has no
+    /// events yet — callers treat that as the sentinel state
+    /// `(head_seq = 0, head_hash = EventHash::ZERO)` (the same shape
+    /// as `AuthorChain::default()`).
+    pub fn author_chain(&self, author: &AuthorPubkey) -> Option<&AuthorChain>;
+
     /// Build the `author_seq_vec` used in DriftAnchor + HeadsSummary diff.
     /// Iterates `by_author` in pubkey-byte-lex order; emits `AuthorSeq { author, max_seq: chain.head_seq }`
     /// for each author with `head_seq > 0`. Returns sorted by author pubkey
@@ -145,6 +151,23 @@ impl EventDag {
     /// Build the `Vec<AuthorHead>` used in HeadsSummary. Same ordering as
     /// `author_seq_vec` but with the head event hash attached.
     pub fn author_heads(&self) -> Vec<AuthorHead>;
+
+    /// Topo-sort a SUBSET of events selected by `filter`. Used for
+    /// anchor-bounded drift replay (§8.4 step 3) where only events
+    /// within the anchor's `author_seq_vec` participate.
+    ///
+    /// **Algorithm**: builds a fresh local `sub_indegree: BTreeMap<EventHash, usize>`
+    /// counting only parents WITHIN the subset (events outside the
+    /// subset are treated as absent — they do NOT contribute to the
+    /// indegree of subset members). Runs Kahn's algorithm on that
+    /// local indegree, never touching the full-DAG `self.indegree`.
+    /// This handles the case where a subset-included event has deps
+    /// pointing outside the subset (which would deadlock if we used
+    /// the full-DAG indegree).
+    ///
+    /// Returns subset events in canonical topo-order (lex byte-tie-break
+    /// on `EventHash`, same as `topo_sort`).
+    pub fn topo_sort_subset<F: Fn(&Event) -> bool>(&self, filter: F) -> Vec<EventHash>;
 }
 ```
 
@@ -447,9 +470,11 @@ The Runtime, on receiving each message:
   For each `author` in local but not in `remote`: publish all events for that author as `Event` messages. Aggregate backward-direction asks into a single `HeadsRequest`.
 
   **Equivocation detection invariant**: the ahead-by-≥1 hash check above ensures that an equivocating author is flagged regardless of how far ahead one branch has progressed. §4.4.1's "same seq, different hash" requirement is satisfied at any matching seq position, not just at the head.
-- **`HeadsRequest(req)`**: for each `EventRequest { author, from_seq, to_seq }`, look up `chain.seq_to_hash[from_seq..=to_seq]`, fetch each event from `by_hash`, publish as `Event` messages. Bounds-check: refuse `to_seq - from_seq > 256` per single request (anti-amplification) → log + drop the request. The requester is responsible for paginating.
+- **`HeadsRequest(req)`**: for each `EventRequest { author, from_seq, to_seq }`, look up `chain.seq_to_hash[from_seq..=to_seq]`, fetch each event from `by_hash`, publish as `Event` messages. Bounds-check (anti-amplification): if `to_seq < from_seq` (malformed) OR `to_seq.saturating_sub(from_seq) > 255` (exceeds 256-event page), log + drop the request. The 255 bound corresponds to a 256-event maximum response: `from_seq + 255` inclusive through `from_seq` inclusive = 256 events. The requester is responsible for paginating.
 
   **Requester pagination (normative)**: when constructing a `HeadsRequest` from a `HeadsSummary` diff, the requester MUST split any `(author, from_seq, to_seq)` range with `to_seq - from_seq > 255` into consecutive pages of at most 256 events each: `(from_seq, from_seq+255), (from_seq+256, from_seq+511), ...`. Each page is sent as a separate `HeadsRequest` (one per `Runtime::publish_heads_summary` tick, or back-to-back if the requester batches). The responder accepts each page. Late-joining peers thus catch up in chunks of 256 events.
+
+  **Bound rationale**: the responder gate `to_seq - from_seq > 255` and the requester pagination algorithm both target a 256-event maximum per page. The bounds are aligned exactly — neither side leaves a 257-event gap.
 - **`Drift(d)`**: §8 drift logic below.
 
 **Kernel-version skew**: HeadsSummary carries `kernel_fuel_table_version`. Mismatch → log "kernel out of date" warning to `Runtime::peer_warnings`; do not refuse sync. The version mismatch is *informative*; the topic-id-includes-kernel-major rule (per `browser-native.md §14.2`) is what structurally separates incompatible kernels.
@@ -489,18 +514,23 @@ pub struct DriftMessage {
 
 /// The exact byte target that `DriftMessage::signature` covers.
 ///
-/// **Normative**: peer signing = `peer_key.sign(canonical_bincode().serialize(&DriftSignedPayload{...}))`.
-/// Verifying = same. Field order is pinned by the struct's declaration order;
-/// canonical bincode encodes fields sequentially with no field-name metadata,
-/// so emitter and verifier MUST produce identical bytes given the same struct.
-/// The `signed_by_peer` and `signature` fields of `DriftMessage` are EXCLUDED
-/// from the signed payload (the signature can't cover itself; the public-key
-/// identity is supplied separately for verification).
+/// **Normative wire layout**: peer signing =
+/// `peer_key.sign(canonical_bincode().serialize(&DriftSignedPayload{...}))`.
+/// Verifying = same. Field order is pinned by the struct's declaration order
+/// AND deliberately matches the first three fields of `DriftMessage`
+/// (`anchor`, `digest`, `digest_format`) so a non-Rust reimplementation
+/// can construct the signing bytes by simply serializing `DriftMessage`'s
+/// first three fields in declaration order. Canonical bincode encodes
+/// fields sequentially with no field-name metadata, so emitter and
+/// verifier MUST produce identical bytes given the same field order.
+/// The `signed_by_peer` and `signature` fields of `DriftMessage` are
+/// EXCLUDED from the signed payload (the signature can't cover itself;
+/// the public-key identity is supplied separately for verification).
 #[derive(Serialize, Deserialize)]
 pub struct DriftSignedPayload {
     pub anchor: DriftAnchor,
-    pub digest_format: String,
     pub digest: [u8; 32],
+    pub digest_format: String,
 }
 ```
 
@@ -543,8 +573,10 @@ On `GossipMessage::Drift(d)`:
      - Local `chain.seq_to_hash[max_seq]` exists and differs from any previously-observed hash at `(author, max_seq)` → equivocation context → log "branch divergence" and exit; do NOT compare digests.
    - All `(author, max_seq)` present locally → look up own digest cache by `author_seq_vec` key.
 3. Local cache: `Runtime::own_digest_cache: BTreeMap<Vec<AuthorSeq>, [u8; 32]>` keyed on `author_seq_vec` (not full `DriftAnchor`). Look up using `d.anchor.author_seq_vec`. Cache miss → anchor was not an emit position locally; compute digest now by anchor-bounded replay:
-   - **Replay scope**: topo-sort the SUBSET of `dag.by_hash` whose events satisfy: `event.author ∈ author_seq_vec` AND `event.seq ≤ author_seq_vec[event.author].max_seq`. **Authors NOT listed in `author_seq_vec` are EXCLUDED entirely — their events do not contribute to the anchor digest.** Replay through that subset and hash the resulting state-digest output.
-   - **Why**: the emitter computed its digest from a state materialized at the moment its own `author_seq_vec` was the head set. Including events outside that frontier produces a digest the emitter never saw.
+   - **Build a lookup map** from the anchor's `Vec<AuthorSeq>`: `let bound: BTreeMap<AuthorPubkey, u64> = d.anchor.author_seq_vec.iter().map(|a| (a.author, a.max_seq)).collect();` — converts the canonical `Vec` into an O(log n) lookup for the filter.
+   - **Replay subset**: call `dag.topo_sort_subset(|e| bound.get(&e.author).map_or(false, |max| e.seq <= *max))`. **Authors NOT listed in `author_seq_vec` are EXCLUDED entirely — `bound.get(&e.author) == None` → filter returns false → event omitted.** Events from listed authors with `seq > max_seq` are also excluded. `topo_sort_subset` handles the indegree correctly (per §4.2 — events with deps pointing outside the subset have those deps treated as absent, so they still reach indegree 0 within the subset).
+   - **Materialize**: replay through the subset events via `handle.apply(state, canonical(event))` accumulating state; call `handle.state_digest(&state)`; hash with BLAKE3.
+   - **Why excluded**: the emitter computed its digest from a state materialized at the moment its own `author_seq_vec` was the head set. Including events outside that frontier produces a digest the emitter never saw.
 4. Compare cached/computed digest against `d.digest`.
    - Match → log success (no surface; success is silent).
    - Mismatch → push `DriftDetected { peer: d.signed_by_peer, anchor: d.anchor, local_digest: own, remote_digest: d.digest }` to `Runtime::drift_log`. Acceptance tests inspect this.
@@ -865,7 +897,7 @@ Located at `crates/kernel/tests/convergence.rs`. Each test annotated `/// Covers
 | `late_joiner_backfills_via_heads_summary` | convergence §4.2 | A authors 10 events alone; B subscribes; B's startup HeadsSummary triggers A's backfill; B converges. |
 | `coexistence_two_topics_no_event_crossing` | mvp §15.1 #4, convergence §4.6 | Two Runtimes per peer on distinct topic_ids; cross-topic delivery does not happen. |
 | `drift_detected_when_state_apply_corrupted` | convergence §4.7 | Peer B wraps StateApplyHandle in `CorruptingDecorator` that flips one byte at apply N. Both peers' drift_log records mismatch. |
-| `equivocating_author_chain_first_seen_wins` | convergence §4.4.1 | Two events with same `(author, seq, prev)`; first inserted wins; second rejected as `InvalidChain`. |
+| `equivocating_author_chain_first_seen_wins` | convergence §4.4.1 | Two events with same `(author, seq)` (both same-`prev` and different-`prev` variants); first inserted wins; second returns `DagError::Equivocation { author, seq, local_hash, remote_hash }`. Runtime's `equivocation_log` gains exactly one entry. |
 | `pending_buffer_evicts_oldest_under_capacity` | convergence §4.2, §4.8 | PendingBuffer cap = 3; flood 10 out-of-order events; oldest 7 evicted; convergence still reached via HeadsSummary backfill. |
 | `lagged_broadcast_recovers_via_heads_summary` | convergence §4.2 | MemBus capacity = 2; A floods 10 events while B is slow; B's `RecvError::Lagged` triggers HeadsSummary; B converges. |
 
