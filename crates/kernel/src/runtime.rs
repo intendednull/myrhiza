@@ -174,6 +174,20 @@ pub enum PeerWarning {
         /// Number of dropped messages reported by the transport.
         dropped: u64,
     },
+
+    /// Local-ahead branch of `handle_heads_summary` could not look up our
+    /// hash at the remote's claimed seq, despite our `local_seq > remote_seq`.
+    /// Under DAG invariants this is unreachable (an author chain with head
+    /// at `local_seq` must populate `seq_to_hash` for every seq in
+    /// `1..=local_seq`). Surfacing as a warning rather than swallowing the
+    /// no-op makes the invariant break visible (CLAUDE.md: no swallowing
+    /// errors).
+    ChainHashLookupMissing {
+        /// Author whose chain we were inspecting.
+        author: AuthorPubkey,
+        /// Seq the lookup failed at (the remote's claimed head seq).
+        seq: u64,
+    },
 }
 
 /// Command sent into the runtime task via [`RuntimeHandle::author_tx`].
@@ -691,6 +705,22 @@ impl Runtime {
                                 local_hash: local_h,
                                 remote_hash: remote_head.hash,
                                 peer: None,
+                            });
+                    } else {
+                        // local_hash_at_remote is None despite local_seq >
+                        // remote_seq. Under DAG invariants this is
+                        // unreachable: an author chain with head at
+                        // local_seq must populate seq_to_hash for every
+                        // seq in 1..=local_seq. Surface as a PeerWarning
+                        // rather than silently no-op (CLAUDE.md: no
+                        // swallowing errors).
+                        #[allow(clippy::expect_used)]
+                        self.peer_warnings
+                            .lock()
+                            .expect("peer_warnings mutex poisoned")
+                            .push(PeerWarning::ChainHashLookupMissing {
+                                author: remote_head.author,
+                                seq: remote_head.seq,
                             });
                     }
                 }

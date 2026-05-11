@@ -86,12 +86,18 @@ impl DriftRateLimit {
 
 /// Decide whether to emit a drift-anchor at `topo_index`.
 ///
-/// Returns `true` iff `drift_interval > 0` and `topo_index` is a
-/// non-negative multiple of `drift_interval`. `drift_interval == 0`
+/// Returns `true` iff `drift_interval > 0`, `topo_index > 0`, and
+/// `topo_index` is a multiple of `drift_interval`. `drift_interval == 0`
 /// disables drift emission entirely.
+///
+/// `topo_index == 0` is excluded because that is the Genesis / empty-state
+/// startup point: state is just-initialized, the digest is barely
+/// meaningful, and remote peers all carry the same trivial digest there.
+/// Emitting at Genesis would burn the rate-limit budget on a no-information
+/// message.
 #[must_use]
 pub fn should_emit(topo_index: u64, drift_interval: u64) -> bool {
-    drift_interval > 0 && topo_index.checked_rem(drift_interval) == Some(0)
+    drift_interval > 0 && topo_index > 0 && topo_index.checked_rem(drift_interval) == Some(0)
 }
 
 /// Build the `BTreeMap<AuthorPubkey, u64>` lookup map a `DriftMessage` needs for
@@ -142,7 +148,12 @@ mod tests {
 
     #[test]
     fn should_emit_at_multiples_of_interval() {
-        assert!(should_emit(0, 4));
+        // topo_index=0 is the Genesis / empty-state startup point: state is
+        // just-initialized, the digest is barely meaningful, and all remote
+        // peers carry the same trivial digest there. Drift-emit at Genesis
+        // would burn rate-limit budget on a no-information message, so we
+        // exclude topo_index=0 even though 0 % N == 0.
+        assert!(!should_emit(0, 4));
         assert!(should_emit(4, 4));
         assert!(should_emit(8, 4));
         assert!(!should_emit(1, 4));
