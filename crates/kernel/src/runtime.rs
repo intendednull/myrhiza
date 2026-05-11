@@ -1063,6 +1063,12 @@ impl Runtime {
     /// # Errors
     /// Propagates canonical-encoding errors or [`ApplyError`] from the
     /// underlying state-apply handle.
+    //
+    // TODO(B-2): `replay_full` is O(N) per call and is invoked on every
+    // accepted insert via [`Self::handle_event`]. For DAGs > ~10k events
+    // this O(N) replay dominates the select loop and starves incoming
+    // gossip. Plan B-2 owns replacing this with an incremental apply
+    // driven by topo_index deltas (carry-over from review-finding Q-1).
     fn replay_full(&mut self) -> Result<(), RuntimeError> {
         let order = self.dag.topo_sort();
         let mut state = Vec::new();
@@ -1262,6 +1268,12 @@ impl Runtime {
 
     /// Compute our own state-digest at the given anchor by replaying
     /// the topo-subset of events bounded by `anchor.author_seq_vec`.
+    //
+    // TODO(B-2): `compute_anchor_digest` runs synchronously inside the
+    // biased select loop. For a large anchor subset the inline replay
+    // can starve incoming gossip on the same task. Plan B-2 owns moving
+    // this off the loop (e.g. via `tokio::task::spawn_blocking`) or
+    // caching by anchor identity (carry-over from review-finding Q-7).
     fn compute_anchor_digest(&mut self, anchor: &DriftAnchor) -> Option<[u8; 32]> {
         let bound = anchor_bound_map(&anchor.author_seq_vec);
         let subset = self.dag.topo_sort_subset(|e| {
