@@ -13,8 +13,10 @@ pub mod hlc;
 pub use hlc::Hlc;
 
 pub mod author;
+pub mod peer;
 pub mod topic;
 pub use author::AuthorPubkey;
+pub use peer::PeerPubkey;
 pub use topic::Topic;
 
 pub mod identity;
