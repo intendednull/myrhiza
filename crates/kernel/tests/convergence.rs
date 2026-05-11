@@ -196,3 +196,80 @@ async fn late_joiner_backfills_via_heads_summary() {
         "late-joiner B must converge via HeadsSummary backfill"
     );
 }
+
+/// Covers: mvp.md §15.1 #4, convergence.md §4.6
+#[tokio::test]
+async fn coexistence_two_topics_no_event_crossing() {
+    use bincode::Options;
+    use myrhiza_types::{GenesisV1, canonical_bincode};
+
+    // Two harnesses on the SAME bus but different seeds → different topics.
+    let bus = myrhiza_network::MemBus::new(256);
+    let app_bundle_hash = myrhiza_types::BundleHash::from_bytes([0xAB; 32]);
+
+    let seed_a = [0x11; 32];
+    let seed_b = [0x22; 32];
+    let topic_a = myrhiza_types::Topic::derive(&app_bundle_hash, &seed_a, "main");
+    let topic_b = myrhiza_types::Topic::derive(&app_bundle_hash, &seed_b, "main");
+    assert_ne!(topic_a, topic_b);
+
+    let cfg = fast_cfg();
+
+    // Peer1 spawns runtimes on BOTH topics.
+    let net = myrhiza_network::MemNetwork::new(bus.clone());
+    let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
+    let runtime_a = myrhiza_kernel::runtime::Runtime::start(
+        net.clone(),
+        topic_a,
+        app_bundle_hash,
+        "main".into(),
+        helpers::counter_handle(),
+        myrhiza_kernel::identity::PeerKeypair::deterministic(1),
+        Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(1)),
+        cfg.clone(),
+    )
+    .await
+    .expect("runtime_a");
+
+    let net2 = myrhiza_network::MemNetwork::new(bus.clone());
+    let runtime_b = myrhiza_kernel::runtime::Runtime::start(
+        net2,
+        topic_b,
+        app_bundle_hash,
+        "main".into(),
+        helpers::counter_handle(),
+        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(2)),
+        cfg,
+    )
+    .await
+    .expect("runtime_b");
+
+    // Author distinct values on each topic; assert no cross-pollution.
+    let genesis_a = GenesisV1 {
+        seed: seed_a,
+        founder_pubkey: kp_a.author,
+        app_payload: 0_i64.to_be_bytes().to_vec(),
+    };
+    let _ = runtime_a
+        .author_tx
+        .send(myrhiza_kernel::runtime::AuthorCommand::Author {
+            payload: canonical_bincode().serialize(&genesis_a).expect("encode"),
+            deps: std::collections::BTreeSet::new(),
+            reply: {
+                let (tx, _rx) = tokio::sync::oneshot::channel();
+                tx
+            },
+        })
+        .await;
+
+    // Wait a beat. If cross-topic delivery happened, runtime_b.equivocation_log
+    // or its digest_watch would react. Both should remain at empty state.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let b_digest = runtime_b.digest_watch.borrow().clone();
+    assert!(
+        b_digest.is_empty(),
+        "runtime_b on topic_b must NOT receive runtime_a's topic_a events; saw digest {b_digest:?}"
+    );
+}
