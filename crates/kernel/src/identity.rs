@@ -28,6 +28,23 @@ impl PeerKeypair {
         Self { secret, public }
     }
 
+    /// Generate a fresh peer keypair from a cryptographically-secure RNG.
+    ///
+    /// Per plan-B-1 spec §10. Production callers should pass a
+    /// `rand::rngs::OsRng` or equivalent. Tests that need reproducibility
+    /// should keep using [`Self::deterministic`] instead.
+    ///
+    /// Implementation: draws 32 bytes via `rng.fill_bytes` and routes
+    /// through [`Self::from_secret_bytes`]. This avoids adding the
+    /// `rand_core` feature flag to the workspace `ed25519-dalek`
+    /// dependency just for `SigningKey::generate`; the entropy quality
+    /// is identical when `R: CryptoRng`.
+    pub fn generate<R: rand_core::CryptoRng + rand_core::RngCore>(rng: &mut R) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        Self::from_secret_bytes(bytes)
+    }
+
     /// Deterministic generation for tests.
     #[must_use]
     pub fn deterministic(seed: u64) -> Self {
@@ -95,6 +112,19 @@ mod tests {
         let a1 = AuthorKeypair::deterministic(7);
         let a2 = AuthorKeypair::deterministic(7);
         assert_eq!(a1.author, a2.author);
+    }
+
+    /// Spec §10: `PeerKeypair::generate<R: CryptoRng + RngCore>(rng: &mut R) -> Self`.
+    ///
+    /// Two consecutive draws from a CSPRNG must produce distinct keys.
+    /// Regression for review-finding I-4.
+    #[test]
+    fn peer_keypair_generate_with_csprng_produces_distinct_keys() {
+        use rand::rngs::OsRng;
+        let mut rng = OsRng;
+        let a = PeerKeypair::generate(&mut rng);
+        let b = PeerKeypair::generate(&mut rng);
+        assert_ne!(a.public, b.public, "two CSPRNG draws must differ");
     }
 
     #[test]
