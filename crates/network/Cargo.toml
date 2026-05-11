@@ -1,0 +1,22 @@
+[package]
+name = "myrhiza-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Network transport abstraction + in-process MemNetwork double for the Myrhiza runtime."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+serde.workspace = true
+thiserror.workspace = true
+bincode.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "rt-multi-thread"] }
