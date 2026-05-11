@@ -695,11 +695,13 @@ name = "myrhiza-kernel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bincode",
  "ed25519-dalek",
  "hex",
  "myrhiza-backend",
  "myrhiza-manifest",
+ "myrhiza-network",
  "myrhiza-test-utils",
  "myrhiza-types",
  "myrhiza-wasmtime-backend",
@@ -707,6 +709,7 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
