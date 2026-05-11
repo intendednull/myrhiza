@@ -58,9 +58,20 @@ crates/kernel/src/
 ├── pending.rs              — PendingBuffer (TTL + capacity eviction)
 ├── runtime.rs              — Runtime, RuntimeError, AuthorCommand
 ├── drift.rs                — DriftEmitter, drift compare logic
-├── peer_identity.rs        — PeerKeypair (in-memory stub; B-2 replaces)
+├── identity.rs             — PeerKeypair + AuthorKeypair (both
+│                            in-memory stubs; B-2 replaces with
+│                            bech32m-encoded persistent stores)
 └── lib.rs                  — re-exports
 ```
+
+Both `PeerKeypair` (signs drift-messages, §4.7) and `AuthorKeypair`
+(signs events authored by the user, §6) live in `crates/kernel`. They
+are conceptually distinct (peer-instance vs long-term user identity)
+but both are secret-key-holders the kernel custodies; same crate, same
+file. Test-utils re-exports `AuthorKeypair` from kernel for use in
+`EventBuilder`; it does NOT re-define the struct — re-defining would
+either layering-violate (kernel importing test-utils) or create two
+divergent types.
 
 Types extensions (`crates/types/src/`):
 
@@ -892,14 +903,20 @@ async fn author(&mut self, payload: Vec<u8>, deps: BTreeSet<EventHash>)
 
 ```rust
 // crates/test-utils/src/event_builder.rs
-pub struct AuthorKeypair {
-    secret: ed25519_dalek::SigningKey,
-    pub author: AuthorPubkey,
-}
-impl AuthorKeypair {
-    pub fn deterministic(seed: u64) -> Self;
-    pub fn sign_body_hash(&self, body_hash: EventHash) -> [u8; 64];
-}
+
+// AuthorKeypair is DEFINED in crates/kernel/src/identity.rs (§3) and
+// RE-EXPORTED here for test ergonomics. Do not redefine.
+pub use myrhiza_kernel::identity::AuthorKeypair;
+
+// kernel-side definition (informative — lives in crates/kernel/src/identity.rs):
+// pub struct AuthorKeypair {
+//     secret: ed25519_dalek::SigningKey,
+//     pub author: AuthorPubkey,
+// }
+// impl AuthorKeypair {
+//     pub fn deterministic(seed: u64) -> Self;
+//     pub fn sign_body_hash(&self, body_hash: EventHash) -> [u8; 64];
+// }
 
 pub struct EventBuilder<'k> {
     pub author_key: &'k AuthorKeypair,
@@ -1002,7 +1019,6 @@ pub enum RuntimeError {
     Dag(#[from] DagError),
     PreCheckRejected(String),
     Canonical(#[from] EncodingError),
-    PendingFull,
     ReadOnly,                          // author called on peer without author_key
 }
 ```
