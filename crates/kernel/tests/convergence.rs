@@ -150,3 +150,49 @@ async fn concurrent_multi_author_converges() {
         "peer B must converge to state {expected_state:?}"
     );
 }
+
+/// Covers: convergence.md §4.2
+#[tokio::test]
+async fn late_joiner_backfills_via_heads_summary() {
+    let harness = InProcessHarness::new(256, [0x33; 32]);
+    let cfg = fast_cfg();
+    let peer_a = harness
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .await;
+
+    // A authors genesis + 5 increments BEFORE B joins.
+    let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
+    let genesis = GenesisV1 {
+        seed: harness.seed,
+        founder_pubkey: kp_a.author,
+        app_payload: 0_i64.to_be_bytes().to_vec(),
+    };
+    let g_bytes = canonical_bincode().serialize(&genesis).expect("encode");
+    peer_a
+        .author(g_bytes, std::collections::BTreeSet::new())
+        .await
+        .expect("genesis");
+    for delta in [1_i64, 1, 1, 1, 1] {
+        peer_a
+            .author(
+                delta.to_be_bytes().to_vec(),
+                std::collections::BTreeSet::new(),
+            )
+            .await
+            .expect("inc");
+    }
+
+    // Now B joins.
+    let mut peer_b = harness
+        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .await;
+
+    // Expected: 0 + 5*1 = 5.
+    let expected_state = 5_i64.to_be_bytes().to_vec();
+    assert!(
+        peer_b
+            .await_digest(expected_state, Duration::from_secs(10))
+            .await,
+        "late-joiner B must converge via HeadsSummary backfill"
+    );
+}
