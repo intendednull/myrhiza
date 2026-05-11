@@ -160,3 +160,110 @@ fn heads_request_wire_layout() {
     // requests: 8 (vec len = 0)
     assert_eq!(bytes.len(), 8);
 }
+
+// ---------------------------------------------------------------------------
+// GossipMessage outer-variant wire-freeze (spec §6.2; review I-3 / M-11).
+//
+// Canonical bincode encodes Rust enum variants as a u32 fixint big-endian
+// discriminator. Current variant declaration order in
+// `crates/network/src/lib.rs` is:
+//
+//   GossipMessage::Event         = 0
+//   GossipMessage::HeadsSummary  = 1
+//   GossipMessage::HeadsRequest  = 2
+//   GossipMessage::Drift         = 3
+//
+// These tests pin the byte string for each variant tag so a future reorder
+// fails CI loudly — variant reordering is a wire-incompatible change.
+// ---------------------------------------------------------------------------
+
+fn sample_event_envelope() -> myrhiza_types::Event {
+    myrhiza_types::Event {
+        author: AuthorPubkey::from_bytes([1; 32]),
+        seq: 1,
+        prev: EventHash::ZERO,
+        deps: std::collections::BTreeSet::new(),
+        hlc: myrhiza_types::Hlc {
+            wall_ms: 1_700_000_000_000,
+            logical: 0,
+        },
+        payload: vec![0x01, 0x02],
+        signature: [0xFF; 64],
+    }
+}
+
+fn sample_heads_summary() -> HeadsSummary {
+    HeadsSummary {
+        authors: vec![],
+        kernel_fuel_table_version: 0,
+    }
+}
+
+fn sample_heads_request() -> HeadsRequest {
+    HeadsRequest { requests: vec![] }
+}
+
+fn sample_drift_message() -> DriftMessage {
+    DriftMessage {
+        anchor: DriftAnchor {
+            event_hash: EventHash::ZERO,
+            author_seq_vec: vec![],
+        },
+        digest: [0; 32],
+        digest_format: "bincode-1.3".into(),
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
+    }
+}
+
+#[test]
+fn gossip_message_event_variant_tag_is_zero_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::Event(sample_event_envelope());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x00],
+        "variant tag for GossipMessage::Event must be 0 (u32 BE)"
+    );
+}
+
+#[test]
+fn gossip_message_heads_summary_variant_tag_is_one_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::HeadsSummary(sample_heads_summary());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x01],
+        "variant tag for GossipMessage::HeadsSummary must be 1 (u32 BE)"
+    );
+}
+
+#[test]
+fn gossip_message_heads_request_variant_tag_is_two_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::HeadsRequest(sample_heads_request());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x02],
+        "variant tag for GossipMessage::HeadsRequest must be 2 (u32 BE)"
+    );
+}
+
+#[test]
+fn gossip_message_drift_variant_tag_is_three_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::Drift(sample_drift_message());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x03],
+        "variant tag for GossipMessage::Drift must be 3 (u32 BE)"
+    );
+}
