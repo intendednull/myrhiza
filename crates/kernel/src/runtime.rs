@@ -15,16 +15,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bincode::Options;
 use myrhiza_network::{GossipMessage, NetError, Network, SubError, Subscription};
-use myrhiza_types::{AuthorPubkey, BundleHash, EventHash, HeadsSummary, PeerPubkey, Topic};
+use myrhiza_types::{
+    AuthorPubkey, AuthorSeq, BundleHash, DriftAnchor, DriftMessage, DriftSignedPayload, Event,
+    EventHash, HeadsSummary, Hlc, PeerPubkey, Topic, canonical_bincode,
+};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::dag::{DagError, EventDag};
-use crate::drift::{DriftDetected, DriftRateLimit, RateLimitKind};
+use crate::dag::{DagError, EventDag, Inserted};
+use crate::drift::{
+    DriftDetected, DriftRateLimit, RateLimitKind, anchor_bound_map, anchor_covered, should_emit,
+};
 use crate::identity::{AuthorKeypair, PeerKeypair};
 use crate::pending::{PendingBuffer, PendingCfg};
-use crate::state_apply::{ApplyError, StateApplyHandle};
+use crate::state_apply::{ApplyError, ApplyOutcome, StateApplyHandle};
 
 /// Per-topic runtime configuration knobs.
 ///
@@ -486,14 +492,282 @@ impl Runtime {
         Ok(())
     }
 
-    /// Stub: rejects every author command with [`RuntimeError::ReadOnly`].
-    /// Replaced in Task 18.
-    #[allow(clippy::unused_async)]
+    /// Author + sign + pre-check + self-insert + replay + maybe-emit-drift
+    /// + broadcast. See plan-B-1 spec §11.3.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError::ReadOnly`] when this runtime has no author
+    /// keypair, [`RuntimeError::PreCheckRejected`] when the local
+    /// pre-check rejects the event before signing, or propagates the
+    /// underlying [`ApplyError`] / [`DagError`] / [`NetError`] /
+    /// canonical-encoding error.
     async fn author(
         &mut self,
-        _payload: Vec<u8>,
-        _deps: BTreeSet<EventHash>,
+        payload: Vec<u8>,
+        deps: BTreeSet<EventHash>,
     ) -> Result<EventHash, RuntimeError> {
-        Err(RuntimeError::ReadOnly)
+        let author_key = self.author_key.as_ref().ok_or(RuntimeError::ReadOnly)?;
+
+        // §11.3: author path is invoked from the run loop's biased select
+        // arm, so received messages between authoring sessions have already
+        // been processed by the time we reach here — the run loop drains
+        // sub.recv() between author commands as part of the select. The
+        // author_tx mpsc channel is single-consumer; the Runtime task owns
+        // both the chain head and the apply state. No explicit drain needed.
+
+        // Compute next slot from chain.
+        let chain = self.dag.author_chain(&author_key.author);
+        let (seq, prev) = match chain {
+            None => (1u64, EventHash::ZERO),
+            Some(c) if c.head_seq == 0 => (1, EventHash::ZERO),
+            Some(c) => (c.head_seq + 1, c.head_hash),
+        };
+
+        // Advance HLC.
+        self.hlc_logical_counter = self.hlc_logical_counter.saturating_add(1);
+        let hlc = Hlc {
+            wall_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+            logical: self.hlc_logical_counter,
+        };
+
+        let body = Event {
+            author: author_key.author,
+            seq,
+            prev,
+            deps,
+            hlc,
+            payload,
+            signature: [0; 64],
+        };
+        let body_hash = body.hash_signed_body();
+        let signature = author_key.sign_body_hash(body_hash);
+        let event = Event { signature, ..body };
+        let envelope = canonical_bincode().serialize(&event)?;
+
+        // Pre-check.
+        let pre = self.handle.pre_check(&self.state, &envelope)?;
+        if let ApplyOutcome::Rejected(reason) = pre.outcome {
+            return Err(RuntimeError::PreCheckRejected(reason));
+        }
+
+        // Self-insert + replay + drift drain + maybe emit.
+        let inserted = self.dag.insert(event.clone())?;
+        if let Inserted::NewlyApplied { topo_index, hash } = inserted {
+            self.replay_full()?;
+            self.drain_drift_stash().await;
+            self.maybe_emit_drift(topo_index, hash).await;
+        }
+
+        // Broadcast.
+        self.network
+            .publish(self.topic, GossipMessage::Event(event.clone()))
+            .await?;
+        Ok(event.wire_hash())
+    }
+
+    /// Re-run state-apply over the full DAG topological order and
+    /// publish the resulting state on the digest watch channel.
+    ///
+    /// # Errors
+    /// Propagates canonical-encoding errors or [`ApplyError`] from the
+    /// underlying state-apply handle.
+    fn replay_full(&mut self) -> Result<(), RuntimeError> {
+        let order = self.dag.topo_sort();
+        let mut state = Vec::new();
+        for hash in order {
+            if let Some(event) = self.dag.get(&hash) {
+                let bytes = canonical_bincode().serialize(event)?;
+                let r = self.handle.apply(&state, &bytes)?;
+                if let ApplyOutcome::Accepted = r.outcome {
+                    state = r.new_state;
+                }
+            }
+        }
+        state.clone_into(&mut self.state);
+        let _ = self.digest_watch_tx.send(state);
+        Ok(())
+    }
+
+    /// Drain any stashed incoming drift messages whose anchor is now
+    /// covered by the local DAG state.
+    async fn drain_drift_stash(&mut self) {
+        let current_seq_map: BTreeMap<AuthorPubkey, u64> = self
+            .dag
+            .author_seq_vec()
+            .into_iter()
+            .map(|a| (a.author, a.max_seq))
+            .collect();
+        let covered_keys: Vec<Vec<AuthorSeq>> = self
+            .incoming_drift_pending
+            .keys()
+            .filter(|asv| {
+                let anchor = DriftAnchor {
+                    event_hash: EventHash::ZERO,
+                    author_seq_vec: (*asv).clone(),
+                };
+                anchor_covered(&anchor, &current_seq_map)
+            })
+            .cloned()
+            .collect();
+        for key in covered_keys {
+            if let Some(msgs) = self.incoming_drift_pending.remove(&key) {
+                for m in msgs {
+                    self.process_drift_message(m).await;
+                }
+            }
+        }
+    }
+
+    /// Consider emitting a drift-message at the given topo-index +
+    /// anchor event hash. Subject to interval cadence and rate limits
+    /// (§11.4, §8.1).
+    async fn maybe_emit_drift(&mut self, topo_index: u64, anchor_event_hash: EventHash) {
+        if !should_emit(topo_index, self.cfg.drift_interval) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Err(kind) = self.rate_limit.try_emit(now) {
+            #[allow(clippy::expect_used)]
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::DriftRateLimited(kind));
+            return;
+        }
+
+        let Ok(state_digest_bytes) = self.handle.state_digest(&self.state) else {
+            return;
+        };
+        let digest: [u8; 32] = blake3::hash(&state_digest_bytes).into();
+        let author_seq_vec = self.dag.author_seq_vec();
+        let anchor = DriftAnchor {
+            event_hash: anchor_event_hash,
+            author_seq_vec: author_seq_vec.clone(),
+        };
+        self.own_digest_cache.insert(author_seq_vec, digest);
+
+        let signed_payload = DriftSignedPayload {
+            anchor: anchor.clone(),
+            digest,
+            digest_format: "bincode-1.3".into(),
+        };
+        // canonical_bincode of a fixed-schema struct cannot fail; expect for
+        // clippy compliance per CLAUDE.md "no panics in non-test code" escape hatch.
+        #[allow(clippy::expect_used)]
+        let sign_bytes = canonical_bincode()
+            .serialize(&signed_payload)
+            .expect("canonical bincode of DriftSignedPayload is infallible");
+        let signature = self.peer_key.sign(&sign_bytes);
+        let msg = DriftMessage {
+            anchor,
+            digest,
+            digest_format: "bincode-1.3".into(),
+            signed_by_peer: self.peer_key.public,
+            signature,
+        };
+        let _ = self
+            .network
+            .publish(self.topic, GossipMessage::Drift(msg))
+            .await;
+    }
+
+    /// Process an incoming drift message per spec §8.4: loopback
+    /// filter, signature verification, anchor coverage (stash on miss),
+    /// digest lookup / compute, compare + log on mismatch.
+    ///
+    /// Kept `async` to match the plan-B-1 §8.4 signature and the
+    /// `drain_drift_stash` call site (which awaits this fn); the body
+    /// happens to be synchronous in B-1 but downstream tasks may need
+    /// to await network operations during processing.
+    #[allow(clippy::unused_async)]
+    async fn process_drift_message(&mut self, d: DriftMessage) {
+        // §8.4 step 0: loopback filter.
+        if d.signed_by_peer == self.peer_key.public {
+            return;
+        }
+        // Step 1: verify signature.
+        let signed_payload = DriftSignedPayload {
+            anchor: d.anchor.clone(),
+            digest: d.digest,
+            digest_format: d.digest_format.clone(),
+        };
+        let Ok(bytes) = canonical_bincode().serialize(&signed_payload) else {
+            return;
+        };
+        if myrhiza_manifest::verify_signature(d.signed_by_peer.as_bytes(), &bytes, &d.signature)
+            .is_err()
+        {
+            return;
+        }
+        // Step 2: anchor coverage check.
+        let current_seq_map: BTreeMap<AuthorPubkey, u64> = self
+            .dag
+            .author_seq_vec()
+            .into_iter()
+            .map(|a| (a.author, a.max_seq))
+            .collect();
+        if !anchor_covered(&d.anchor, &current_seq_map) {
+            // Stash for later.
+            if self.incoming_drift_pending.len() >= self.cfg.drift_stash_cap
+                && let Some((k, _)) = self.incoming_drift_pending.iter().next()
+            {
+                let k = k.clone();
+                self.incoming_drift_pending.remove(&k);
+            }
+            self.incoming_drift_pending
+                .entry(d.anchor.author_seq_vec.clone())
+                .or_default()
+                .push(d);
+            return;
+        }
+        // Step 3: lookup own digest at this anchor; compute on cache miss.
+        let local_digest =
+            if let Some(dg) = self.own_digest_cache.get(&d.anchor.author_seq_vec).copied() {
+                dg
+            } else {
+                let Some(dg) = self.compute_anchor_digest(&d.anchor) else {
+                    return;
+                };
+                dg
+            };
+        // Step 4: compare.
+        if local_digest != d.digest {
+            let detected = DriftDetected {
+                peer: d.signed_by_peer,
+                anchor: d.anchor.clone(),
+                local_digest,
+                remote_digest: d.digest,
+            };
+            #[allow(clippy::expect_used)]
+            self.drift_log
+                .lock()
+                .expect("drift_log mutex poisoned")
+                .push(detected);
+        }
+    }
+
+    /// Compute our own state-digest at the given anchor by replaying
+    /// the topo-subset of events bounded by `anchor.author_seq_vec`.
+    fn compute_anchor_digest(&mut self, anchor: &DriftAnchor) -> Option<[u8; 32]> {
+        let bound = anchor_bound_map(&anchor.author_seq_vec);
+        let subset = self.dag.topo_sort_subset(|e| {
+            bound
+                .get(&e.author)
+                .copied()
+                .is_some_and(|max| e.seq <= max)
+        });
+        let mut state = Vec::<u8>::new();
+        for hash in subset {
+            let event = self.dag.get(&hash)?;
+            let bytes = canonical_bincode().serialize(event).ok()?;
+            let r = self.handle.apply(&state, &bytes).ok()?;
+            if let ApplyOutcome::Accepted = r.outcome {
+                state = r.new_state;
+            }
+        }
+        let digest_bytes = self.handle.state_digest(&state).ok()?;
+        Some(blake3::hash(&digest_bytes).into())
     }
 }
