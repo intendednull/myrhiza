@@ -11,11 +11,14 @@
 
 use ed25519_dalek::{Signer, SigningKey};
 use myrhiza_types::{AuthorPubkey, EventHash, PeerPubkey};
+use zeroize::ZeroizeOnDrop;
 
 /// Peer-scoped signing key (drift-message author identity).
+#[derive(ZeroizeOnDrop)]
 pub struct PeerKeypair {
     secret: SigningKey,
     /// The peer's Ed25519 verifying key as a [`PeerPubkey`].
+    #[zeroize(skip)]
     pub public: PeerPubkey,
 }
 
@@ -61,9 +64,11 @@ impl PeerKeypair {
 }
 
 /// Long-term author signing key (event author identity).
+#[derive(ZeroizeOnDrop)]
 pub struct AuthorKeypair {
     secret: SigningKey,
     /// The author's Ed25519 verifying key as an [`AuthorPubkey`].
+    #[zeroize(skip)]
     pub author: AuthorPubkey,
 }
 
@@ -81,6 +86,20 @@ impl AuthorKeypair {
     pub fn deterministic(seed: u64) -> Self {
         let mut bytes = [0u8; 32];
         bytes[..8].copy_from_slice(&seed.to_be_bytes());
+        Self::from_secret_bytes(bytes)
+    }
+
+    /// Generate a fresh author keypair from a cryptographically-secure RNG.
+    ///
+    /// Production callers should pass a `rand::rngs::OsRng` or
+    /// equivalent. Tests that need reproducibility should keep using
+    /// [`Self::deterministic`].
+    ///
+    /// Implementation mirrors [`PeerKeypair::generate`]: draws 32 bytes
+    /// via `rng.fill_bytes` and routes through [`Self::from_secret_bytes`].
+    pub fn generate<R: rand_core::CryptoRng + rand_core::RngCore>(rng: &mut R) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
         Self::from_secret_bytes(bytes)
     }
 
@@ -135,5 +154,15 @@ mod tests {
         // Cross-check against the same path the DAG will use to verify.
         myrhiza_manifest::verify_signature(kp.author.as_bytes(), body_hash.as_bytes(), &sig)
             .expect("author-signed body_hash must verify via manifest verify_signature");
+    }
+
+    /// Compile-only check that both keypair types derive `ZeroizeOnDrop`.
+    /// The zeroize crate's drop-time guarantee is upstream-tested; we
+    /// only assert that our derive wiring is correct.
+    #[test]
+    fn keypair_types_derive_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<PeerKeypair>();
+        assert_zeroize_on_drop::<AuthorKeypair>();
     }
 }
