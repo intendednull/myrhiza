@@ -16,13 +16,13 @@ Replace B-1's in-memory `PeerKeypair` / `AuthorKeypair` stubs (`crates/kernel/sr
 - `ZeroizeOnDrop` on the keypair structs.
 - The same `Runtime::start(...)` signature — the runtime layer stays filesystem-unaware so non-native embeddings (jco backend, B-4 iroh stress harnesses) compose cleanly.
 
-Plus the two trivial B-1 review carryovers that are *attribution / readability* fixes, not perf changes:
+Plus one trivial B-1 review carryover that is a pure-refactor readability fix:
 
-- **Q-4 — pending-peer attribution.** `PendingBuffer` entries currently record events without the originating peer; equivocation-flagged events drained from pending log `peer: None`. Add `peer_id: Option<PeerPubkey>` to entries so the log is fully attributable.
 - **N-12 — `handle_heads_summary` function split.** Currently a single `#[allow(clippy::too_many_lines)]` function covering four diff cases (behind / equal / ahead / local). Pure refactor into four sub-fns; no semantic change.
 
 This slice lands **none** of:
 
+- **Q-4 — pending-peer attribution.** Originally planned for B-2 but deferred to **B-4** during spec audit. B-1's `GossipMessage` envelope has no sender identity field, and `Subscription::recv` does not expose the sending peer — so populating `peer_id` on pending entries would require a protocol change. In B-4, iroh's per-connection NodeID authentication naturally provides the sending peer; Q-4 plumbs that through. Bundling the protocol change with persistence is unnecessary risk.
 - Q-1 / Q-7 (replay_full O(N) and anchor-digest off-loop) — deferred to **B-2.1** (perf slice). Performance changes to the runtime select loop are orthogonal to persistence and have subtle correctness implications around drop tracking + state-apply purity; bundling them with persistence mixes risk surfaces unnecessarily.
 - iroh transport (B-4), module-dep recursion (B-3), revocation topic (B-5), host-call fuel wiring (B-6), persistent DAG (B-7).
 - A canonical OS-standard storage path (XDG / `%APPDATA%`). B-2 takes the directory as a parameter; B-7 owns the canonical peer-state-dir layout that subsumes both keys and the persisted DAG.
@@ -33,8 +33,8 @@ This slice lands **none** of:
 | Decision | Chosen | Runner-up | Why |
 |---|---|---|---|
 | **Secret on-disk format** | **Raw 32 bytes (binary)** | bech32m text | `prior-art/willow/identity.md` "no `wsecret` HRP, ever" commitment — secrets in bech32m caused the Nostr nsec/npub visual-similarity disaster. Secrets should never enter paste buffers, log lines, or git diffs. Binary file is a clear discouragement against `cat`-style inspection. |
-| **Public-key encoding (filenames)** | bech32m with `mz-author-pk` HRP | hex / raw bytes | Willow's bech32m discipline: every identifier that appears in `ls` output, logs, or CLI paste buffers is bech32m-encoded with a type-tagged HRP. Public keys are safe to encode this way; bech32m checksum catches typos in CLI flows. |
-| Storage layout | `<dir>/peer.key` + `<dir>/authors/<mz-author-pk1...>.key`; dir is caller-provided | XDG default baked in | Premature until B-7 defines full peer-state-dir; embedder (CLI, browser, tests) picks; no XDG semantics forced on tests |
+| **Public-key encoding (filenames)** | bech32m with `wuser` HRP | `mz-author-pk` (initial draft) / `wpub-author` (master-spec publisher HRP) | Aligns with master spec's `w*` HRP convention (`distribution.md §10.2` uses `wpub-author` for *publishers*, `wpub-myrhiza` for official root). `wuser` is a new HRP for *event-author identity* (the IdentityScope.long-term in identity.md §6) — single-token kebab-free style, matching willow's `wpeer/wserver`. The publisher-vs-user-author distinction is preserved: `wpub-*` for app/module signing identities (distribution.md), `wuser` for per-topic event-authoring identities (this spec). |
+| Storage layout | `<dir>/peer.key` + `<dir>/authors/<wuser1...>.key`; dir is caller-provided | XDG default baked in | Premature until B-7 defines full peer-state-dir; embedder (CLI, browser, tests) picks; no XDG semantics forced on tests |
 | Load layer | New `IdentityStore` trait + `FilesystemIdentityStore` impl | Bake load into `Runtime::start` | Keeps runtime layer pure; jco backend has no filesystem; tests keep `deterministic()`; future stores (HSM, OS keyring, encrypted-at-rest) drop in via same trait |
 | Missing key | Generate via `OsRng` + persist on first load | Fail loudly if missing | Generate-on-first-run is expected single-machine UX (mirrors Willow `Identity::load_or_generate`); explicit `open_existing_only` mode is a future extension if anyone needs it |
 | Permissions | 0600 on Unix; reject load if looser; Windows best-effort + warning | No enforcement | Kernel custody of secrets implies refusing world-readable files. Direct lift of Willow's `load_or_generate` (`crates/identity/src/lib.rs:196-237`, issue #126 regression tests). Windows ACL story deferred. |
@@ -45,7 +45,8 @@ This slice lands **none** of:
 | **Encrypted-at-rest** | **Deferred** — flagged as `IdentityStore` extension point | Ship with B-2 | `prior-art/iroh/identity.md` names this as a "clean win" Myrhiza can offer over iroh, but a passphrase prompt is significant UX surface. Trait shape accepts an `EncryptedFilesystemIdentityStore` future impl without breaking changes. |
 | Runtime API change | None — `Runtime::start` signature unchanged | Take store instead of keypairs | Caller drives load → start; runtime stays filesystem-unaware |
 | Q-1, Q-7 | Defer to B-2.1 | Bundle into B-2 | Perf optimizations to runtime select loop; orthogonal to persistence; landing them together makes the PR review surface unmanageable |
-| Q-4, N-12 | In scope for B-2 | Defer to B-2.1 | Q-4 is `Option<PeerPubkey>` plumbing (uses types already in B-1); N-12 is a pure refactor — both ship cleanly alongside persistence |
+| Q-4 | **Defer to B-4** | In scope for B-2 | Originally drafted as in-scope. Spec audit revealed B-1's `GossipMessage` carries no sender identity and `Subscription::recv` does not expose the sending peer — implementing Q-4 requires a protocol-level change. iroh transport (B-4) provides per-connection NodeID-authenticated sender identity natively; defer Q-4 there. |
+| N-12 | In scope for B-2 | Defer to B-2.1 | Pure refactor (no semantic change); ships cleanly alongside persistence. |
 
 ## 3. Crate + module layout
 
@@ -93,15 +94,13 @@ No changes to existing public re-export sites: `crates/kernel/src/lib.rs` contin
 Kernel modifications outside `identity/`:
 
 ```
-crates/kernel/src/pending.rs   — add peer_id: Option<PeerPubkey>
-                                  to pending entries (Q-4); thread
-                                  through insert/drain APIs
 crates/kernel/src/runtime.rs   — handle_heads_summary split into
-                                  four sub-fns (N-12); pending-buffer
-                                  insert sites populate peer_id from
-                                  the gossip-receive context
+                                  four sub-fns (N-12); no other
+                                  changes
 crates/kernel/src/lib.rs       — re-export new identity types
 ```
+
+`crates/kernel/src/pending.rs` is **unchanged** — Q-4's pending-entry `peer_id` plumbing is deferred to B-4 (see §1).
 
 Cargo deps:
 
@@ -110,6 +109,7 @@ Cargo deps:
 [dependencies]
 bech32 = "=0.11.0"            # BIP-350 bech32m (filenames only)
 zeroize = { version = "1.7", features = ["derive"] }
+async-trait = { workspace = true }   # already in workspace; restated here for clarity
 
 [dev-dependencies]
 tempfile = "3"
@@ -121,6 +121,7 @@ Workspace `[workspace.dependencies]`:
 bech32 = "=0.11.0"
 zeroize = { version = "1.7", features = ["derive"] }
 tempfile = "3"
+# async-trait already present in workspace.dependencies (from B-1)
 ```
 
 The exact pin on `bech32` matches the project convention from plan A (`bincode = "=1.3.3"`, `wasmtime = "=36.0.9"`); checksum-format crates are stability-sensitive enough to pin tightly. `zeroize` uses caret range — the `derive` macro is stable.
@@ -142,18 +143,22 @@ This file is unfit for `cat`, `git diff`, or copy-paste — by design. Inspectio
 `AuthorPubkey` filenames embed the bech32m-encoded *public* key:
 
 ```
-authors/mz-author-pk1<58 bech32m chars>.key
+authors/wuser1<58 bech32m chars>.key
 ```
 
-This makes `ls authors/` immediately readable, gives copy-paste users a checksummed identifier (BIP-350 BCH catches single-character typos in CLI flows), and aligns with Willow's bech32m-for-everything-pasteable discipline.
+This makes `ls authors/` immediately readable, gives copy-paste users a checksummed identifier (BIP-350 BCH catches single-character typos in CLI flows), and aligns with the master spec's `w*` HRP convention (distribution.md §10.2).
 
 ### 4.3 HRP table
 
-| HRP | Encodes | Where it appears |
-|---|---|---|
-| `mz-author-pk` | 32-byte Ed25519 verifying key (author pubkey) | `authors/<pk>.key` filename portion |
+| HRP | Encodes | Where it appears | Defined in |
+|---|---|---|---|
+| `wuser` | 32-byte Ed25519 verifying key (event-author identity / IdentityScope.long-term) | `authors/<pk>.key` filename portion | **B-2 (this spec)** |
+| `wpub-author` | Ed25519 verifying key of an app/module *publisher* | manifest fields per distribution.md | distribution.md §10.2 |
+| `wpub-myrhiza` | Ed25519 verifying key of official myrhiza-* module signing root | manifest fields per distribution.md | distribution.md §10.2 |
 
-Future HRPs (post-B-2) — `mz-peer-pk` (peer-pubkey CLI exports), `mz-event-id` (event-hash references in URLs), `mz-topic-id` (topic identifiers) — are reserved here but not minted in B-2 to avoid premature HRP allocation.
+**Publisher vs event-author distinction.** Both kinds are Ed25519 keypairs but they appear in different contexts: `wpub-*` HRPs mark publisher identities (developer signing an app bundle release), `wuser` marks the per-topic event-authoring identity. Same primitive (Ed25519 32-byte pubkey), different display HRP so the role is unambiguous on inspection.
+
+Future HRPs are reserved for follow-up specs (peer-pubkey CLI exports, event-hash URL references, topic-identifier display); B-2 mints only `wuser` to avoid premature HRP allocation. A future "HRP vocabulary" spec should consolidate the table across `distribution.md`, B-2, and any other producers.
 
 HRP charset uses kebab-case hyphens (allowed by BIP-350: HRP is ASCII 33–126 minus `1`).
 
@@ -162,11 +167,11 @@ HRP charset uses kebab-case hyphens (allowed by BIP-350: HRP is ASCII 33–126 m
 ```rust
 // crates/kernel/src/identity/fs.rs
 
-pub(super) fn encode_author_pubkey(pk: &AuthorPubkey) -> String;
+pub(super) fn encode_author_pubkey(pk: AuthorPubkey) -> String;
 pub(super) fn decode_author_pubkey(s: &str) -> Result<AuthorPubkey, IdentityError>;
 ```
 
-`decode_author_pubkey` enforces HRP match against `mz-author-pk` — any other HRP returns `IdentityError::HrpMismatch { expected, actual }`. Used only for filename validation; secret files do not carry an HRP.
+`decode_author_pubkey` enforces HRP match against `wuser` — any other HRP returns `IdentityError::HrpMismatch { expected: "wuser", actual }`. Used only for filename validation; secret files do not carry an HRP. `encode_author_pubkey` takes `AuthorPubkey` by value (it is `Copy`).
 
 ## 5. `IdentityStore` trait
 
@@ -227,8 +232,8 @@ impl IdentityStore for FilesystemIdentityStore { /* ... */ }
 <dir>/
 ├── peer.key                                 (mode 0600)
 └── authors/                                 (mode 0700)
-    ├── mz-author-pk1<...>.key               (mode 0600)
-    └── mz-author-pk1<...>.key               (mode 0600)
+    ├── wuser1<...>.key                      (mode 0600)
+    └── wuser1<...>.key                      (mode 0600)
 ```
 
 ### 6.3 Read path
@@ -259,14 +264,21 @@ impl IdentityStore for FilesystemIdentityStore { /* ... */ }
    - Return the keypair.
 
 5. `list_authors()`:
-   - Read `<dir>/authors/`; collect entries matching `mz-author-pk1*.key`; decode the filename's bech32m to recover `AuthorPubkey`; sort.
+   - Read `<dir>/authors/`; collect entries matching `wuser1*.key`; decode the filename's bech32m to recover `AuthorPubkey`; sort.
 
 ### 6.4 Atomic write detail
 
 All writes follow the same idiom (`crates/kernel/src/identity/fs.rs::write_secret`):
 
 ```rust
-let tmp = path.with_extension("key.tmp");
+// Use a sibling .tmp path explicitly. `with_extension` would replace
+// the existing extension (e.g. peer.key → peer.tmp); we want
+// peer.key.tmp instead.
+let tmp = path.with_file_name({
+    let mut s = path.file_name().unwrap().to_os_string();
+    s.push(".tmp");
+    s
+});
 let mut f = OpenOptions::new()
     .create_new(true)        // refuse if .tmp exists (concurrent write)
     .write(true)
@@ -278,7 +290,7 @@ drop(f);
 std::fs::rename(&tmp, path)?;
 ```
 
-`create_new` guards against concurrent stores writing the same key — if another process is mid-write, the second writer errors out cleanly instead of corrupting the file. Direct lift from Willow's `Identity::load_or_generate` (issue #126 regression tests at `crates/identity/src/lib.rs:615-663`).
+`create_new` guards against concurrent stores writing the same key — if another process is mid-write, the second writer errors out cleanly instead of corrupting the file. Direct lift from Willow's `Identity::load_or_generate` (issue #126 regression tests at `willow/crates/identity/src/lib.rs:615-663`).
 
 ### 6.5 Async wrapping
 
@@ -319,34 +331,7 @@ pub enum IdentityError {
 
 `HrpMismatch` / `Bech32Decode` apply to filename parsing only — secret-file content is raw bytes with no HRP. Each variant pins which negative test exercises it (§9 acceptance table).
 
-## 8. Carryover changes
-
-### 8.1 Q-4 — pending-peer attribution
-
-`PendingBuffer` currently stores entries keyed by `EventHash` carrying `(Event, inserted_at: Instant, author: AuthorPubkey, seq: AuthorSeq)`. Add `peer_id: Option<PeerPubkey>` — set when the event arrives via gossip (the receiving `Subscription` exposes the sending-peer identity via `GossipMessage` envelope when available), `None` for locally-authored events.
-
-API surface change:
-
-```rust
-// crates/kernel/src/pending.rs
-
-pub fn insert(
-    &mut self,
-    event: Event,
-    peer_id: Option<PeerPubkey>,   // NEW
-) -> Result<(), PendingError>;
-
-pub struct DrainedEntry {
-    pub event: Event,
-    pub peer_id: Option<PeerPubkey>,  // NEW
-}
-```
-
-Drain APIs return the `peer_id` alongside the event. The runtime equivocation log already has a `peer: Option<PeerPubkey>` field (per `EquivocationFlag` in B-1); the call sites that currently pass `None` start passing the real value.
-
-**Compatibility:** existing tests that call `PendingBuffer::insert(event)` need updating. Mechanical — pass `None` everywhere except the one place in `Runtime` that processes incoming `GossipMessage::Event`.
-
-### 8.2 N-12 — `handle_heads_summary` split
+## 8. Carryover change — N-12: `handle_heads_summary` split
 
 The current `Runtime::handle_heads_summary` covers four diff cases inline:
 
@@ -389,13 +374,13 @@ New test file `crates/kernel/tests/persistence.rs`:
 | 4 | `load_or_create_peer_is_idempotent_within_one_store` | Two sequential `load_or_create_peer` on the same store return identical pubkeys (no second key generated). |
 | 5 | `load_rejects_loose_unix_permissions` *(`#[cfg(unix)]`)* | chmod `peer.key` to 0644 → load returns `IdentityError::InsecurePermissions`. |
 | 6 | `load_rejects_seed_length_mismatch` | Pre-place a malformed `peer.key` (31 / 33 / 0 bytes) into the store dir before calling `load_or_create_peer` → load returns `IdentityError::SeedLengthMismatch`. The test writes the file directly via `std::fs::write` to bypass the auto-generate path. |
-| 7 | `load_rejects_corrupted_filename_bech32m` | Place an `authors/garbage.key` file (no `mz-author-pk1` prefix) and call `list_authors` → returns `IdentityError::InvalidAuthorFilename`. |
+| 7 | `load_rejects_corrupted_filename_bech32m` | Place an `authors/garbage.key` file (no `wuser1` prefix) and call `list_authors` → returns `IdentityError::InvalidAuthorFilename`. |
 | 8 | `load_author_rejects_pubkey_filename_mismatch` | Write a valid 32-byte seed into a file whose filename's embedded pubkey doesn't match the derived pubkey → `IdentityError::AuthorPubkeyMismatch`. |
 | 9 | `open_creates_directory_with_0700_mode` *(`#[cfg(unix)]`)* | Open on a non-existent dir → dir exists with mode 0700. |
 | 10 | `concurrent_store_writes_do_not_corrupt_key` | Two threads call `create_author` concurrently — both succeed, store contains both keys, neither file is partial. |
-| 11 | `keypair_types_derive_zeroize_on_drop` | Static-assertion test — `assert_impl_all!(PeerKeypair: ZeroizeOnDrop)` and same for `AuthorKeypair`. The `zeroize` crate's drop-time guarantee is upstream-tested; we test that we wired it correctly, not the crate's behavior. |
+| 11 | `keypair_types_derive_zeroize_on_drop` | Compile-only check: `fn _assert<T: ZeroizeOnDrop>() {} _assert::<PeerKeypair>(); _assert::<AuthorKeypair>();` — verifies the derive is wired, no runtime cost, no extra dep. The `zeroize` crate's drop-time guarantee is upstream-tested; we test only that we wired the derive correctly. |
 
-Existing B-1 convergence tests (`crates/kernel/tests/convergence.rs`) must continue to pass unchanged — this is the regression guarantee for the Q-4 + N-12 carryovers.
+Existing B-1 convergence tests (`crates/kernel/tests/convergence.rs`) must continue to pass unchanged — this is the regression guarantee for the N-12 refactor.
 
 Spec-coverage matrix annotations:
 
@@ -407,7 +392,7 @@ Spec-coverage matrix annotations:
 
 `IdentityError` propagates out of `IdentityStore` methods unchanged. Callers wrap into their own error types — `Runtime::start` does not consume `IdentityStore` directly, so no `RuntimeError::Identity` variant is needed in B-2.
 
-The `peer_warnings` log gains no new variants. Q-4's `Option<PeerPubkey>` plumbing populates the existing `EquivocationFlag::peer` field — observability change is "field is now populated more often", not "new event type."
+The `peer_warnings` log and `EquivocationFlag::peer` field are unchanged in B-2 (Q-4 deferred to B-4 — see §1).
 
 ## 11. Edge cases
 
@@ -427,6 +412,8 @@ The `peer_warnings` log gains no new variants. Q-4's `Option<PeerPubkey>` plumbi
 - **No browser backend.** jco backend's identity story is deferred; B-2 is native-only. The `IdentityStore` trait will be implementable against IndexedDB or `localStorage` in the browser-tier work without breaking changes here.
 - **No replay_full O(N) fix (Q-1).** Deferred to **B-2.1**.
 - **No anchor-digest off-loop fix (Q-7).** Deferred to **B-2.1**.
+- **No pending-peer attribution (Q-4).** Deferred to **B-4** — requires sender identity on `GossipMessage` which iroh transport provides natively.
+- **No `PendingBuffer` shape change.** Unchanged from B-1.
 
 ## 13. Surface change summary
 
@@ -436,27 +423,31 @@ New public surface in `myrhiza_kernel::identity`:
 - `FilesystemIdentityStore` struct + `open` constructor.
 - `IdentityError` enum.
 
+Modified existing types (private field changes only — public API is identical):
+
+- `PeerKeypair` and `AuthorKeypair` gain `#[derive(ZeroizeOnDrop)]` and a `#[zeroize(skip)]` attribute on the public-pubkey field. No method signatures change; existing call sites compile unchanged.
+
 Unchanged public surface:
 
-- `PeerKeypair` (constructors and methods).
-- `AuthorKeypair` (constructors and methods).
+- `PeerKeypair` constructors (`from_secret_bytes`, `deterministic`, `generate`) and methods (`sign`).
+- `AuthorKeypair` constructors and `sign_body_hash`.
 - `Runtime::start` signature.
+- `PendingBuffer` shape (no Q-4 in this slice).
 
-Modified public surface in `myrhiza_kernel::pending`:
+Refactor-only changes:
 
-- `PendingBuffer::insert` adds a `peer_id: Option<PeerPubkey>` parameter.
-- `DrainedEntry` (or equivalent return type) carries `peer_id: Option<PeerPubkey>`.
-
-The pending-buffer signature change is a breaking change for any external consumer (none today — only the kernel uses it). Documented in the PR body.
+- `Runtime::handle_heads_summary` split into four sub-fns per N-12. Module-private; not part of public surface.
 
 ## 14. Out-of-scope future work — explicit deferrals
 
 These come up naturally while designing B-2 but do not belong in this slice:
 
 - **B-2.1 (next):** Q-1 (replay_full O(N) → incremental apply) + Q-7 (anchor digest off-loop or memoized by anchor identity). Both are perf changes to the runtime select loop. Plan after B-2 ships.
+- **B-4:** Q-4 (pending-peer attribution) — requires sender identity on `GossipMessage` / `Subscription::recv`, which iroh's per-connection NodeID authentication provides natively. Q-4's `peer_id: Option<PeerPubkey>` field on pending entries lands as part of the iroh integration.
 - **B-7:** Canonical peer-state-dir layout subsuming both keys and persisted DAG. `FilesystemIdentityStore` is one component of that layout. Likely shape: `<state-dir>/identity/{peer.key, authors/}` + `<state-dir>/dag/...`.
 - **Multi-device identity module:** `myrhiza-identity-multi-device` per [identity.md](2026-05-09-myrhiza-master-design/identity.md) §6.3.
 - **Browser identity store:** parallel to filesystem; implements the same trait against the browser persistence APIs.
+- **HRP vocabulary consolidation spec:** consolidates HRPs across distribution.md (`wpub-author`, `wpub-myrhiza`) and B-2 (`wuser`); ratifies the kebab-vs-single-token style and reserves a forward namespace for `wpeer-*`, `wevent-*`, `wtopic-*` introductions. Low priority — current namespace has no collision.
 
 ## 15. Prior-art consultation
 
@@ -490,4 +481,4 @@ Decisions in §2 were grounded in the following prior-art folders (consulted via
 - [2026-05-10-plan-b-1-dag-memnet-design.md](2026-05-10-plan-b-1-dag-memnet-design.md) §11 — Kernel Runtime.
 - BIP-350 — Bech32m specification (used for filename public-key encoding).
 - `crates/kernel/src/runtime.rs` lines 591, 785, 1067, 1272 — B-1 review-finding carryover TODOs (Q-4, N-12, Q-1, Q-7).
-- `crates/manifest/src/signature.rs` lines 25-40 — existing `verify_strict` (RFC 8032 strict) verify path that B-2 builds on without modification.
+- `crates/manifest/src/signature.rs` `verify_signature` function (calls `VerifyingKey::verify_strict` internally, RFC 8032 strict) — existing verify path that B-2 builds on without modification.
