@@ -3,7 +3,13 @@
 use crate::{GossipMessage, NetError, Network, subscription::MemSubscription};
 use myrhiza_types::Topic;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+// `Ordering` is only referenced inside `MemBus::inject_lag`, which is
+// itself gated behind `#[cfg(any(test, feature = "test-helpers"))]`.
+// Without the matching gate here, a plain `cargo build -p myrhiza-kernel`
+// (lib-only, no features) trips `-D unused-imports`.
+#[cfg(any(test, feature = "test-helpers"))]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 
 /// Per-topic bus state: the broadcast sender + the set of live
