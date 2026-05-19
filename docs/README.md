@@ -29,7 +29,8 @@ Prior-art docs carry `[active]` or `[archived]`.
 
 *(specs, plans, and reports for the kernel: component model, capabilities, state-apply ABI, lazy loading, cross-peer convergence)*
 
-_(empty — see incoming runtime master spec)_
+- [Myrhiza master design](specs/2026-05-09-myrhiza-master-design/README.md) — runtime spec: three-tier architecture, four component profiles, event-log replay convergence, capability-mediated host surface, deterministic state-apply. Canonical reference for anything touching runtime semantics. `[draft]`
+- [Plan B-1 — Event DAG + MemNetwork + cross-peer convergence](specs/2026-05-10-plan-b-1-dag-memnet-design.md) — per-author Merkle DAG, HeadsSummary sync, PendingBuffer, TUTTI-shaped drift detection, async Network trait. Realized by [plan B-1](plans/2026-05-10-plan-b-1.md). `[landed]`
 
 ### Networking & sync
 
@@ -41,6 +42,7 @@ _(empty)_
 
 *(keys, MLS, capability custody, peer auth)*
 
+- [Plan B-2 — Persistent identity + B-1 carryover cleanup](specs/2026-05-19-plan-b-2-persistent-identity-design.md) — bech32m-encoded `PeerKeypair` + `AuthorKeypair` filesystem store, `IdentityStore` trait, plus carryover fixes Q-4 (pending-peer attribution) and N-12 (handle_heads_summary refactor) from B-1 review. `[draft]`
 - [MLS / OpenMLS](prior-art/mls/) — IETF Standards Track group key agreement protocol (RFC 9420, July 2023) plus OpenMLS Rust implementation (`openmls 0.8.1`, MIT). 13 files, ~1,560 lines. CGKA-based; O(log N) on member updates; FS + PCS; production-shipping at Wire (RFC 9420 GA April 2025), Webex (on draft, migrating), Discord DAVE (RFC 9420, A/V-only since Sept 2024), Google RCS UP 3.0 (limited rollout 2026). NOT used by Apple iMessage (uses PQ3), WhatsApp, Signal, or Matrix. Surfaces critical Cremers ETK 2025 finding (MLS fails FCGKA with EUF-CMA-only signatures like ECDSA — published-RFC-level flaw; use Ed25519 not ECDSA). OpenMLS does not ship as a WASM Component Model artifact; Myrhiza will need to author the WIT contract for `MlsGroup` operations. The reference cryptographic primitive if Myrhiza grows multi-party room-shaped capabilities (channels, group state-apply, multi-party caps with rotating membership). Consult before any spec on group caps, multi-party auth, or post-quantum migration. `[active]`
 
 ### App distribution
