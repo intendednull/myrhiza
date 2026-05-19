@@ -125,6 +125,8 @@ impl AuthorKeypair {
 mod store;
 pub use store::{IdentityError, IdentityStore};
 
+mod fs;
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
