@@ -1,13 +1,21 @@
-//! In-memory keypair stubs for B-1.
+//! Identity primitives — keypair structs + pluggable storage.
 //!
-//! Per plan-B-1 spec §10: full bech32m-encoded persistent identity
-//! is B-2. B-1 lives entirely in-memory; keypairs generated at
-//! `Runtime::start` time and discarded on shutdown.
+//! This module owns the in-memory keypair types `PeerKeypair` and
+//! `AuthorKeypair` (drift-message and event-author signing identities,
+//! per plan B-1 spec §10 and convergence.md §4 / §4.7). It also exposes
+//! the persistent-storage layer added by plan B-2:
 //!
-//! - [`PeerKeypair`] signs drift-messages per convergence.md §4.7.
-//! - [`AuthorKeypair`] signs events per convergence.md §4.
+//! - [`IdentityStore`] — pluggable backend trait (this module's `store`).
+//! - `FilesystemIdentityStore` — disk-backed impl with bech32m
+//!   `wuser`-HRP author filenames and raw-bytes secret files (this
+//!   module's `fs`).
+//! - [`IdentityError`] — failure surface.
 //!
-//! Both are nominally distinct but mechanically the same (Ed25519 `SigningKey`).
+//! Per plan B-2 spec §5 + §6 + §7. Keypair structs derive
+//! `ZeroizeOnDrop` (Willow precedent — `prior-art/willow/identity.md`).
+//!
+//! `Runtime::start` consumes a `PeerKeypair` / `Option<AuthorKeypair>`
+//! by value as in B-1; loading from a store is a caller-side concern.
 
 use ed25519_dalek::{Signer, SigningKey};
 use myrhiza_types::{AuthorPubkey, EventHash, PeerPubkey};
@@ -113,6 +121,9 @@ impl AuthorKeypair {
         self.secret.sign(body_hash.as_bytes()).to_bytes()
     }
 }
+
+mod store;
+pub use store::IdentityError;
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
