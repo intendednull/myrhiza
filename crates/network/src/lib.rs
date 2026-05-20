@@ -21,8 +21,14 @@ use thiserror::Error;
 pub mod memory;
 pub mod subscription;
 
+#[cfg(feature = "network-iroh")]
+pub mod iroh_transport;
+
 pub use memory::{MemBus, MemNetwork};
 pub use subscription::{MemSubscription, Subscription};
+
+#[cfg(feature = "network-iroh")]
+pub use iroh_transport::IrohNetwork;
 
 /// Gossip message envelope — the only thing that crosses the wire.
 ///
