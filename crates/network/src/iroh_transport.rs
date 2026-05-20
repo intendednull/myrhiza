@@ -51,7 +51,10 @@ use myrhiza_types::{PeerPubkey, Topic};
 /// here while retaining another for router-level work.
 pub struct IrohNetwork {
     endpoint: iroh::Endpoint,
-    #[allow(dead_code, reason = "behavior lands in B-4.1; skeleton only holds the handle")]
+    #[allow(
+        dead_code,
+        reason = "behavior lands in B-4.1; skeleton only holds the handle"
+    )]
     gossip: iroh_gossip::Gossip,
     /// Cached `PeerPubkey` derived from `endpoint.id()` at
     /// construction time. Avoids per-call conversion.
