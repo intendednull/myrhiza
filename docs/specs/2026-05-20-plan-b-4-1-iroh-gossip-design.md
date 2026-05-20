@@ -422,7 +422,6 @@ See §6 above for the load-bearing edge cases. Additional caveats for the implem
 - **B-4.2** — Q-4 sender attribution. Design choice between (a) direct peer-to-peer streams for HeadsSummary/Request; (b) embedded signed envelope on each gossip message. Probably (b) for HeadsSummary (broadcast semantics) + (a) for HeadsRequest (point-to-point semantics). Also: `unsubscribe` real impl.
 - **B-4.3** — Real cross-process / multi-process acceptance tests. The deferred `lagged_event_maps_to_sub_error_lagged` test (referenced in §4 prose) is candidate work since reliable lag triggering needs more harness control. Also: halt detection for `ApiError`-mid-stream.
 - **Publish-side topic caching**: cache `(Topic → GossipSender)` map on `IrohNetwork` to avoid re-subscribing per publish. Worth profiling first; may not be a real bottleneck in the runtime's hot path.
-- **`SubError::DecodeFailed` variant**: distinct from `Lagged`. Add when an app or the runtime needs to differentiate.
 - **`NeighborUp` / `NeighborDown` observability**: extend `RuntimeHandle` with a `peer_membership_log: Arc<Mutex<Vec<PeerMembershipEvent>>>`.
 
 ## 12. Sources

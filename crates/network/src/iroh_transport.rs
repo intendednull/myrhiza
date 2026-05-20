@@ -66,6 +66,18 @@ pub struct IrohNetwork {
 impl IrohNetwork {
     /// Construct an `IrohNetwork` from a pre-built [`iroh::Endpoint`]
     /// and [`iroh_gossip::Gossip`].
+    ///
+    /// # Lifecycle precondition
+    ///
+    /// The caller MUST have already registered `iroh_gossip::ALPN`
+    /// against `gossip` via an [`iroh::protocol::Router`] (constructed
+    /// once at kernel boot per `prior-art/iroh/lessons.md` §Borrow
+    /// row 2). Without that Router wiring, inbound iroh-gossip streams
+    /// never reach the gossip handler — `subscribe` will appear to
+    /// succeed while `recv` never yields a `Received` event. The
+    /// Router must outlive this `IrohNetwork` instance; dropping it
+    /// first causes subsequent `subscribe` calls to fail with
+    /// `ApiError` (per B-4.1 spec §10 "Drop order with Router").
     #[must_use]
     pub fn new(endpoint: iroh::Endpoint, gossip: iroh_gossip::Gossip) -> Self {
         let endpoint_id = endpoint.id();
