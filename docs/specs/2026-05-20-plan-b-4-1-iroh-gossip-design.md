@@ -232,7 +232,7 @@ impl Network for IrohNetwork {
 /// [`Event::Received`] payloads, maps [`Event::Lagged`] to
 /// [`SubError::Lagged(0)`] (count fidelity lost — see spec §6), and
 /// silently consumes membership events ([`Event::NeighborUp`],
-/// [`Event::NeighborDown`], [`Event::Joined`]).
+/// [`Event::NeighborDown`]).
 pub struct IrohSubscription {
     inner: GossipTopic,
 }
@@ -420,7 +420,7 @@ See §6 above for the load-bearing edge cases. Additional caveats for the implem
 ## 11. Future work — explicit deferrals
 
 - **B-4.2** — Q-4 sender attribution. Design choice between (a) direct peer-to-peer streams for HeadsSummary/Request; (b) embedded signed envelope on each gossip message. Probably (b) for HeadsSummary (broadcast semantics) + (a) for HeadsRequest (point-to-point semantics). Also: `unsubscribe` real impl.
-- **B-4.3** — Real cross-process / multi-process acceptance tests. Test 4 (`lagged_event_maps_to_sub_error_lagged`) is candidate work since reliable lag triggering needs more harness control. Also: halt detection for `ApiError`-mid-stream.
+- **B-4.3** — Real cross-process / multi-process acceptance tests. The deferred `lagged_event_maps_to_sub_error_lagged` test (referenced in §4 prose) is candidate work since reliable lag triggering needs more harness control. Also: halt detection for `ApiError`-mid-stream.
 - **Publish-side topic caching**: cache `(Topic → GossipSender)` map on `IrohNetwork` to avoid re-subscribing per publish. Worth profiling first; may not be a real bottleneck in the runtime's hot path.
 - **`SubError::DecodeFailed` variant**: distinct from `Lagged`. Add when an app or the runtime needs to differentiate.
 - **`NeighborUp` / `NeighborDown` observability**: extend `RuntimeHandle` with a `peer_membership_log: Arc<Mutex<Vec<PeerMembershipEvent>>>`.
@@ -428,7 +428,7 @@ See §6 above for the load-bearing edge cases. Additional caveats for the implem
 ## 12. Sources
 
 - `iroh-gossip-0.99.0/src/api.rs:157-167` — `Gossip::subscribe` signature.
-- `iroh-gossip-0.99.0/src/api.rs:336-345` — `Event` enum (Received / NeighborUp / NeighborDown / Joined / Lagged).
+- `iroh-gossip-0.99.0/src/api.rs:336-345` — `Event` enum (Received / NeighborUp / NeighborDown / Lagged) — exactly four variants.
 - `iroh-gossip-0.99.0/src/api.rs:362-372` — `Message { content: Bytes, scope, delivered_from }`.
 - `iroh-gossip-0.99.0/src/api.rs:259-265, 312-330` — `GossipTopic` + `GossipReceiver` implement `Stream<Item = Result<Event, ApiError>>`.
 - `iroh-gossip-0.99.0/src/api.rs:227-234` — `split()` + `broadcast(Bytes)`.
