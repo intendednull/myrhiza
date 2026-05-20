@@ -1,10 +1,10 @@
 //! Iroh transport implementation of the [`Network`] trait.
 //!
-//! B-4.1 STATE: `subscribe` + `publish` are real iroh-gossip
-//! 0.99.0-backed implementations. `unsubscribe` still returns
-//! [`crate::NetError::Unimplemented`] (planned in B-4.2 — drop
-//! semantics on [`IrohSubscription`] cover practical "stop
-//! receiving"). Q-4 sender attribution + real cross-process tests
+//! B-4.2 STATE: `subscribe`, `publish`, and `unsubscribe` are real
+//! iroh-gossip 0.99.0-backed implementations. `unsubscribe` is a
+//! semantic no-op at the `IrohNetwork` boundary — callers MUST drop
+//! the [`IrohSubscription`] returned by `subscribe()` to actually
+//! leave the topic. Q-4 sender attribution + real cross-process tests
 //! are B-4.2 / B-4.3 scope.
 //!
 //! ## Why phased
@@ -154,16 +154,25 @@ impl Network for IrohNetwork {
     }
 
     async fn unsubscribe(&self, _topic: Topic) -> Result<(), NetError> {
+        // iroh-gossip 0.99.0 exposes no explicit "leave swarm" API in
+        // its public surface; drop IS the v1 implementation. If iroh
+        // adds an explicit leave API, this method becomes the natural
+        // wrapper site.
+        //
         // GossipTopic self-cleans when all senders + receivers drop
-        // (iroh-gossip-0.99.0 gossip/src/api.rs:207-210 — implicit
-        // cleanup via the dropped mpsc sender inside the actor; no
-        // explicit Drop impl). The IrohSubscription's own lifetime
-        // already covers the practical "stop receiving" case.
-        // Explicit swarm-departure signaling is deferred to B-4.2.
-        Err(NetError::Unimplemented {
-            method: "Network::unsubscribe",
-            planned_in: "B-4.2",
-        })
+        // (iroh-gossip-0.99.0 gossip/src/api.rs:207 — implicit cleanup
+        // via the dropped mpsc sender inside the actor; no explicit
+        // Drop impl).
+        //
+        // This method is semantically a no-op at the IrohNetwork
+        // boundary: `IrohNetwork` does not hold any subscriptions to
+        // drop. Cleanup happens through caller-side subscription drop.
+        // Callers MUST drop the IrohSubscription returned by
+        // `subscribe()` to actually leave the topic — `unsubscribe()`
+        // alone is insufficient.
+        //
+        // Per B-4.2 spec §3.3.
+        Ok(())
     }
 }
 

@@ -29,8 +29,8 @@
 use bytes::Bytes;
 use iroh::address_lookup::MemoryLookup;
 use myrhiza_network::iroh_transport::iroh_topic_id_from_topic;
-use myrhiza_network::{GossipMessage, IrohNetwork, NetError, Network, SubError, Subscription};
-use myrhiza_types::{AuthorHead, AuthorPubkey, EventHash, HeadsSummary, Topic};
+use myrhiza_network::{GossipMessage, IrohNetwork, Network, SubError, Subscription};
+use myrhiza_types::{AuthorHead, AuthorPubkey, EventHash, HeadsSummary, PeerPubkey, Topic};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -82,6 +82,8 @@ fn sample_heads_summary() -> HeadsSummary {
             hash: EventHash::ZERO,
         }],
         kernel_fuel_table_version: 1,
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
     }
 }
 
@@ -251,29 +253,6 @@ async fn decode_failure_surfaces_as_subscribe_decode_failed() {
     match result {
         Some(p) => assert_eq!(p, a_pk, "decode-failure peer must be A's pubkey"),
         None => panic!("expected Some(peer) on DecodeFailed, got None"),
-    }
-}
-
-// ---- test 4 -----------------------------------------------------------------
-
-/// Covers: convergence.md §4.4 — `unsubscribe` still returns
-/// `Unimplemented` (drop semantics cover the practical case;
-/// explicit swarm-departure is B-4.2's scope).
-#[tokio::test]
-async fn unsubscribe_returns_unimplemented() {
-    let lookup = MemoryLookup::new();
-    let (_ep, _gossip, _router, net) = spawn_iroh_peer(&lookup).await;
-    let topic = Topic::from_bytes([0xFE; 32]);
-    let result = net.unsubscribe(topic).await;
-    let Err(err) = result else {
-        panic!("expected Err(NetError::Unimplemented), got Ok(_)");
-    };
-    match err {
-        NetError::Unimplemented { method, planned_in } => {
-            assert_eq!(method, "Network::unsubscribe");
-            assert_eq!(planned_in, "B-4.2");
-        }
-        other => panic!("expected NetError::Unimplemented, got {other:?}"),
     }
 }
 
