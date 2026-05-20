@@ -150,6 +150,56 @@ impl StateApplyHandle {
     pub fn state_digest(&mut self, state: &[u8]) -> Result<Vec<u8>, ApplyError> {
         Ok(self.instance.call_state_digest(state)?)
     }
+
+    /// Placeholder handle used while the real handle is moved into
+    /// a `tokio::task::spawn_blocking` worker by
+    /// `Runtime::compute_anchor_digest_off_loop`. Per plan-B-2.1
+    /// spec §4.3.
+    ///
+    /// Callers MUST NOT invoke any method on a tombstone — doing so
+    /// panics via [`unreachable!`]. The tombstone exists solely to
+    /// satisfy [`std::mem::replace`]'s requirement for a value to
+    /// swap in. The runtime restores the real handle from the
+    /// blocking task's return tuple before any subsequent method
+    /// on the handle is reached.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn tombstone() -> Self {
+        Self {
+            instance: Box::new(TombstoneInstance),
+        }
+    }
+}
+
+/// State-apply instance that panics on any call. See
+/// [`StateApplyHandle::tombstone`].
+///
+/// The `unreachable!()` panic is load-bearing: it converts a runtime
+/// bug (code path that tries to use the handle during the
+/// `spawn_blocking` window) into a deterministic panic with a clear
+/// message, instead of silent miscomputation.
+struct TombstoneInstance;
+
+impl ComponentInstance for TombstoneInstance {
+    #[allow(clippy::unreachable)]
+    fn call_apply(
+        &mut self,
+        _prior_state: &[u8],
+        _event: &[u8],
+    ) -> Result<(Verdict, Vec<u8>), BackendError> {
+        unreachable!(
+            "tombstone state-apply handle invoked — runtime bug: \
+             handle was used during spawn_blocking window before restore"
+        )
+    }
+
+    #[allow(clippy::unreachable)]
+    fn call_state_digest(&mut self, _state: &[u8]) -> Result<Vec<u8>, BackendError> {
+        unreachable!(
+            "tombstone state-apply handle invoked — runtime bug: \
+             handle was used during spawn_blocking window before restore"
+        )
+    }
 }
 
 fn lift_verdict(v: Verdict) -> ApplyOutcome {
