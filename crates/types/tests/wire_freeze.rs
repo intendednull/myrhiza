@@ -133,12 +133,16 @@ fn heads_summary_wire_layout() {
             hash: EventHash::ZERO,
         }],
         kernel_fuel_table_version: 1,
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
     };
     let bytes = canonical_bincode().serialize(&h).expect("encode");
-    // authors: 8 (vec len = 1) + AuthorHead (40 + 8 + 40 = 88)
+    // authors: 8 (vec len = 1) + AuthorHead (40 + 8 + 40 = 88) = 96
     // kernel_fuel_table_version: 4 (u32 BE)
-    // = 8 + 88 + 4 = 100
-    assert_eq!(bytes.len(), 100);
+    // signed_by_peer: 40 (8 u64-BE len-prefix + 32 raw bytes)
+    // signature: 72 (8 len-prefix + 64 raw, per serde_signature_64)
+    // = 96 + 4 + 40 + 72 = 212
+    assert_eq!(bytes.len(), 212);
 }
 
 #[test]
@@ -155,10 +159,17 @@ fn event_request_wire_layout() {
 
 #[test]
 fn heads_request_wire_layout() {
-    let r = HeadsRequest { requests: vec![] };
+    let r = HeadsRequest {
+        requests: vec![],
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
+    };
     let bytes = canonical_bincode().serialize(&r).expect("encode");
     // requests: 8 (vec len = 0)
-    assert_eq!(bytes.len(), 8);
+    // signed_by_peer: 40
+    // signature: 72
+    // = 8 + 40 + 72 = 120
+    assert_eq!(bytes.len(), 120);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,11 +207,17 @@ fn sample_heads_summary() -> HeadsSummary {
     HeadsSummary {
         authors: vec![],
         kernel_fuel_table_version: 0,
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
     }
 }
 
 fn sample_heads_request() -> HeadsRequest {
-    HeadsRequest { requests: vec![] }
+    HeadsRequest {
+        requests: vec![],
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
+    }
 }
 
 fn sample_drift_message() -> DriftMessage {
