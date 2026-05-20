@@ -1,11 +1,15 @@
 //! Iroh transport implementation of the [`Network`] trait.
 //!
-//! B-4.1 STATE: `subscribe` + `publish` are real iroh-gossip
-//! 0.99.0-backed implementations. `unsubscribe` still returns
-//! [`crate::NetError::Unimplemented`] (planned in B-4.2 — drop
-//! semantics on [`IrohSubscription`] cover practical "stop
-//! receiving"). Q-4 sender attribution + real cross-process tests
-//! are B-4.2 / B-4.3 scope.
+//! B-4.1 STATE (this commit, Task 4 of plan B-4.1): `subscribe` +
+//! [`IrohSubscription::recv`] are real iroh-gossip 0.99.0-backed
+//! implementations. `publish` and `unsubscribe` still return
+//! [`crate::NetError::Unimplemented`]:
+//! - `publish` is landed in the next commit (Task 5 of this plan).
+//! - `unsubscribe` is deferred to B-4.2 — drop semantics on
+//!   [`IrohSubscription`] cover practical "stop receiving".
+//!
+//! Q-4 sender attribution + real cross-process tests are B-4.2 /
+//! B-4.3 scope.
 //!
 //! ## Why phased
 //!
