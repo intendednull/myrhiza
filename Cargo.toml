@@ -56,6 +56,14 @@ wasmtime-wasi = { version = "=36.0.9", default-features = false }
 # "every minor is breaking"). Bump deliberately.
 iroh = "=1.0.0-rc.0"
 iroh-gossip = "=0.99.0"
+# Stream adapter for iroh-gossip's `GossipTopic` (which is a
+# `n0_future::Stream`). Iroh-gossip's own examples use this crate.
+# Feature-gated under `network-iroh` on `myrhiza-network`. Per B-4.1
+# spec §3.2.
+futures-lite = "2"
+# Iroh-gossip's broadcast payload type. Explicit dep avoids transitive
+# reliance. Feature-gated under `network-iroh`. Per B-4.1 spec §3.2.
+bytes = "1"
 # Test/dev only.
 anyhow = "1"
 hex-literal = "0.4"

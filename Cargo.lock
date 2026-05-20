@@ -2235,6 +2235,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bincode",
+ "bytes",
+ "futures-lite",
  "iroh",
  "iroh-gossip",
  "myrhiza-types",
