@@ -19,7 +19,8 @@ use bincode::Options;
 use myrhiza_network::{GossipMessage, NetError, Network, SubError, Subscription};
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DriftAnchor, DriftMessage, DriftSignedPayload, Event,
-    EventHash, HeadsRequest, HeadsSummary, Hlc, PeerPubkey, Topic, canonical_bincode,
+    EventHash, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload,
+    Hlc, PeerPubkey, Topic, canonical_bincode,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -546,14 +547,51 @@ impl Runtime {
     /// Called periodically by the heads-summary ticker, and on
     /// subscription-lag recovery to nudge peers into a backfill round.
     async fn publish_heads_summary(&mut self) -> Result<(), RuntimeError> {
-        let summary = HeadsSummary {
-            authors: self.dag.author_heads(),
+        let authors = self.dag.author_heads();
+        let signed_payload = HeadsSummarySignedPayload {
+            authors: authors.clone(),
             kernel_fuel_table_version: self.cfg.kernel_fuel_table_version,
+            topic: self.topic,
+        };
+        let signed_bytes = canonical_bincode()
+            .serialize(&signed_payload)
+            .map_err(|e| RuntimeError::Canonical(format!("HeadsSummarySignedPayload: {e}")))?;
+        let signature = self.peer_key.sign(&signed_bytes);
+        let summary = HeadsSummary {
+            authors,
+            kernel_fuel_table_version: self.cfg.kernel_fuel_table_version,
+            signed_by_peer: self.peer_key.public,
+            signature,
         };
         self.network
             .publish(self.topic, GossipMessage::HeadsSummary(summary))
             .await?;
         Ok(())
+    }
+
+    /// Build a signed [`HeadsRequest`] from a list of [`EventRequest`]s.
+    ///
+    /// Constructs [`HeadsRequestSignedPayload`] with `topic` bound in the
+    /// signed payload (NOT on the wire — prevents cross-topic replay per
+    /// B-4.2 spec §3.0 + §3.1). Pattern mirrors `publish_heads_summary`
+    /// and `maybe_emit_drift` (`runtime.rs:1414-1432`).
+    fn build_signed_heads_request(
+        &self,
+        requests: Vec<myrhiza_types::EventRequest>,
+    ) -> Result<HeadsRequest, RuntimeError> {
+        let signed_payload = HeadsRequestSignedPayload {
+            requests: requests.clone(),
+            topic: self.topic,
+        };
+        let signed_bytes = canonical_bincode()
+            .serialize(&signed_payload)
+            .map_err(|e| RuntimeError::Canonical(format!("HeadsRequestSignedPayload: {e}")))?;
+        let signature = self.peer_key.sign(&signed_bytes);
+        Ok(HeadsRequest {
+            requests,
+            signed_by_peer: self.peer_key.public,
+            signature,
+        })
     }
 }
 
@@ -853,12 +891,12 @@ impl Runtime {
         if requests.is_empty() {
             return;
         }
+        let Ok(req) = self.build_signed_heads_request(requests) else {
+            return;
+        };
         let _ = self
             .network
-            .publish(
-                self.topic,
-                GossipMessage::HeadsRequest(HeadsRequest { requests }),
-            )
+            .publish(self.topic, GossipMessage::HeadsRequest(req))
             .await;
     }
 
@@ -921,12 +959,10 @@ impl Runtime {
             .await;
 
         if !requests.is_empty() {
+            let req = self.build_signed_heads_request(requests)?;
             let _ = self
                 .network
-                .publish(
-                    self.topic,
-                    GossipMessage::HeadsRequest(HeadsRequest { requests }),
-                )
+                .publish(self.topic, GossipMessage::HeadsRequest(req))
                 .await;
         }
         Ok(())
