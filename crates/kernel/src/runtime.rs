@@ -773,35 +773,19 @@ impl Runtime {
             .await;
     }
 
-    /// Diff remote per-author tips against ours (§7.1):
-    /// - Behind on some authors → enqueue paginated `HeadsRequest`s.
-    /// - Tied with mismatched hash → log equivocation.
-    /// - Ahead → verify our `seq_to_hash[remote_seq] == remote_hash`
-    ///   before pushing the gap; flag equivocation if it doesn't.
+    /// Process an inbound `HeadsSummary` from a remote peer. Compares
+    /// authors and, per `AuthorDiff` classification, requests backfill,
+    /// pushes our events, or flags equivocation.
     ///
     /// Also pushes our events for authors the remote doesn't know
     /// about, and surfaces a `KernelFuelTableMismatch` warning when
     /// fuel-table versions disagree (§11.7, non-fatal).
-    // TODO(B-2): split into behind/equal/ahead/local sub-fns. The four
-    // diff cases each have their own state-mutation pattern and the
-    // single-function shape obscures it; the `clippy::too_many_lines`
-    // allow below is a placeholder until that refactor lands
-    // (carry-over from review-finding N-12).
-    #[allow(clippy::too_many_lines)]
     async fn handle_heads_summary(&mut self, remote: HeadsSummary) -> Result<(), RuntimeError> {
-        if remote.kernel_fuel_table_version != self.cfg.kernel_fuel_table_version {
-            #[allow(clippy::expect_used)]
-            self.peer_warnings
-                .lock()
-                .expect("peer_warnings mutex poisoned")
-                .push(PeerWarning::KernelFuelTableMismatch {
-                    peer: None,
-                    remote_version: remote.kernel_fuel_table_version,
-                    local_version: self.cfg.kernel_fuel_table_version,
-                });
-        }
-        let local_heads = self.dag.author_heads();
-        let local_map: BTreeMap<AuthorPubkey, (u64, EventHash)> = local_heads
+        self.check_fuel_table_version(&remote);
+
+        let local_map: BTreeMap<AuthorPubkey, (u64, EventHash)> = self
+            .dag
+            .author_heads()
             .iter()
             .map(|h| (h.author, (h.seq, h.hash)))
             .collect();
@@ -814,98 +798,39 @@ impl Runtime {
                 .get(&remote_head.author)
                 .copied()
                 .unwrap_or((0, EventHash::ZERO));
-            match local_seq.cmp(&remote_head.seq) {
-                std::cmp::Ordering::Less => {
-                    // Behind — request range. Paginate at 256.
-                    let from = local_seq + 1;
-                    let to = remote_head.seq;
-                    Self::paginate_into(remote_head.author, from, to, &mut requests);
+            let diff = classify_author_diff(local_seq, local_hash, remote_head);
+            match diff {
+                AuthorDiff::Behind {
+                    author,
+                    local_seq,
+                    remote_seq,
+                } => {
+                    Self::handle_heads_behind(author, local_seq, remote_seq, &mut requests);
                 }
-                std::cmp::Ordering::Equal => {
-                    if local_hash != remote_head.hash {
-                        // Tied seq, divergent hash → equivocation.
-                        #[allow(clippy::expect_used)]
-                        self.equivocation_log
-                            .lock()
-                            .expect("equivocation_log mutex poisoned")
-                            .push(EquivocationFlag {
-                                author: remote_head.author,
-                                seq: remote_head.seq,
-                                local_hash,
-                                remote_hash: remote_head.hash,
-                                peer: None,
-                            });
-                    }
+                AuthorDiff::Equal => {}
+                AuthorDiff::EqualDivergent {
+                    author,
+                    seq,
+                    local_hash,
+                    remote_hash,
+                } => {
+                    self.handle_heads_equal_divergent(author, seq, local_hash, remote_hash);
                 }
-                std::cmp::Ordering::Greater => {
-                    // Local ahead — but first verify the remote-claimed
-                    // hash at `remote_head.seq` matches our history.
-                    // Mismatch here is equivocation, not a backfill
-                    // opportunity (plan-review B-5 / spec C-3 fix).
-                    let chain = self.dag.author_chain(&remote_head.author);
-                    let local_hash_at_remote =
-                        chain.and_then(|c| c.seq_to_hash.get(&remote_head.seq).copied());
-                    if local_hash_at_remote == Some(remote_head.hash) {
-                        // History agrees — push the gap.
-                        for seq in (remote_head.seq + 1)..=local_seq {
-                            if let Some(hash) = chain.and_then(|c| c.seq_to_hash.get(&seq).copied())
-                                && let Some(e) = self.dag.get(&hash)
-                            {
-                                let _ = self
-                                    .network
-                                    .publish(self.topic, GossipMessage::Event(e.clone()))
-                                    .await;
-                            }
-                        }
-                    } else if let Some(local_h) = local_hash_at_remote {
-                        // History disagrees at remote_seq → equivocation.
-                        #[allow(clippy::expect_used)]
-                        self.equivocation_log
-                            .lock()
-                            .expect("equivocation_log mutex poisoned")
-                            .push(EquivocationFlag {
-                                author: remote_head.author,
-                                seq: remote_head.seq,
-                                local_hash: local_h,
-                                remote_hash: remote_head.hash,
-                                peer: None,
-                            });
-                    } else {
-                        // local_hash_at_remote is None despite local_seq >
-                        // remote_seq. Under DAG invariants this is
-                        // unreachable: an author chain with head at
-                        // local_seq must populate seq_to_hash for every
-                        // seq in 1..=local_seq. Surface as a PeerWarning
-                        // rather than silently no-op (CLAUDE.md: no
-                        // swallowing errors).
-                        #[allow(clippy::expect_used)]
-                        self.peer_warnings
-                            .lock()
-                            .expect("peer_warnings mutex poisoned")
-                            .push(PeerWarning::ChainHashLookupMissing {
-                                author: remote_head.author,
-                                seq: remote_head.seq,
-                            });
-                    }
+                AuthorDiff::Ahead {
+                    author,
+                    local_seq,
+                    remote_seq,
+                    remote_hash,
+                } => {
+                    self.handle_heads_ahead(author, local_seq, remote_seq, remote_hash)
+                        .await;
                 }
             }
         }
-        // Push events for authors local has but remote does not.
-        for (author, (local_seq, _)) in &local_map {
-            if !remote_authors.contains(author) {
-                let chain = self.dag.author_chain(author);
-                for seq in 1..=*local_seq {
-                    if let Some(hash) = chain.and_then(|c| c.seq_to_hash.get(&seq).copied())
-                        && let Some(e) = self.dag.get(&hash)
-                    {
-                        let _ = self
-                            .network
-                            .publish(self.topic, GossipMessage::Event(e.clone()))
-                            .await;
-                    }
-                }
-            }
-        }
+
+        self.push_authors_remote_lacks(&local_map, &remote_authors)
+            .await;
+
         if !requests.is_empty() {
             let _ = self
                 .network
@@ -916,6 +841,133 @@ impl Runtime {
                 .await;
         }
         Ok(())
+    }
+
+    /// Fuel-table version warning (non-fatal per §11.7).
+    fn check_fuel_table_version(&self, remote: &HeadsSummary) {
+        if remote.kernel_fuel_table_version == self.cfg.kernel_fuel_table_version {
+            return;
+        }
+        #[allow(clippy::expect_used)]
+        self.peer_warnings
+            .lock()
+            .expect("peer_warnings mutex poisoned")
+            .push(PeerWarning::KernelFuelTableMismatch {
+                peer: None,
+                remote_version: remote.kernel_fuel_table_version,
+                local_version: self.cfg.kernel_fuel_table_version,
+            });
+    }
+
+    /// Sub-fn: local is behind — paginate a backfill request.
+    //
+    // Stateless: no `self` access, parallels the sibling
+    // `Self::paginate_into` helper (which it delegates to).
+    fn handle_heads_behind(
+        author: AuthorPubkey,
+        local_seq: u64,
+        remote_seq: u64,
+        requests: &mut Vec<myrhiza_types::EventRequest>,
+    ) {
+        Self::paginate_into(author, local_seq + 1, remote_seq, requests);
+    }
+
+    /// Sub-fn: same seq, divergent hash — equivocation.
+    fn handle_heads_equal_divergent(
+        &mut self,
+        author: AuthorPubkey,
+        seq: u64,
+        local_hash: EventHash,
+        remote_hash: EventHash,
+    ) {
+        #[allow(clippy::expect_used)]
+        self.equivocation_log
+            .lock()
+            .expect("equivocation_log mutex poisoned")
+            .push(EquivocationFlag {
+                author,
+                seq,
+                local_hash,
+                remote_hash,
+                peer: None,
+            });
+    }
+
+    /// Sub-fn: local ahead — verify remote-claimed hash at `remote_seq`
+    /// matches our history, then push the gap. Mismatch is equivocation,
+    /// not a backfill opportunity (spec C-3 fix from plan-review B-5).
+    async fn handle_heads_ahead(
+        &mut self,
+        author: AuthorPubkey,
+        local_seq: u64,
+        remote_seq: u64,
+        remote_hash: EventHash,
+    ) {
+        let chain = self.dag.author_chain(&author);
+        let local_hash_at_remote = chain.and_then(|c| c.seq_to_hash.get(&remote_seq).copied());
+
+        if local_hash_at_remote == Some(remote_hash) {
+            // History agrees — push the gap.
+            for seq in (remote_seq + 1)..=local_seq {
+                if let Some(hash) = chain.and_then(|c| c.seq_to_hash.get(&seq).copied())
+                    && let Some(e) = self.dag.get(&hash)
+                {
+                    let _ = self
+                        .network
+                        .publish(self.topic, GossipMessage::Event(e.clone()))
+                        .await;
+                }
+            }
+        } else if let Some(local_h) = local_hash_at_remote {
+            // History disagrees at remote_seq → equivocation.
+            #[allow(clippy::expect_used)]
+            self.equivocation_log
+                .lock()
+                .expect("equivocation_log mutex poisoned")
+                .push(EquivocationFlag {
+                    author,
+                    seq: remote_seq,
+                    local_hash: local_h,
+                    remote_hash,
+                    peer: None,
+                });
+        } else {
+            // local_hash_at_remote is None despite local_seq > remote_seq.
+            // Under DAG invariants this is unreachable; surface as a
+            // PeerWarning rather than silently no-op.
+            #[allow(clippy::expect_used)]
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::ChainHashLookupMissing {
+                    author,
+                    seq: remote_seq,
+                });
+        }
+    }
+
+    /// Push events for authors local has but remote does not.
+    async fn push_authors_remote_lacks(
+        &mut self,
+        local_map: &BTreeMap<AuthorPubkey, (u64, EventHash)>,
+        remote_authors: &BTreeSet<AuthorPubkey>,
+    ) {
+        for (author, (local_seq, _)) in local_map {
+            if remote_authors.contains(author) {
+                continue;
+            }
+            let chain = self.dag.author_chain(author);
+            for seq in 1..=*local_seq {
+                if let Some(hash) = chain.and_then(|c| c.seq_to_hash.get(&seq).copied())
+                    && let Some(e) = self.dag.get(&hash)
+                {
+                    let _ = self
+                        .network
+                        .publish(self.topic, GossipMessage::Event(e.clone()))
+                        .await;
+                }
+            }
+        }
     }
 
     /// Split a `(from..=to)` range into pages of at most 256 events
@@ -1293,5 +1345,70 @@ impl Runtime {
         }
         let digest_bytes = self.handle.state_digest(&state).ok()?;
         Some(blake3::hash(&digest_bytes).into())
+    }
+}
+
+/// Per-author classification of remote heads vs local heads, used by
+/// `handle_heads_summary` to dispatch to the appropriate sub-function.
+#[derive(Debug)]
+enum AuthorDiff {
+    /// Local is behind remote — request backfill.
+    Behind {
+        author: AuthorPubkey,
+        local_seq: u64,
+        remote_seq: u64,
+    },
+    /// Same seq, same hash — no action.
+    Equal,
+    /// Same seq, divergent hash — equivocation.
+    EqualDivergent {
+        author: AuthorPubkey,
+        seq: u64,
+        local_hash: EventHash,
+        remote_hash: EventHash,
+    },
+    /// Local is ahead — push the gap (or flag equivocation if the
+    /// remote-claimed hash at `remote_seq` disagrees with local history).
+    Ahead {
+        author: AuthorPubkey,
+        local_seq: u64,
+        remote_seq: u64,
+        remote_hash: EventHash,
+    },
+}
+
+/// Classify a single remote author head against local state. Pure
+/// function; lifted out of `handle_heads_summary` to keep that
+/// dispatcher small.
+fn classify_author_diff(
+    local_seq: u64,
+    local_hash: EventHash,
+    remote_head: &myrhiza_types::AuthorHead,
+) -> AuthorDiff {
+    use std::cmp::Ordering;
+    match local_seq.cmp(&remote_head.seq) {
+        Ordering::Less => AuthorDiff::Behind {
+            author: remote_head.author,
+            local_seq,
+            remote_seq: remote_head.seq,
+        },
+        Ordering::Equal => {
+            if local_hash == remote_head.hash {
+                AuthorDiff::Equal
+            } else {
+                AuthorDiff::EqualDivergent {
+                    author: remote_head.author,
+                    seq: remote_head.seq,
+                    local_hash,
+                    remote_hash: remote_head.hash,
+                }
+            }
+        }
+        Ordering::Greater => AuthorDiff::Ahead {
+            author: remote_head.author,
+            local_seq,
+            remote_seq: remote_head.seq,
+            remote_hash: remote_head.hash,
+        },
     }
 }

@@ -23,6 +23,13 @@ blake3.workspace = true
 hex.workspace = true
 ed25519-dalek.workspace = true
 rand_core = "0.6"
+# Used by FilesystemIdentityStore for OsRng on the secret-generation
+# path (B-2 §6.3). Same crate the existing tests_topo shuffle property
+# test uses; consolidating into [dependencies] so the dev-dep line in
+# [dev-dependencies] becomes redundant.
+rand = "0.8"
+bech32 = { workspace = true }
+zeroize = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 async-trait.workspace = true
 
@@ -32,6 +39,3 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 myrhiza-test-utils = { path = "../test-utils" }
 myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
-# Used by tests_topo shuffle property test. 0.8 pairs with the existing
-# rand_core 0.6 line dep — no upgrade required for this test.
-rand = "0.8"
