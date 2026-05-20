@@ -99,9 +99,9 @@ impl FilesystemIdentityStore {
         let dir_for_blocking = dir.clone();
         tokio::task::spawn_blocking(move || open_blocking(&dir_for_blocking))
             .await
-            .map_err(|join_err| IdentityError::Io {
+            .map_err(|source| IdentityError::WorkerPanic {
                 path: dir.clone(),
-                source: std::io::Error::other(format!("spawn_blocking panicked: {join_err}")),
+                source,
             })??;
         Ok(Self { dir })
     }
@@ -282,14 +282,24 @@ impl IdentityStore for FilesystemIdentityStore {
             }
         })
         .await
-        .map_err(|join_err| IdentityError::Io {
+        .map_err(|source| IdentityError::WorkerPanic {
             path: path.clone(),
-            source: std::io::Error::other(format!("spawn_blocking panicked: {join_err}")),
+            source,
         })??;
         Ok(PeerKeypair::from_secret_bytes(bytes))
     }
 
     async fn load_author(&self, pk: &AuthorPubkey) -> Result<AuthorKeypair, IdentityError> {
+        // Threat model: callers request by `AuthorPubkey`, and we
+        // synthesize the filename from that pubkey via
+        // `author_key_path`. The cross-check below
+        // (`if kp.author != pk_copy`) defends against *content tampering*
+        // — the file on disk has been overwritten with a different seed.
+        // It does NOT (and cannot) defend against filename-swapping,
+        // because we read whichever file the caller's pubkey points to.
+        // Listing-then-loading defenses against rogue files in
+        // `authors/` are the responsibility of `list_authors`, which
+        // validates the bech32m + HRP of every filename.
         let pk_copy = *pk;
         let path = self.author_key_path(pk_copy);
         let path_for_blocking = path.clone();
@@ -306,9 +316,9 @@ impl IdentityStore for FilesystemIdentityStore {
             Ok(kp)
         })
         .await
-        .map_err(|join_err| IdentityError::Io {
+        .map_err(|source| IdentityError::WorkerPanic {
             path: path.clone(),
-            source: std::io::Error::other(format!("spawn_blocking panicked: {join_err}")),
+            source,
         })??;
         Ok(kp)
     }
@@ -327,9 +337,9 @@ impl IdentityStore for FilesystemIdentityStore {
             Ok(kp)
         })
         .await
-        .map_err(|join_err| IdentityError::Io {
+        .map_err(|source| IdentityError::WorkerPanic {
             path: self.authors_dir(),
-            source: std::io::Error::other(format!("spawn_blocking panicked: {join_err}")),
+            source,
         })??;
         Ok(kp)
     }
@@ -365,9 +375,9 @@ impl IdentityStore for FilesystemIdentityStore {
                 Ok(out)
             })
             .await
-            .map_err(|join_err| IdentityError::Io {
+            .map_err(|source| IdentityError::WorkerPanic {
                 path: dir.clone(),
-                source: std::io::Error::other(format!("spawn_blocking panicked: {join_err}")),
+                source,
             })??;
         Ok(pks)
     }

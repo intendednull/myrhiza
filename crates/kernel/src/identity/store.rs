@@ -28,6 +28,18 @@ pub enum IdentityError {
         source: std::io::Error,
     },
 
+    /// A blocking worker task spawned via [`tokio::task::spawn_blocking`]
+    /// panicked or was cancelled. Distinct from [`IdentityError::Io`] —
+    /// this signals a host/runtime failure, not a filesystem error.
+    #[error("identity worker task failed at {path}: {source}")]
+    WorkerPanic {
+        /// The operation's target path (best-effort attribution).
+        path: PathBuf,
+        /// The underlying `tokio::task::JoinError`.
+        #[source]
+        source: tokio::task::JoinError,
+    },
+
     /// A bech32m-encoded filename failed to decode.
     #[error("bech32 decode failed for {input:?}: {source}")]
     Bech32Decode {
