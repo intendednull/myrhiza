@@ -266,11 +266,19 @@ pub struct RuntimeHandle {
     /// `Some(reason)` once the runtime task halts; `None` while alive.
     pub halt_watch: watch::Receiver<Option<String>>,
 
-    /// Test-only counter of tip-fast-path engagements in
+    /// Diagnostic counter of tip-fast-path engagements in
     /// [`Runtime::try_tip_incremental`]. Acceptance tests read this to
     /// verify the fast path is taken when expected and skipped when not
     /// (e.g. drain-loop multi-insert, re-topo). Per plan-B-2.1 spec §5.
-    #[cfg(test)]
+    ///
+    /// Always-on (matches the `dropped_at_apply` diagnostic pattern):
+    /// the field's overhead is one `Arc<Mutex<usize>>` per runtime and
+    /// one mutex lock per fast-path engagement — negligible compared to
+    /// the apply call the increment is paired with. Surfacing this on
+    /// `RuntimeHandle` rather than gating with `#[cfg(test)]` lets
+    /// integration tests in `crates/kernel/tests/` read it (cargo
+    /// compiles the kernel library without `--test` when building
+    /// dependent integration test crates).
     pub tip_fast_path_hits: Arc<Mutex<usize>>,
 }
 
@@ -349,13 +357,14 @@ pub struct Runtime {
     /// HLC logical-component counter (Tasks 18-19 use; declared here so
     /// the field set is stable across the scaffold commit).
     hlc_logical_counter: u32,
-    /// Test-only instrumentation: counts engagements of the tip-fast-path
-    /// in [`Self::try_tip_incremental`] (both `Accepted` and `Rejected`
-    /// outcomes). Used by B-2.1 acceptance tests to assert the fast path
-    /// is being taken when expected and skipped when not. Shared with
-    /// [`RuntimeHandle::tip_fast_path_hits`] so the test thread can read
-    /// the counter. Per plan-B-2.1 spec §5 test 1.
-    #[cfg(test)]
+    /// Diagnostic instrumentation: counts engagements of the
+    /// tip-fast-path in [`Self::try_tip_incremental`] (both `Accepted`
+    /// and `Rejected` outcomes). Used by B-2.1 acceptance tests to
+    /// assert the fast path is being taken when expected and skipped
+    /// when not. Shared with [`RuntimeHandle::tip_fast_path_hits`] so
+    /// the test thread can read the counter. Per plan-B-2.1 spec §5
+    /// test 1. See [`RuntimeHandle::tip_fast_path_hits`] for the
+    /// always-on rationale.
     tip_fast_path_hits: Arc<Mutex<usize>>,
 }
 
@@ -395,7 +404,6 @@ impl Runtime {
         let equivocation_log = Arc::new(Mutex::new(Vec::new()));
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
         let dropped_at_apply = Arc::new(Mutex::new(HashMap::new()));
-        #[cfg(test)]
         let tip_fast_path_hits = Arc::new(Mutex::new(0_usize));
         let (digest_watch_tx, digest_watch) = watch::channel(Vec::<u8>::new());
         let (halt_watch_tx, halt_watch) = watch::channel(None::<String>);
@@ -431,7 +439,6 @@ impl Runtime {
             digest_watch_tx,
             halt_watch_tx,
             hlc_logical_counter: 0,
-            #[cfg(test)]
             tip_fast_path_hits: tip_fast_path_hits.clone(),
         };
 
@@ -453,7 +460,6 @@ impl Runtime {
             dropped_at_apply,
             digest_watch,
             halt_watch,
-            #[cfg(test)]
             tip_fast_path_hits,
         })
     }
@@ -1223,7 +1229,6 @@ impl Runtime {
         };
         let bytes = canonical_bincode().serialize(event)?;
         let result = self.handle.apply(&self.state, &bytes)?;
-        #[cfg(test)]
         {
             #[allow(clippy::expect_used)]
             let mut guard = self
@@ -1608,7 +1613,15 @@ fn classify_author_diff(
 /// State-apply rejects (non-error verdict) are silently dropped from
 /// the materialized state — the event still contributes to the
 /// `prior_state` chain only when accepted. Per plan-B-2.1 spec §4.2.
-fn compute_subset_digest(handle: &mut StateApplyHandle, subset: &[Event]) -> Option<[u8; 32]> {
+///
+/// Exposed `pub` so B-2.1 acceptance test 7
+/// (`anchor_digest_correctness_after_off_loop_move`) can compute the
+/// same digest via a fresh-handle inline path and verify byte equality
+/// with the off-loop path. Marked `#[doc(hidden)]` because it is an
+/// implementation detail of the off-loop drift digest path, not a
+/// stable public surface.
+#[doc(hidden)]
+pub fn compute_subset_digest(handle: &mut StateApplyHandle, subset: &[Event]) -> Option<[u8; 32]> {
     let mut state = Vec::<u8>::new();
     for event in subset {
         let bytes = canonical_bincode().serialize(event).ok()?;
