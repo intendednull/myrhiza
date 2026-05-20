@@ -51,7 +51,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:71
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
-- crates/kernel/tests/convergence.rs:855
+- crates/kernel/tests/convergence.rs:858
+
+## convergence.md §4.4 — `unsubscribe` still returns
+- crates/network/tests/iroh_gossip.rs:259
 
 ## convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2)
 - crates/kernel/tests/perf_carryovers.rs:309
@@ -65,11 +68,14 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.4 — tip-fast-path on single-author chain (B-2.1 §3)
 - crates/kernel/tests/perf_carryovers.rs:63
 
+## convergence.md §4.4 — wire-decode failure surfaces as
+- crates/network/tests/iroh_gossip.rs:184
+
 ## convergence.md §4.4.1
 - crates/kernel/tests/convergence.rs:340
 
 ## convergence.md §4.4.1 + review-finding M-8
-- crates/kernel/tests/convergence.rs:668
+- crates/kernel/tests/convergence.rs:671
 
 ## convergence.md §4.6
 - crates/kernel/tests/convergence.rs:203
@@ -140,7 +146,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/persistence.rs:46
 - crates/kernel/tests/persistence.rs:66
 - crates/kernel/tests/persistence.rs:91
-- crates/network/tests/iroh_skeleton.rs:16
+- crates/network/tests/iroh_skeleton.rs:15
 
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:188
@@ -161,10 +167,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:203
 
 ## networking.md §11.1 — iroh's `NodeID` pubkey
-- crates/network/tests/iroh_skeleton.rs:16
+- crates/network/tests/iroh_skeleton.rs:15
 
-## networking.md §11.1 — the iroh-backed transport's
-- crates/network/tests/iroh_skeleton.rs:62
+## networking.md §11.1 — the topic-id conversion free
+- crates/network/tests/iroh_gossip.rs:282
+
+## networking.md §11.1 — three-peer chain A↔B↔C. A publishes;
+- crates/network/tests/iroh_gossip.rs:145
+
+## networking.md §11.1 — two iroh peers form a swarm and
+- crates/network/tests/iroh_gossip.rs:108
 
 ## verification.md §22.1
 - crates/kernel/tests/acceptance.rs:48
@@ -188,4 +200,4 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/perf_carryovers.rs:471
 
 ## verification.md §22.8 — `PeerHandle::await_digest` must NOT
-- crates/kernel/tests/convergence.rs:814
+- crates/kernel/tests/convergence.rs:817

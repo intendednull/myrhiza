@@ -1,7 +1,7 @@
 //! [`MemBus`] + [`MemNetwork`] — in-process [`Network`] impl for tests.
 
 use crate::{GossipMessage, NetError, Network, subscription::MemSubscription};
-use myrhiza_types::Topic;
+use myrhiza_types::{PeerPubkey, Topic};
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 // `Ordering` is only referenced inside `MemBus::inject_lag`, which is
@@ -149,7 +149,13 @@ impl MemNetwork {
 impl Network for MemNetwork {
     type Subscription = MemSubscription;
 
-    async fn subscribe(&self, topic: Topic) -> Result<MemSubscription, NetError> {
+    async fn subscribe(
+        &self,
+        topic: Topic,
+        _bootstrap: Vec<PeerPubkey>,
+    ) -> Result<MemSubscription, NetError> {
+        // In-process broadcast has no peer-discovery semantics;
+        // bootstrap is intentionally ignored. Per B-4.1 spec §3.3.
         Ok(self.bus.make_subscription(topic))
     }
 

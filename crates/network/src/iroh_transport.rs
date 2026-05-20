@@ -1,19 +1,19 @@
 //! Iroh transport implementation of the [`Network`] trait.
 //!
-//! B-4.0 SKELETON: this module compiles against iroh 1.0.0-rc.0 +
-//! iroh-gossip 0.99.0 and exposes the type surface, but every
-//! `Network` method returns [`crate::NetError::Unimplemented`].
-//! B-4.1 will wire `subscribe` + `publish` to real iroh-gossip
-//! semantics; B-4.2 will thread per-connection sender identity (Q-4);
-//! B-4.3 adds real cross-process acceptance tests.
+//! B-4.1 STATE: `subscribe` + `publish` are real iroh-gossip
+//! 0.99.0-backed implementations. `unsubscribe` still returns
+//! [`crate::NetError::Unimplemented`] (planned in B-4.2 — drop
+//! semantics on [`IrohSubscription`] cover practical "stop
+//! receiving"). Q-4 sender attribution + real cross-process tests
+//! are B-4.2 / B-4.3 scope.
 //!
-//! ## Why "skeleton"
+//! ## Why phased
 //!
 //! `prior-art/iroh/lessons.md` §Avoid row 1: "Every minor is
 //! breaking" — pre-1.0 iroh API churn means landing the compile
-//! shell first (pin-against-rc-0, prove the type surface aligns)
-//! reduces the blast radius of a future re-pin. Behavioral work
-//! lands in B-4.1+.
+//! shell first (B-4.0, pin-against-rc-0) reduced the blast radius of
+//! a future re-pin. B-4.1 fills in behavior; B-4.2 will harden
+//! attribution; B-4.3 adds real cross-process acceptance tests.
 //!
 //! ## API adaptations from plan B-4.0 §3.2
 //!
@@ -39,6 +39,12 @@
 //!    can be promoted to trait impls in a future plan if/when the
 //!    conversion moves into `myrhiza-types` behind a feature gate.
 
+use bincode::Options;
+use bytes::Bytes;
+use futures_lite::StreamExt;
+use iroh_gossip::api::{Event, GossipTopic};
+use myrhiza_types::canonical_bincode;
+
 use crate::{GossipMessage, NetError, Network, SubError, Subscription};
 use myrhiza_types::{PeerPubkey, Topic};
 
@@ -51,10 +57,6 @@ use myrhiza_types::{PeerPubkey, Topic};
 /// here while retaining another for router-level work.
 pub struct IrohNetwork {
     endpoint: iroh::Endpoint,
-    #[allow(
-        dead_code,
-        reason = "behavior lands in B-4.1; skeleton only holds the handle"
-    )]
     gossip: iroh_gossip::Gossip,
     /// Cached `PeerPubkey` derived from `endpoint.id()` at
     /// construction time. Avoids per-call conversion.
@@ -64,6 +66,18 @@ pub struct IrohNetwork {
 impl IrohNetwork {
     /// Construct an `IrohNetwork` from a pre-built [`iroh::Endpoint`]
     /// and [`iroh_gossip::Gossip`].
+    ///
+    /// # Lifecycle precondition
+    ///
+    /// The caller MUST have already registered `iroh_gossip::ALPN`
+    /// against `gossip` via an [`iroh::protocol::Router`] (constructed
+    /// once at kernel boot per `prior-art/iroh/lessons.md` §Borrow
+    /// row 2). Without that Router wiring, inbound iroh-gossip streams
+    /// never reach the gossip handler — `subscribe` will appear to
+    /// succeed while `recv` never yields a `Received` event. The
+    /// Router must outlive this `IrohNetwork` instance; dropping it
+    /// first causes subsequent `subscribe` calls to fail with
+    /// `ApiError` (per B-4.1 spec §10 "Drop order with Router").
     #[must_use]
     pub fn new(endpoint: iroh::Endpoint, gossip: iroh_gossip::Gossip) -> Self {
         let endpoint_id = endpoint.id();
@@ -94,48 +108,137 @@ impl IrohNetwork {
 impl Network for IrohNetwork {
     type Subscription = IrohSubscription;
 
-    async fn subscribe(&self, _topic: Topic) -> Result<Self::Subscription, NetError> {
-        Err(NetError::Unimplemented {
-            method: "Network::subscribe",
-            planned_in: "B-4.1",
-        })
+    async fn subscribe(
+        &self,
+        topic: Topic,
+        bootstrap: Vec<PeerPubkey>,
+    ) -> Result<Self::Subscription, NetError> {
+        let topic_id = iroh_topic_id_from_topic(topic);
+        let mut bootstrap_ids: Vec<iroh::EndpointId> = Vec::with_capacity(bootstrap.len());
+        for pk in bootstrap {
+            let id = iroh_endpoint_id_from_peer_pubkey(pk)
+                .map_err(|e| NetError::SubscribeFailed(format!("invalid bootstrap pubkey: {e}")))?;
+            bootstrap_ids.push(id);
+        }
+        let gossip_topic = self
+            .gossip
+            .subscribe(topic_id, bootstrap_ids)
+            .await
+            .map_err(|e| NetError::SubscribeFailed(format!("iroh-gossip subscribe: {e}")))?;
+        Ok(IrohSubscription::new(gossip_topic))
     }
 
-    async fn publish(&self, _topic: Topic, _msg: GossipMessage) -> Result<(), NetError> {
-        Err(NetError::Unimplemented {
-            method: "Network::publish",
-            planned_in: "B-4.1",
-        })
+    async fn publish(&self, topic: Topic, msg: GossipMessage) -> Result<(), NetError> {
+        let topic_id = iroh_topic_id_from_topic(topic);
+        let bytes = canonical_bincode()
+            .serialize(&msg)
+            .map_err(|e| NetError::PublishFailed(format!("bincode encode: {e}")))?;
+        // TRADE-OFF (per spec §3.2): each publish re-subscribes + splits
+        // the GossipTopic. Iroh-gossip's actor architecture spawns a
+        // fresh topic_subscriber_loop task per subscribe call
+        // (`gossip/src/net.rs:600-643`); per-publish this is task-spawn
+        // churn. The GossipTopic departs the swarm when its sender +
+        // receiver drop, so cost is bounded per call. B-4.2/B-4.3 may
+        // cache a per-topic GossipSender — flagged in spec §11.
+        let gossip_topic = self
+            .gossip
+            .subscribe(topic_id, vec![])
+            .await
+            .map_err(|e| NetError::PublishFailed(format!("iroh-gossip subscribe: {e}")))?;
+        let (sender, _receiver) = gossip_topic.split();
+        sender
+            .broadcast(Bytes::from(bytes))
+            .await
+            .map_err(|e| NetError::PublishFailed(format!("iroh-gossip broadcast: {e}")))?;
+        Ok(())
     }
 
     async fn unsubscribe(&self, _topic: Topic) -> Result<(), NetError> {
+        // GossipTopic self-cleans when all senders + receivers drop
+        // (iroh-gossip-0.99.0 gossip/src/api.rs:207-210 — implicit
+        // cleanup via the dropped mpsc sender inside the actor; no
+        // explicit Drop impl). The IrohSubscription's own lifetime
+        // already covers the practical "stop receiving" case.
+        // Explicit swarm-departure signaling is deferred to B-4.2.
         Err(NetError::Unimplemented {
             method: "Network::unsubscribe",
-            planned_in: "B-4.1",
+            planned_in: "B-4.2",
         })
     }
 }
 
-/// Skeleton `Subscription` impl. Instances cannot be constructed
-/// outside this module in B-4.0 (the `subscribe` method that would
-/// return one always returns `Err`).
+/// Iroh-gossip-backed subscription.
+///
+/// Wraps a [`iroh_gossip::GossipTopic`] (a stream of
+/// `Result<Event, ApiError>`), filters events to only surface
+/// [`Event::Received`] payloads (decoded via canonical bincode),
+/// maps [`Event::Lagged`] and stream-level `ApiError` to
+/// [`SubError::Lagged(0)`] (count fidelity lost — see spec §6),
+/// maps bincode-decode failures to [`SubError::DecodeFailed`], and
+/// silently consumes membership events ([`Event::NeighborUp`],
+/// [`Event::NeighborDown`]).
+///
+/// Per B-4.1 spec §3.2.
 pub struct IrohSubscription {
-    _private: (),
+    inner: GossipTopic,
+}
+
+impl IrohSubscription {
+    /// Construct from a [`GossipTopic`] returned by
+    /// `iroh_gossip::Gossip::subscribe`. Crate-private — callers
+    /// reach this via [`IrohNetwork::subscribe`].
+    pub(crate) fn new(inner: GossipTopic) -> Self {
+        Self { inner }
+    }
 }
 
 #[async_trait::async_trait]
 impl Subscription for IrohSubscription {
     async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError> {
-        // Unreachable because no IrohSubscription is ever constructed
-        // (subscribe always returns Err in B-4.0).
-        #[allow(clippy::unreachable)]
-        {
-            unreachable!(
-                "IrohSubscription cannot be constructed in B-4.0 — \
-                 Network::subscribe always returns Err(NetError::Unimplemented). \
-                 Reaching this code path indicates a future B-4.1+ refactor \
-                 constructed a subscription without implementing recv."
-            )
+        loop {
+            match self.inner.next().await {
+                None => return Ok(None),
+                Some(Err(_api_err)) => {
+                    // Stream-level error from iroh-gossip mid-flight.
+                    // Surfacing as Lagged(0) is a pragmatic mapping —
+                    // we lose error specifics but the runtime's
+                    // Lagged path (HeadsSummary backfill) is the
+                    // closest match for "I may have missed messages."
+                    // TRADE-OFF: if the gossip task has actually died,
+                    // we'll spin re-calling recv and getting ApiError
+                    // forever. Halt detection is B-4.3's scope.
+                    return Err(SubError::Lagged(0));
+                }
+                Some(Ok(Event::Received(msg))) => {
+                    // Capture the last-hop neighbor for attribution
+                    // on decode failure. NOT necessarily the original
+                    // publisher (Plumtree forwarding hides that;
+                    // Q-4 attribution is B-4.2 scope).
+                    let last_hop_peer = Some(peer_pubkey_from_iroh(msg.delivered_from));
+                    match canonical_bincode().deserialize::<GossipMessage>(&msg.content) {
+                        Ok(decoded) => return Ok(Some(decoded)),
+                        Err(_decode_err) => {
+                            return Err(SubError::DecodeFailed {
+                                peer: last_hop_peer,
+                            });
+                        }
+                    }
+                }
+                Some(Ok(Event::Lagged)) => {
+                    // Iroh-gossip drops the lagged count
+                    // (`gossip/src/net.rs:940` discards it with `_`);
+                    // sentinel 0 preserves the variant shape. Reclaiming
+                    // count fidelity needs an upstream patch — out of
+                    // scope for B-4.1.
+                    return Err(SubError::Lagged(0));
+                }
+                Some(Ok(Event::NeighborUp(_) | Event::NeighborDown(_))) => {
+                    // Membership events — silently consume + loop.
+                    // Surfacing through the trait would force every
+                    // Subscription consumer to handle them; only
+                    // IrohNetwork produces them.
+                }
+            }
         }
     }
 }
@@ -176,4 +279,18 @@ pub fn iroh_endpoint_id_from_peer_pubkey(
     peer: PeerPubkey,
 ) -> Result<iroh::EndpointId, iroh::KeyParsingError> {
     iroh::EndpointId::from_bytes(peer.as_bytes())
+}
+
+/// Convert a Myrhiza [`Topic`] into an `iroh_gossip::TopicId`.
+///
+/// Both types are transparent 32-byte newtypes. Free function (not a
+/// `From`/`Into` impl) for the same orphan-rule reason as
+/// [`peer_pubkey_from_iroh`]: `TopicId` lives in `iroh-gossip` and
+/// `Topic` lives in `myrhiza-types`; neither is local to
+/// `myrhiza-network`.
+///
+/// Per B-4.1 spec §2 (Topic ↔ `TopicId` conversion row).
+#[must_use]
+pub fn iroh_topic_id_from_topic(topic: Topic) -> iroh_gossip::TopicId {
+    iroh_gossip::TopicId::from_bytes(*topic.as_bytes())
 }

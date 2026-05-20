@@ -14,7 +14,7 @@
 
 #![doc(html_no_source)]
 
-use myrhiza_types::{DriftMessage, Event, HeadsRequest, HeadsSummary, Topic};
+use myrhiza_types::{DriftMessage, Event, HeadsRequest, HeadsSummary, PeerPubkey, Topic};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -72,6 +72,12 @@ pub enum NetError {
         /// (e.g. `"B-4.1"`).
         planned_in: &'static str,
     },
+    /// Subscribe call failed for a reason other than transport
+    /// shutdown — e.g. invalid bootstrap peer pubkey, gossip-layer
+    /// API error during topic-join. Carries a human-readable
+    /// diagnostic. Per B-4.1 spec §3.0.
+    #[error("subscribe failed: {0}")]
+    SubscribeFailed(String),
 }
 
 /// Errors returned by [`Subscription::recv`].
@@ -83,6 +89,26 @@ pub enum SubError {
     /// calling `recv`.
     #[error("subscription lagged: dropped {0} messages")]
     Lagged(u64),
+    /// A received wire message did not decode under the canonical
+    /// bincode contract. Carries the last-hop iroh-gossip neighbor
+    /// (NOT necessarily the original publisher; per-publisher
+    /// attribution is Q-4 / B-4.2 work). The runtime treats this as
+    /// log + discard — distinct from [`SubError::Lagged`], which
+    /// triggers a backfill `HeadsSummary` publish. Routing decode
+    /// failures through `Lagged` would let a single bad-bytes peer
+    /// flood the network with backfill traffic.
+    ///
+    /// Per B-4.1 spec §3.0 + the runtime handler at
+    /// `runtime.rs handle_event` (see `SubError` handling in the
+    /// receive loop).
+    #[error("decoded message failed bincode contract (from peer: {peer:?})")]
+    DecodeFailed {
+        /// The iroh-gossip `delivered_from` peer (last-hop neighbor
+        /// under Plumtree forwarding, not necessarily the
+        /// publisher). `None` for transports without per-message
+        /// sender identity ([`MemNetwork`] never emits this variant).
+        peer: Option<PeerPubkey>,
+    },
 }
 
 /// Network transport abstraction. Implementations are responsible for
@@ -93,11 +119,34 @@ pub trait Network: Send + Sync + 'static {
     /// The receive-side handle returned by [`Network::subscribe`].
     type Subscription: Subscription + Send + 'static;
 
-    /// Subscribe to a topic. Caller drives `recv` on the returned subscription.
+    /// Subscribe to a topic, with optional bootstrap peer hints.
+    ///
+    /// **SemVer-breaking from B-4.0:** this trait method gained the
+    /// `bootstrap` parameter in B-4.1. Both in-tree impls
+    /// ([`MemNetwork`], [`IrohNetwork`]) and all 7 call sites were
+    /// updated atomically; out-of-tree implementors must add the
+    /// parameter. See spec §3.1 for rationale.
+    ///
+    /// For transports that maintain a peer-discovery overlay
+    /// ([`IrohNetwork`]), `bootstrap` is a list of `PeerPubkey`s to
+    /// dial when forming the topic's swarm. An empty `bootstrap` is
+    /// legal — the topic exists locally and waits for inbound joins.
+    ///
+    /// For transports without peer-discovery semantics
+    /// ([`MemNetwork`]), `bootstrap` is ignored (in-process broadcast
+    /// routes by topic only).
+    ///
+    /// Per B-4.1 spec §3.1.
     ///
     /// # Errors
-    /// Returns [`NetError::SubscribeClosed`] if the transport is shut down.
-    async fn subscribe(&self, topic: Topic) -> Result<Self::Subscription, NetError>;
+    /// Returns [`NetError::SubscribeClosed`] if the transport has been
+    /// shut down, or [`NetError::SubscribeFailed`] if the gossip-layer
+    /// subscribe call fails (e.g. invalid bootstrap pubkey).
+    async fn subscribe(
+        &self,
+        topic: Topic,
+        bootstrap: Vec<PeerPubkey>,
+    ) -> Result<Self::Subscription, NetError>;
 
     /// Publish a message to all subscribers on a topic.
     ///

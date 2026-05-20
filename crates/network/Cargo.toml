@@ -19,6 +19,8 @@ thiserror.workspace = true
 bincode.workspace = true
 iroh = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
+futures-lite = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -31,7 +33,7 @@ default = []
 test-helpers = []
 # Iroh transport implementation of the `Network` trait. Default-off.
 # Pulls in `iroh` + `iroh-gossip`. Per B-4.0 spec §3.1.
-network-iroh = ["dep:iroh", "dep:iroh-gossip"]
+network-iroh = ["dep:iroh", "dep:iroh-gossip", "dep:futures-lite", "dep:bytes"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "rt-multi-thread"] }
