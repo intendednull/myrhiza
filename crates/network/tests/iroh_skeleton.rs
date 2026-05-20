@@ -13,8 +13,11 @@ use myrhiza_network::iroh_transport::peer_pubkey_from_iroh;
 use myrhiza_network::{IrohNetwork, NetError, Network};
 use myrhiza_types::Topic;
 
-/// Covers: identity.md §6, plan-b-1 §6 — iroh's `NodeID` pubkey routes
-/// through Myrhiza's `PeerPubkey` cleanly. B-4.0 spec §3.2.
+/// Covers: identity.md §6, networking.md §11.1 — iroh's `NodeID` pubkey
+/// (Ed25519 raw 32-byte key, per identity.md §6) is the same primitive
+/// as Myrhiza's `PeerPubkey`; this verifies the conversion preserves
+/// bytes through the `IrohNetwork` constructor / cached getter and
+/// through Bundle A's free-function `peer_pubkey_from_iroh`.
 ///
 /// ## API adaptations from plan's hypothetical names
 ///
@@ -56,8 +59,10 @@ async fn iroh_network_constructs_and_exposes_endpoint_id_as_peer_pubkey() {
     );
 }
 
-/// Covers: B-4.0 §3.2 — skeleton methods return structured errors,
-/// not panics. Regression for "skeleton should not crash CI."
+/// Covers: networking.md §11.1 — the iroh-backed transport's
+/// `Network::subscribe` in B-4.0 returns a structured
+/// `NetError::Unimplemented` (not a panic, not `unimplemented!()`).
+/// Regression: "skeleton must not crash CI."
 #[tokio::test]
 async fn iroh_network_subscribe_returns_unimplemented() {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
