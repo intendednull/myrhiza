@@ -54,8 +54,8 @@ pub(super) fn decode_author_pubkey(s: &str) -> Result<AuthorPubkey, IdentityErro
         });
     }
     if data.len() != 32 {
-        return Err(IdentityError::SeedLengthMismatch {
-            path: std::path::PathBuf::from(s),
+        return Err(IdentityError::Bech32PayloadLength {
+            input: s.to_owned(),
             actual: data.len(),
         });
     }

@@ -58,6 +58,18 @@ pub enum IdentityError {
         actual: usize,
     },
 
+    /// Bech32m decode succeeded but the payload length is wrong.
+    /// Distinct from `SeedLengthMismatch` (file content) — this branch
+    /// fires when the encoded string itself decodes to a non-32-byte
+    /// payload (defensive — shouldn't happen for well-formed input).
+    #[error("bech32m payload length wrong for {input:?}: expected 32 bytes, got {actual}")]
+    Bech32PayloadLength {
+        /// The bech32m string whose decoded payload was the wrong length.
+        input: String,
+        /// Actual decoded payload length.
+        actual: usize,
+    },
+
     /// The pubkey embedded in an author filename does not match the
     /// pubkey derived from the secret-file content (tampered filename).
     #[error("author pubkey mismatch at {path}: filename {requested}, derived {actual}")]

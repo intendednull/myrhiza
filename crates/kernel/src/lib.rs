@@ -19,7 +19,9 @@ pub mod digest;
 pub use digest::{DigestEmitter, DigestEvent};
 
 pub mod identity;
-pub use identity::{AuthorKeypair, PeerKeypair};
+pub use identity::{
+    AuthorKeypair, FilesystemIdentityStore, IdentityError, IdentityStore, PeerKeypair,
+};
 
 pub mod dag;
 pub use dag::{AuthorChain, DagError, EventDag, Inserted};
