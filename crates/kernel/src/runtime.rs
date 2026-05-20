@@ -178,6 +178,16 @@ pub enum PeerWarning {
         dropped: u64,
     },
 
+    /// Wire-decode failure from a single peer. Distinct from
+    /// `BroadcastLagged` — does NOT trigger `HeadsSummary`
+    /// republishing. Per B-4.1 spec §3.0.
+    DecodeFailed {
+        /// The iroh-gossip last-hop neighbor (Plumtree forwarder,
+        /// not necessarily the original publisher; Q-4 is B-4.2).
+        /// `None` for transports without per-message sender identity.
+        peer: Option<PeerPubkey>,
+    },
+
     /// Local-ahead branch of `handle_heads_summary` could not look up our
     /// hash at the remote's claimed seq, despite our `local_seq > remote_seq`.
     /// Under DAG invariants this is unreachable (an author chain with head
@@ -501,6 +511,26 @@ impl Runtime {
                             .expect("peer_warnings mutex poisoned")
                             .push(PeerWarning::BroadcastLagged { dropped: n });
                         self.publish_heads_summary().await?;
+                    }
+                    Err(SubError::DecodeFailed { peer }) => {
+                        // Wire-decode failure: a peer sent bytes that did not
+                        // round-trip through canonical bincode. Distinct from
+                        // Lagged on purpose — Lagged means "I missed messages,
+                        // please backfill" and triggers publish_heads_summary;
+                        // DecodeFailed means "this single peer sent garbage,
+                        // discard it" and must NOT trigger backfill (a flood of
+                        // garbage from one peer would otherwise spam HeadsSummary
+                        // from every recipient).
+                        //
+                        // Per B-4.1 spec §2 (`SubError::DecodeFailed` row) +
+                        // §3.0. The `peer` field is the iroh-gossip last-hop
+                        // neighbor under Plumtree (not necessarily the original
+                        // publisher; Q-4 is B-4.2's scope).
+                        #[allow(clippy::expect_used)]
+                        self.peer_warnings
+                            .lock()
+                            .expect("peer_warnings mutex poisoned")
+                            .push(PeerWarning::DecodeFailed { peer });
                     }
                 },
                 _ = ticker.tick() => { self.publish_heads_summary().await?; }

@@ -14,7 +14,7 @@
 
 #![doc(html_no_source)]
 
-use myrhiza_types::{DriftMessage, Event, HeadsRequest, HeadsSummary, Topic};
+use myrhiza_types::{DriftMessage, Event, HeadsRequest, HeadsSummary, PeerPubkey, Topic};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -72,6 +72,12 @@ pub enum NetError {
         /// (e.g. `"B-4.1"`).
         planned_in: &'static str,
     },
+    /// Subscribe call failed for a reason other than transport
+    /// shutdown — e.g. invalid bootstrap peer pubkey, gossip-layer
+    /// API error during topic-join. Carries a human-readable
+    /// diagnostic. Per B-4.1 spec §3.0.
+    #[error("subscribe failed: {0}")]
+    SubscribeFailed(String),
 }
 
 /// Errors returned by [`Subscription::recv`].
@@ -83,6 +89,26 @@ pub enum SubError {
     /// calling `recv`.
     #[error("subscription lagged: dropped {0} messages")]
     Lagged(u64),
+    /// A received wire message did not decode under the canonical
+    /// bincode contract. Carries the last-hop iroh-gossip neighbor
+    /// (NOT necessarily the original publisher; per-publisher
+    /// attribution is Q-4 / B-4.2 work). The runtime treats this as
+    /// log + discard — distinct from [`SubError::Lagged`], which
+    /// triggers a backfill `HeadsSummary` publish. Routing decode
+    /// failures through `Lagged` would let a single bad-bytes peer
+    /// flood the network with backfill traffic.
+    ///
+    /// Per B-4.1 spec §3.0 + the runtime handler at
+    /// `runtime.rs handle_event` (see `SubError` handling in the
+    /// receive loop).
+    #[error("decoded message failed bincode contract (from peer: {peer:?})")]
+    DecodeFailed {
+        /// The iroh-gossip `delivered_from` peer (last-hop neighbor
+        /// under Plumtree forwarding, not necessarily the
+        /// publisher). `None` for transports without per-message
+        /// sender identity ([`MemNetwork`] never emits this variant).
+        peer: Option<PeerPubkey>,
+    },
 }
 
 /// Network transport abstraction. Implementations are responsible for
