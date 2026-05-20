@@ -668,17 +668,26 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         .await;
 }
 
-/// Covers: convergence.md §4.4
+/// Covers: convergence.md §4.4 — User-visible contract: a single-peer
+/// runtime publishing its own `HeadsSummary` does NOT accumulate
+/// spurious `PeerWarning::SignatureInvalid` warnings.
 ///
-/// One-peer runtime over `MemNetwork` (which echoes own publishes via its
-/// tokio broadcast channel). The runtime publishes a `HeadsSummary`
-/// (driven by a short tick); the loopback filter in
-/// `verify_heads_summary` sees `signed_by_peer == self.peer_key.public`
-/// and returns `false`, skipping the body handler — `peer_warnings` must
-/// NOT accumulate `SignatureInvalid`.
+/// NOTE on mechanism: this test verifies the USER-VISIBLE CONTRACT (no
+/// spurious warnings on own publishes), NOT the loopback filter's
+/// mechanism directly. A broken loopback filter would also pass this
+/// test if the runtime's own signature happens to verify (which it
+/// does in normal operation — self-publishes use real Ed25519 sigs).
+/// The mechanism check belongs in a unit test of `verify_heads_summary`
+/// that asserts the loopback equality branch fires; that's a follow-up
+/// if observability becomes important.
 ///
-/// This proves the spec §2 "Loopback filter" invariant: own-published
-/// messages are not treated as inbound foreign messages.
+/// What this test PROVES:
+/// - One-peer runtime running over `MemNetwork` echoes own publishes
+///   through the broadcast channel
+/// - The runtime processes the echo without surfacing
+///   `SignatureInvalid` (user-visible contract)
+///
+/// Per B-4.2 spec §2 "Loopback filter" row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_loopback_filter_skips_own_heads_summary_verify() {
     let bus = MemBus::new(256);
@@ -773,22 +782,30 @@ async fn unsubscribe_returns_ok() {
     );
 }
 
-/// Covers: networking.md §11.1
+/// Covers: networking.md §11.1 — `IrohNetwork::publish` and the
+/// underlying gossip actor remain functional after a peer drops its
+/// `IrohSubscription`. This is a regression check for "drop +
+/// publish-after-drop doesn't crash the gossip actor", not the
+/// stronger property "B actually left the swarm at the actor level"
+/// (which iroh-gossip 0.99.0 doesn't expose for assertion;
+/// actor-internal swarm-state verification is B-4.3 cross-process
+/// scope — see spec §11 future work).
 ///
-/// Two iroh peers; peer B subscribes with peer A as bootstrap. After the
-/// swarm forms, peer B drops its subscription. Peer A then publishes a
-/// message. Assert peer B's network handle can no longer receive it —
-/// validated by construction: the dropped `IrohSubscription` has no
-/// receiver endpoint.
+/// What this test PROVES:
+/// - Two iroh peers can form a swarm via real `IrohNetwork::subscribe`
+/// - Dropping `IrohSubscription` doesn't panic
+/// - `IrohNetwork::publish` after a peer drop completes Ok(_) — the
+///   gossip actor on the publisher's side is not corrupted by the
+///   neighbor's subscription drop.
 ///
-/// Per spec §3.3 / spec §4.4 "drop IS the leave." The actor-internal
-/// swarm-state assertion (peer A's iroh-gossip actor received a "B left"
-/// signal) requires iroh-gossip 0.99.0 internals not yet exposed publicly;
-/// the user-visible behavior (drop = stop receiving) is what the spec
-/// contracts on.
+/// What this test does NOT prove (gap acknowledged):
+/// - The actor on B's side actually signaled NeighborDown to A
+/// - A's swarm-membership state reflects B's leave
+///
+/// Per B-4.2 spec §3.3 + §10 (real-cross-process tests deferred).
 #[cfg(feature = "network-iroh")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn iroh_subscription_drop_actually_leaves_swarm() {
+async fn iroh_publish_after_subscription_drop_does_not_error() {
     use iroh::address_lookup::MemoryLookup;
     use myrhiza_network::IrohNetwork;
 
@@ -833,14 +850,19 @@ async fn iroh_subscription_drop_actually_leaves_swarm() {
     // Wait for swarm formation.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // B drops its subscription — this IS the leave per iroh-gossip 0.99.0.
+    // B drops its subscription. Per iroh-gossip 0.99.0 (`api.rs:355-363`),
+    // drop is the only public path to "leave swarm" — but this test does
+    // NOT verify the actor-internal leave signal (see docstring above).
     drop(sub_b);
 
     // Give the actor time to process the drop.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // A publishes a message. B's *dropped* subscription has no live receiver,
-    // so B cannot receive it — validated by construction.
+    // A publishes after B's drop. The assertion is that `publish` returns
+    // Ok(_) — the gossip actor on A's side is not corrupted by the
+    // neighbor's drop. This is a regression check for "drop +
+    // publish-after-drop doesn't crash the gossip actor"; it does NOT
+    // prove B actually left the swarm at the actor level.
     use myrhiza_types::PeerPubkey;
     let summary = HeadsSummary {
         authors: vec![],
@@ -851,12 +873,5 @@ async fn iroh_subscription_drop_actually_leaves_swarm() {
     net_a
         .publish(topic, GossipMessage::HeadsSummary(summary))
         .await
-        .expect("A publish after B drop");
-
-    // The test assertion is structural: sub_b was dropped above, so calling
-    // recv() on it would be a compile error. The fact that we reach this point
-    // without any panic proves that drop-on-subscription terminates cleanly
-    // and the remaining peer (A) continues to publish without error.
-    // No runtime panic + net_a.publish returning Ok(()) is the observable
-    // proof that drop-as-unsubscribe functions correctly.
+        .expect("A publish after B drop must complete Ok(_)");
 }
