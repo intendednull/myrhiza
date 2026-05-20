@@ -33,7 +33,7 @@ This slice lands **none** of:
 | Code location | `crates/network/src/iroh_transport.rs` (single file) | `iroh.rs` / module dir | Module named `iroh_transport` not `iroh` to avoid shadowing the extern crate inside the module body — `use iroh::Endpoint` would resolve ambiguously if the local module were also named `iroh`. Promote to `iroh_transport/` directory if it grows past ~300 lines. |
 | Skeleton method behavior | All `Network` methods return `Err(NetError::Unimplemented { method, planned_in })` | `unimplemented!()` macro | `unimplemented!()` panics at runtime — workspace `panic = warn` lint would refuse without `#[allow]`. Returning a structured error is more disciplined and gives integration tests a clean assertion. |
 | `NetError::Unimplemented` variant | **In scope** for B-4.0 (added now) | Use an existing variant | The existing variants (`SubscribeClosed`, `PublishFailed`) don't describe "this transport doesn't do this yet" — semantically distinct. Adding the variant once, here, prevents B-4.1+ from accidentally papering over a real bug with a misleading existing variant. |
-| `PeerPubkey ↔ EndpointId` | Distinct types; `From<iroh::EndpointId> for PeerPubkey` + `TryFrom<PeerPubkey> for iroh::EndpointId` impls in `iroh.rs` | Make `PeerPubkey = iroh::EndpointId` (type alias) | Type alias would leak iroh's API churn into Myrhiza's public surface (`prior-art/iroh/lessons.md` §Avoid row 1). Distinct newtypes with conversions are the disciplined approach. `TryFrom` (not `From`) on the reverse because `EndpointId::from_bytes` is fallible in iroh 1.0 (validates curve point). |
+| `PeerPubkey ↔ EndpointId` | Distinct types; **free-function** conversions `peer_pubkey_from_iroh` + `iroh_endpoint_id_from_peer_pubkey` in `iroh_transport.rs` | (a) Type alias `PeerPubkey = iroh::EndpointId`; (b) `From`/`TryFrom` trait impls | Type alias would leak iroh's API churn into Myrhiza's public surface (`prior-art/iroh/lessons.md` §Avoid row 1). `From`/`TryFrom` trait impls **are blocked by Rust's orphan rule**: `iroh::EndpointId` is a `pub type EndpointId = PublicKey;` alias (per iroh-base 1.0.0-rc.0 `key.rs:70`), and both `PeerPubkey` (`myrhiza-types`) and `iroh::PublicKey` are foreign to `myrhiza-network`. Free functions preserve the distinct-types discipline. A future plan may promote to trait impls by moving them into `myrhiza-types` behind an `iroh-compat` feature; the function bodies port verbatim. |
 | Endpoint ownership | `IrohNetwork::new(endpoint: iroh::Endpoint, gossip: iroh_gossip::Gossip) -> Self` — caller owns endpoint construction | `IrohNetwork::open(builder: iroh::EndpointBuilder) -> Self` (builder ownership) | Caller-owned endpoint matches `prior-art/iroh/lessons.md` §Borrow row 1: "One `Endpoint` per host, owned by the kernel." The kernel embedder constructs once and hands references. |
 | Acceptance test | One smoke test in `crates/network/tests/iroh_smoke.rs` (or `tests/iroh_skeleton.rs`) — constructs `iroh::Endpoint`, `iroh_gossip::Gossip`, `IrohNetwork`; asserts `IrohNetwork::peer_pubkey()` matches the endpoint's NodeID | Multiple tests covering each unimplemented method | YAGNI; B-4.1 will add behavioral tests. The skeleton test's job is "the trait shape compiles against iroh's real types." |
 | Test gating | `#[cfg(feature = "network-iroh")]` on the new test file (or use `cargo test -p myrhiza-network --features network-iroh`) | Always-on | Default-feature-off keeps `cargo test --workspace` fast. CI runs `cargo test --features network-iroh` separately. |
@@ -204,28 +204,36 @@ impl Subscription for IrohSubscription {
 }
 
 // ---- PeerPubkey <-> EndpointId conversions ----
+//
+// Free functions, NOT trait impls: `iroh::EndpointId` is a type alias
+// for `iroh::PublicKey`, so both types in any `From`/`TryFrom` we'd
+// write are foreign to `myrhiza-network` — Rust's orphan rule blocks
+// the impl. Free functions preserve distinct-types discipline without
+// the orphan-rule violation. See §2 decision-table row for the
+// runner-up paradigms.
 
-impl From<iroh::EndpointId> for PeerPubkey {
-    fn from(endpoint_id: iroh::EndpointId) -> Self {
-        // Both types are raw 32-byte Ed25519 public keys per
-        // prior-art/iroh/identity.md §"NodeID = Ed25519 public key".
-        PeerPubkey::from_bytes(*endpoint_id.as_bytes())
-    }
+pub fn peer_pubkey_from_iroh(endpoint_id: iroh::EndpointId) -> PeerPubkey {
+    // Both types are raw 32-byte Ed25519 public keys per
+    // prior-art/iroh/identity.md §"NodeID = Ed25519 public key".
+    PeerPubkey::from_bytes(*endpoint_id.as_bytes())
 }
 
-impl TryFrom<PeerPubkey> for iroh::EndpointId {
-    type Error = iroh::endpoint_id::ParseError;
-
-    fn try_from(peer: PeerPubkey) -> Result<Self, Self::Error> {
-        // iroh::EndpointId::from_bytes validates the bytes form a
-        // valid Ed25519 curve point — distinct from PeerPubkey which
-        // is a transparent newtype. Hence `TryFrom`, not `From`.
-        iroh::EndpointId::from_bytes(peer.as_bytes())
-    }
+pub fn iroh_endpoint_id_from_peer_pubkey(
+    peer: PeerPubkey,
+) -> Result<iroh::EndpointId, iroh::KeyParsingError> {
+    // iroh::EndpointId::from_bytes validates the bytes form a valid
+    // Ed25519 curve point — hence the fallible Result.
+    iroh::EndpointId::from_bytes(peer.as_bytes())
 }
 ```
 
-**Note on iroh's exact API**: identifiers like `iroh::EndpointId`, `iroh::Endpoint::node_id()`, `iroh::EndpointId::from_bytes`, and the `endpoint_id::ParseError` type are the **current** names per the prior-art folder (dated 2026-05-08). The implementer should verify against `cargo doc --open -p iroh` at impl time; if a name has rotated (likely under pre-1.0 churn), adapt.
+**Note on iroh's exact API**: identifiers like `iroh::EndpointId`, `iroh::Endpoint::id()`, `iroh::EndpointId::from_bytes`, `iroh::KeyParsingError`, and the `iroh::endpoint::presets` module are the **current** names per iroh 1.0.0-rc.0 (verified at impl time). Notable adaptations from the prior-art-folder (dated 2026-05-08) snapshot:
+
+- `Endpoint::node_id() → Endpoint::id()` (rename).
+- `endpoint_id::ParseError → KeyParsingError` (different module path AND name).
+- `iroh::EndpointId` is a `pub type` alias for `iroh::PublicKey`, not a distinct newtype (drives the free-function choice above).
+- `Endpoint::builder()` requires a preset arg (e.g. `presets::Minimal`); smoke test uses `Minimal` to avoid n0 DNS/relay egress.
+- `iroh_gossip::Gossip::builder().spawn(endpoint)` is **synchronous**, returns `Gossip` directly (no `Future`, no `Result`).
 
 ### 3.3 `NetError::Unimplemented` variant
 
@@ -385,8 +393,8 @@ New public surface in `myrhiza_network`:
 
 - `IrohNetwork` struct (feature-gated).
 - `IrohSubscription` struct (feature-gated).
-- `From<iroh::EndpointId> for PeerPubkey` impl.
-- `TryFrom<PeerPubkey> for iroh::EndpointId` impl.
+- `peer_pubkey_from_iroh(endpoint_id) -> PeerPubkey` free function (feature-gated; orphan rule blocks trait impl — see §2 / §3.2).
+- `iroh_endpoint_id_from_peer_pubkey(peer) -> Result<iroh::EndpointId, iroh::KeyParsingError>` free function (feature-gated; same reason).
 - `NetError::Unimplemented { method, planned_in }` variant.
 
 Unchanged public surface:
