@@ -6,13 +6,27 @@
 
 use myrhiza_kernel::identity::{FilesystemIdentityStore, IdentityStore};
 
+/// Create a tempdir with mode 0o700 on Unix — required because
+/// `FilesystemIdentityStore::open` refuses tempdirs created with a
+/// permissive umask (0o755 under default GitHub Actions umask).
+fn secure_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir 0o700");
+    }
+    dir
+}
+
 /// Covers: identity.md §6, crypto.md §9.1
 ///
 /// B-2 design §6 round-trip happy path; replaces plan-B-1 §10's
 /// in-memory peer-identity stub.
 #[tokio::test]
 async fn peer_key_round_trip_persists_across_store_reopen() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store1 = FilesystemIdentityStore::open(&path).await.expect("open 1");
@@ -35,7 +49,7 @@ async fn peer_key_round_trip_persists_across_store_reopen() {
 /// extends plan-B-1 §11 author keypair handling with persistence.
 #[tokio::test]
 async fn author_key_round_trip_persists_across_store_reopen() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store1 = FilesystemIdentityStore::open(&path).await.expect("open 1");
@@ -55,7 +69,7 @@ async fn author_key_round_trip_persists_across_store_reopen() {
 /// author keypair handling.
 #[tokio::test]
 async fn list_authors_returns_all_created_authors_sorted() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = FilesystemIdentityStore::open(&path).await.expect("open");
@@ -80,7 +94,7 @@ async fn list_authors_returns_all_created_authors_sorted() {
 /// plan-B-1 §10 peer-identity semantics.
 #[tokio::test]
 async fn load_or_create_peer_is_idempotent_within_one_store() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = FilesystemIdentityStore::open(&path).await.expect("open");
@@ -99,7 +113,7 @@ async fn load_or_create_peer_is_idempotent_within_one_store() {
 async fn load_rejects_loose_unix_permissions() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = FilesystemIdentityStore::open(&path).await.expect("open");
@@ -131,7 +145,7 @@ async fn load_rejects_loose_unix_permissions() {
 /// B-2 design §6.3 seed-length enforcement; kernel-custody discipline.
 #[tokio::test]
 async fn load_rejects_seed_length_mismatch() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = FilesystemIdentityStore::open(&path).await.expect("open");
@@ -164,7 +178,7 @@ async fn load_rejects_seed_length_mismatch() {
 /// against tampered or mis-named author files.
 #[tokio::test]
 async fn load_rejects_corrupted_filename_bech32m() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = FilesystemIdentityStore::open(&path).await.expect("open");
@@ -194,7 +208,7 @@ async fn load_rejects_corrupted_filename_bech32m() {
 /// against tampered filenames.
 #[tokio::test]
 async fn load_author_rejects_pubkey_filename_mismatch() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = FilesystemIdentityStore::open(&path).await.expect("open");
@@ -273,7 +287,7 @@ async fn open_creates_directory_with_0700_mode() {
 async fn concurrent_store_writes_do_not_corrupt_key() {
     use std::sync::Arc;
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = secure_tempdir();
     let path = dir.path().to_path_buf();
 
     let store = Arc::new(FilesystemIdentityStore::open(&path).await.expect("open"));
