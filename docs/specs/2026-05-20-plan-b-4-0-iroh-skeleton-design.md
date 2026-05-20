@@ -10,9 +10,9 @@
 Add iroh as a load-bearing transport dependency behind a `network-iroh` cargo feature. Land:
 
 - **Pinned deps**: `iroh = "=1.0.0-rc.0"` (2026-05-07), `iroh-gossip = "=0.99.0"` (2026-05-08), both with exact-version pins per Willow / Iroh prior-art `Avoid` guidance ("Vendor-pin iroh in Cargo.toml and bump deliberately" — `prior-art/iroh/lessons.md` §Avoid row 1).
-- **`IrohNetwork` struct** in `crates/network/src/iroh.rs`, holding references to the host's `iroh::Endpoint` + `iroh_gossip::Gossip` instances.
+- **`IrohNetwork` struct** in `crates/network/src/iroh_transport.rs`, holding owned handles to the host's `iroh::Endpoint` + `iroh_gossip::Gossip` instances (both are `Arc`-backed in iroh's API, so the move semantics are cheap — see §3.2 for the rationale).
 - **Trait impl** for `Network` (and the associated `Subscription`) that **compiles, constructs, and returns a clear "not yet implemented" error from every method**. The error variant explicitly names the follow-up slice (B-4.1).
-- **One smoke-level acceptance test** demonstrating the struct constructs against a real iroh endpoint and exposes the endpoint's NodeID through Myrhiza's `PeerPubkey` newtype.
+- **One smoke-level acceptance test** that **binds a real local iroh endpoint** (UDP socket on a random port), constructs `IrohNetwork`, and asserts the endpoint's NodeID round-trips through Myrhiza's `PeerPubkey` newtype. The "skeleton" framing is about *behavior* (no real subscribe/publish yet), not *zero-UDP*; the test exercises real iroh initialization to catch dep + linkage failures early.
 - **`PeerPubkey ↔ iroh::EndpointId` conversion helpers** (both are 32-byte Ed25519 public keys per `prior-art/iroh/identity.md`).
 
 This slice lands **none** of:
@@ -20,7 +20,7 @@ This slice lands **none** of:
 - **Actual gossip pub/sub** — `subscribe` and `publish` return `Err`. Lands in B-4.1.
 - **Q-4 sender attribution** — extending `GossipMessage` with `from_peer: PeerPubkey` on receive. Lands in B-4.2.
 - **Real cross-process / cross-machine tests** — B-4.0's single test is intra-process. Real network tests land in B-4.3.
-- **`iroh::Endpoint` lifecycle management** — the kernel embedder owns endpoint construction in B-4.0; `IrohNetwork::new(endpoint, gossip)` takes pre-constructed references. The kernel-level "single endpoint per host" surface (per `prior-art/iroh/lessons.md` §Borrow row 1) becomes a future spec when the kernel grows a Router-like dispatch layer.
+- **`iroh::Endpoint` lifecycle management** — the kernel embedder owns endpoint construction in B-4.0; `IrohNetwork::new(endpoint, gossip)` consumes the handles by value (iroh's `Endpoint` is internally `Arc`-backed, so the move is cheap and the embedder can keep its own clone for router-level work). The kernel-level "single endpoint per host" surface (per `prior-art/iroh/lessons.md` §Borrow row 1) becomes a future spec when the kernel grows a Router-like dispatch layer.
 - **Discovery, relay configuration, ALPN namespacing, blob distribution** — all deferred to later slices or future plans.
 
 ## 2. Scope decisions (locked during brainstorming + prior-art consultation, 2026-05-20)
@@ -30,7 +30,7 @@ This slice lands **none** of:
 | iroh version pin | `=1.0.0-rc.0` exact | caret range | `prior-art/iroh/lessons.md` §Avoid: "Every minor is breaking." Exact pin matches workspace convention (`bincode = "=1.3.3"`, `wasmtime = "=36.0.9"`). |
 | iroh-gossip version pin | `=0.99.0` exact | caret range | Same reasoning; tracks iroh release cadence (v0.99.0 was a single "Update iroh and noq to 1.0-rc.0" release — `prior-art/iroh/gossip.md` §Versions). |
 | Cargo feature gating | `network-iroh` feature on `myrhiza-network` crate; **default-off** | Hard dep | Existing comment in `crates/network/src/lib.rs:8` already names this feature. Default-off keeps the in-process `MemNetwork`-only test path cheap (iroh pulls in QUIC + DNS + DHT — bumpy build cost). |
-| Code location | `crates/network/src/iroh.rs` (single file) | Module dir | Skeleton is small; promote to `iroh/` directory if it grows past ~300 lines. |
+| Code location | `crates/network/src/iroh_transport.rs` (single file) | `iroh.rs` / module dir | Module named `iroh_transport` not `iroh` to avoid shadowing the extern crate inside the module body — `use iroh::Endpoint` would resolve ambiguously if the local module were also named `iroh`. Promote to `iroh_transport/` directory if it grows past ~300 lines. |
 | Skeleton method behavior | All `Network` methods return `Err(NetError::Unimplemented { method, planned_in })` | `unimplemented!()` macro | `unimplemented!()` panics at runtime — workspace `panic = warn` lint would refuse without `#[allow]`. Returning a structured error is more disciplined and gives integration tests a clean assertion. |
 | `NetError::Unimplemented` variant | **In scope** for B-4.0 (added now) | Use an existing variant | The existing variants (`SubscribeClosed`, `PublishFailed`) don't describe "this transport doesn't do this yet" — semantically distinct. Adding the variant once, here, prevents B-4.1+ from accidentally papering over a real bug with a misleading existing variant. |
 | `PeerPubkey ↔ EndpointId` | Distinct types; `From<iroh::EndpointId> for PeerPubkey` + `TryFrom<PeerPubkey> for iroh::EndpointId` impls in `iroh.rs` | Make `PeerPubkey = iroh::EndpointId` (type alias) | Type alias would leak iroh's API churn into Myrhiza's public surface (`prior-art/iroh/lessons.md` §Avoid row 1). Distinct newtypes with conversions are the disciplined approach. `TryFrom` (not `From`) on the reverse because `EndpointId::from_bytes` is fallible in iroh 1.0 (validates curve point). |
@@ -44,42 +44,43 @@ This slice lands **none** of:
 
 ### 3.1 Crate-level changes
 
-`crates/network/Cargo.toml`:
+**Workspace `Cargo.toml` `[workspace.dependencies]`** — add (after existing entries):
 
 ```toml
-[dependencies]
-# ... existing deps ...
-
-# Optional — feature-gated transport implementation. Pinned tight
-# per prior-art/iroh/lessons.md §Avoid row 1 (iroh pre-1.0 API churn).
-iroh = { version = "=1.0.0-rc.0", optional = true }
-iroh-gossip = { version = "=0.99.0", optional = true }
-tokio = { workspace = true, optional = true, features = ["net"] }
-
-[features]
-default = []
-network-iroh = ["dep:iroh", "dep:iroh-gossip", "dep:tokio"]
-```
-
-Workspace `Cargo.toml` `[workspace.dependencies]`:
-
-```toml
+# Iroh transport substrate. Pinned tight per
+# prior-art/iroh/lessons.md §Avoid row 1 (iroh pre-1.0 API churn —
+# "every minor is breaking"). Bump deliberately.
 iroh = "=1.0.0-rc.0"
 iroh-gossip = "=0.99.0"
 ```
 
-(So per-crate Cargo.toml can use `iroh = { workspace = true, optional = true }`.)
+**`crates/network/Cargo.toml`** — add optional deps + feature, all using `workspace = true` per project convention:
 
-`crates/network/src/lib.rs` gains a feature-gated module re-export:
+```toml
+[dependencies]
+# ... existing deps unchanged ...
+iroh = { workspace = true, optional = true }
+iroh-gossip = { workspace = true, optional = true }
+
+[features]
+default = []
+network-iroh = ["dep:iroh", "dep:iroh-gossip"]
+```
+
+**No tokio-feature changes needed.** `tokio` is already a non-optional workspace dep in `crates/network/Cargo.toml` (`features = ["sync", "rt", "macros", "time"]`); cannot be in a `dep:` feature spec. iroh brings its own tokio configuration internally. If the smoke test or future B-4.1 work needs additional tokio features (e.g. `"net"`), add them at the existing workspace tokio line — but the current set is likely sufficient.
+
+**`crates/network/src/lib.rs`** gains a feature-gated module re-export. To avoid shadowing the external `iroh` crate inside the module body and to give consumers an unambiguous import path, the module is named `iroh_transport`:
 
 ```rust
 #[cfg(feature = "network-iroh")]
-pub mod iroh;
+pub mod iroh_transport;
 #[cfg(feature = "network-iroh")]
-pub use iroh::IrohNetwork;
+pub use iroh_transport::IrohNetwork;
 ```
 
-### 3.2 `crates/network/src/iroh.rs` — the new module
+### 3.2 `crates/network/src/iroh_transport.rs` — the new module
+
+(Module named `iroh_transport` not `iroh` to avoid shadowing the extern crate inside the module body — see §3.1.)
 
 ```rust
 //! Iroh transport implementation of the [`Network`] trait.
@@ -269,11 +270,21 @@ use myrhiza_types::PeerPubkey;
 #[tokio::test]
 async fn iroh_network_constructs_and_exposes_endpoint_id_as_peer_pubkey() {
     // Construct a minimal in-process iroh endpoint. Defaults: secret
-    // key auto-generated, no relay, no discovery; binds to a random
-    // local UDP port. Sufficient for the smoke test — we don't
-    // actually send any traffic.
+    // key auto-generated, binds to a random local UDP port.
+    //
+    // API NOTE — verify at impl time:
+    // - `Endpoint::builder()` may require a preset arg in 1.0.0-rc.0
+    //   (per prior-art/iroh/architecture.md the documented signature
+    //   was `Endpoint::builder(presets::N0)...`). Check `cargo doc
+    //   --open -p iroh` and adapt.
+    // - Default builder may attempt pkarr discovery publishing on
+    //   `bind()`. CI sandboxes may block egress. Look for
+    //   `.clear_discovery()` / `.disable_discovery()` / a no-op
+    //   discovery preset. If none exists, document the CI requirement
+    //   (outbound UDP to default n0 relays must be allowed) in the
+    //   test docstring rather than papering over.
     let endpoint = iroh::Endpoint::builder()
-        .discovery_n0()    // or .clear_discovery() if available — see API check note
+        // .clear_discovery()  // ← uncomment if such method exists
         .bind()
         .await
         .expect("iroh endpoint bind");
@@ -338,16 +349,22 @@ Two tests because:
 
 ## 5. CI integration
 
-Add to `justfile` (or `scripts/spec-coverage.sh` if `justfile` is structured that way) a recipe step:
+Add a `test-iroh` recipe to the existing `Justfile`:
 
-```make
+```just
 test-iroh:
     cargo test -p myrhiza-network --features network-iroh --tests
 ```
 
-And include `just test-iroh` in `just ci` so the iroh skeleton tests run on every PR.
+Then update the existing `ci:` recipe to include the new step. Current shape is roughly `ci: fmt-check lint test spec-coverage-check`; the edited line becomes:
+
+```just
+ci: fmt-check lint test test-iroh spec-coverage-check
+```
 
 GitHub Actions CI runs `just ci` (per the existing setup that produced PR #4 / #5's CI checks). Adding `test-iroh` to the gate ensures the iroh dep is exercised on every push — catches version-pin drift, broken iroh API uses, and CI runner UDP-port availability issues early.
+
+The default `cargo test --workspace --all-targets` invocation in the existing `test:` recipe does NOT activate `network-iroh` (default-feature-off), so the new test file's `#![cfg(feature = "network-iroh")]` gate makes it inert under that path. The `test-iroh` recipe is the only path that actually compiles + runs the iroh skeleton tests.
 
 ## 6. Cross-references
 
