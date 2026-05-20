@@ -1448,9 +1448,11 @@ impl Runtime {
             if let Some(dg) = self.own_digest_cache.get(&d.anchor.author_seq_vec).copied() {
                 dg
             } else {
-                let Some(dg) = self.compute_anchor_digest(&d.anchor) else {
+                let Some(dg) = self.compute_anchor_digest_off_loop(&d.anchor).await else {
                     return;
                 };
+                self.own_digest_cache
+                    .insert(d.anchor.author_seq_vec.clone(), dg);
                 dg
             };
         // Step 4: compare.
@@ -1471,31 +1473,65 @@ impl Runtime {
 
     /// Compute our own state-digest at the given anchor by replaying
     /// the topo-subset of events bounded by `anchor.author_seq_vec`.
-    //
-    // TODO(B-2): `compute_anchor_digest` runs synchronously inside the
-    // biased select loop. For a large anchor subset the inline replay
-    // can starve incoming gossip on the same task. Plan B-2 owns moving
-    // this off the loop (e.g. via `tokio::task::spawn_blocking`) or
-    // caching by anchor identity (carry-over from review-finding Q-7).
-    fn compute_anchor_digest(&mut self, anchor: &DriftAnchor) -> Option<[u8; 32]> {
+    ///
+    /// Moves `self.handle` into a `tokio::task::spawn_blocking` worker
+    /// for the duration of the subset replay so the runtime select loop
+    /// can drive other tokio tasks (`MemBus` publishes, network
+    /// subscription forwarding, downstream `digest_watch` consumers).
+    /// Per plan-B-2.1 spec §4.2.
+    ///
+    /// On task panic the handle is permanently lost (left as a
+    /// tombstone) and any subsequent `self.handle` use will panic via
+    /// the tombstone's `unreachable!()`. v1 recovery path is runtime
+    /// halt — see plan-B-2.1 spec §4.2.1.
+    async fn compute_anchor_digest_off_loop(&mut self, anchor: &DriftAnchor) -> Option<[u8; 32]> {
         let bound = anchor_bound_map(&anchor.author_seq_vec);
-        let subset = self.dag.topo_sort_subset(|e| {
+        // Snapshot the subset events before moving the handle. The DAG
+        // is a BTreeMap so this is a clone of the relevant slice.
+        let subset_hashes = self.dag.topo_sort_subset(|e| {
             bound
                 .get(&e.author)
                 .copied()
                 .is_some_and(|max| e.seq <= max)
         });
-        let mut state = Vec::<u8>::new();
-        for hash in subset {
-            let event = self.dag.get(&hash)?;
-            let bytes = canonical_bincode().serialize(event).ok()?;
-            let r = self.handle.apply(&state, &bytes).ok()?;
-            if let ApplyOutcome::Accepted = r.outcome {
-                state = r.new_state;
+        let mut subset_events: Vec<Event> = Vec::with_capacity(subset_hashes.len());
+        for h in &subset_hashes {
+            let event = self.dag.get(h)?;
+            subset_events.push(event.clone());
+        }
+
+        // SAFETY (B-2.1 §4.3): swap the real handle for a tombstone
+        // for the duration of the `spawn_blocking` call. The tombstone
+        // panics on any method invocation; the only code path that
+        // could trigger a panic is a concurrent runtime task — but
+        // the runtime is single-task by construction (plan-B-1 §11),
+        // so no such concurrent invocation exists. The handle is
+        // restored from the task's return tuple before any subsequent
+        // method on `self` is reached. On task panic the tombstone
+        // persists and the next handle use will surface the bug
+        // deterministically — v1 recovery is runtime halt (§4.2.1).
+        let mut handle = std::mem::replace(&mut self.handle, StateApplyHandle::tombstone());
+
+        let join_result =
+            tokio::task::spawn_blocking(move || -> (StateApplyHandle, Option<[u8; 32]>) {
+                let digest = compute_subset_digest(&mut handle, &subset_events);
+                (handle, digest)
+            })
+            .await;
+
+        match join_result {
+            Ok((handle, digest)) => {
+                self.handle = handle;
+                digest
+            }
+            Err(_join_err) => {
+                // Task panicked. Handle is gone; tombstone persists.
+                // Per B-2.1 spec §4.2.1: any subsequent self.handle
+                // use will trigger the tombstone's unreachable!().
+                // v1 acceptable; recovery requires runtime halt.
+                None
             }
         }
-        let digest_bytes = self.handle.state_digest(&state).ok()?;
-        Some(blake3::hash(&digest_bytes).into())
     }
 }
 
@@ -1562,4 +1598,25 @@ fn classify_author_diff(
             remote_hash: remote_head.hash,
         },
     }
+}
+
+/// Pure-compute helper for [`Runtime::compute_anchor_digest_off_loop`].
+/// Runs on a `tokio::task::spawn_blocking` worker thread.
+///
+/// Returns `None` on any state-apply backend error (matching the
+/// removed synchronous `compute_anchor_digest`'s `.ok()?` semantics).
+/// State-apply rejects (non-error verdict) are silently dropped from
+/// the materialized state — the event still contributes to the
+/// `prior_state` chain only when accepted. Per plan-B-2.1 spec §4.2.
+fn compute_subset_digest(handle: &mut StateApplyHandle, subset: &[Event]) -> Option<[u8; 32]> {
+    let mut state = Vec::<u8>::new();
+    for event in subset {
+        let bytes = canonical_bincode().serialize(event).ok()?;
+        let r = handle.apply(&state, &bytes).ok()?;
+        if let ApplyOutcome::Accepted = r.outcome {
+            state = r.new_state;
+        }
+    }
+    let digest_bytes = handle.state_digest(&state).ok()?;
+    Some(blake3::hash(&digest_bytes).into())
 }
