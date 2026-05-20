@@ -33,6 +33,24 @@ zeroize = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 async-trait.workspace = true
 
+[features]
+# Pass-through so `cargo test -p myrhiza-kernel --features network-iroh`
+# compiles the iroh-dependent tests in `tests/attribution.rs` (tests 11-12).
+# Mirrors the `network-iroh` feature on `myrhiza-network`.
+network-iroh = [
+    "myrhiza-network/network-iroh",
+    "dep:iroh",
+    "dep:iroh-gossip",
+]
+
+[dependencies.iroh]
+workspace = true
+optional = true
+
+[dependencies.iroh-gossip]
+workspace = true
+optional = true
+
 [dev-dependencies]
 anyhow.workspace = true
 tempfile.workspace = true
