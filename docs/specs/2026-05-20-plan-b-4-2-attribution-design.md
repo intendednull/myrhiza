@@ -313,7 +313,7 @@ fn verify_heads_summary(&self, h: &HeadsSummary) -> bool {
 /// [`Self::verify_heads_summary`].
 fn verify_heads_request(&self, r: &HeadsRequest) -> bool {
     if r.signed_by_peer == self.peer_key.public {
-        return true;
+        return false;
     }
     let signed_payload = myrhiza_types::HeadsRequestSignedPayload {
         requests: r.requests.clone(),
