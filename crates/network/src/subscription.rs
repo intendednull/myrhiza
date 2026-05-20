@@ -14,10 +14,19 @@ pub trait Subscription: Send {
     /// - `Err(SubError::Lagged(n))` — underlying transport dropped `n`
     ///   messages; non-fatal, runtime should publish a `HeadsSummary`
     ///   to recover via backfill, then continue calling `recv`
+    /// - `Err(SubError::DecodeFailed { peer })` — received bytes failed
+    ///   canonical bincode decoding; log + discard. Per B-4.1 spec §3.0,
+    ///   the runtime MUST NOT trigger `HeadsSummary` backfill on this
+    ///   variant (distinct from `Lagged`). See [`SubError::DecodeFailed`]
+    ///   for the full rationale.
     /// - `Ok(None)` — subscription closed
     ///
     /// # Errors
-    /// Lag is the only non-fatal error variant.
+    /// `Lagged` and `DecodeFailed` are both non-fatal. `DecodeFailed`
+    /// must NOT trigger a `HeadsSummary` publish — routing wire-decode
+    /// failures through the backfill path would let a single bad-bytes
+    /// peer flood the network; see [`SubError::DecodeFailed`] for the
+    /// full rationale.
     async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError>;
 }
 
