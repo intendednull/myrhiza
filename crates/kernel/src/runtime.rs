@@ -407,7 +407,10 @@ impl Runtime {
         cfg: RuntimeCfg,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let erased = NetworkErased::new(network);
-        let sub = erased.subscribe(topic).await?;
+        // B-4.* will plumb peer-discovery into Runtime::start; for
+        // now pass an empty bootstrap. MemNetwork ignores it;
+        // IrohNetwork (B-4.1) accepts it and waits for inbound joins.
+        let sub = erased.subscribe(topic, vec![]).await?;
 
         let (author_tx, author_rx) = mpsc::channel(64);
         let drift_log = Arc::new(Mutex::new(Vec::new()));
@@ -581,8 +584,12 @@ impl<N: Network> NetworkErased<N> {
 impl<N: Network> Network for NetworkErased<N> {
     type Subscription = Box<dyn Subscription + Send>;
 
-    async fn subscribe(&self, topic: Topic) -> Result<Self::Subscription, NetError> {
-        let s = self.inner.subscribe(topic).await?;
+    async fn subscribe(
+        &self,
+        topic: Topic,
+        bootstrap: Vec<PeerPubkey>,
+    ) -> Result<Self::Subscription, NetError> {
+        let s = self.inner.subscribe(topic, bootstrap).await?;
         Ok(Box::new(s))
     }
 

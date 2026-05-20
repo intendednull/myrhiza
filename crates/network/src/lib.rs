@@ -119,11 +119,28 @@ pub trait Network: Send + Sync + 'static {
     /// The receive-side handle returned by [`Network::subscribe`].
     type Subscription: Subscription + Send + 'static;
 
-    /// Subscribe to a topic. Caller drives `recv` on the returned subscription.
+    /// Subscribe to a topic, with optional bootstrap peer hints.
+    ///
+    /// For transports that maintain a peer-discovery overlay
+    /// ([`IrohNetwork`]), `bootstrap` is a list of `PeerPubkey`s to
+    /// dial when forming the topic's swarm. An empty `bootstrap` is
+    /// legal — the topic exists locally and waits for inbound joins.
+    ///
+    /// For transports without peer-discovery semantics
+    /// ([`MemNetwork`]), `bootstrap` is ignored (in-process broadcast
+    /// routes by topic only).
+    ///
+    /// Per B-4.1 spec §3.1.
     ///
     /// # Errors
-    /// Returns [`NetError::SubscribeClosed`] if the transport is shut down.
-    async fn subscribe(&self, topic: Topic) -> Result<Self::Subscription, NetError>;
+    /// Returns [`NetError::SubscribeClosed`] if the transport has been
+    /// shut down, or [`NetError::SubscribeFailed`] if the gossip-layer
+    /// subscribe call fails (e.g. invalid bootstrap pubkey).
+    async fn subscribe(
+        &self,
+        topic: Topic,
+        bootstrap: Vec<PeerPubkey>,
+    ) -> Result<Self::Subscription, NetError>;
 
     /// Publish a message to all subscribers on a topic.
     ///

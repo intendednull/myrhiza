@@ -581,7 +581,10 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
 
     // Now open the tap — captures everything published from this point on.
     let net_tap = MemNetwork::new(bus.clone());
-    let mut tap = net_tap.subscribe(topic).await.expect("tap subscribe");
+    let mut tap = net_tap
+        .subscribe(topic, vec![])
+        .await
+        .expect("tap subscribe");
 
     // Construct A's events manually (A is NOT a running runtime).
     let kp_a = AuthorKeypair::deterministic(1);

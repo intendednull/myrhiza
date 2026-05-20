@@ -26,7 +26,7 @@ async fn mem_network_delivers_to_subscriber() {
     let net_b = MemNetwork::new(bus);
 
     let t = topic(1);
-    let mut sub_b = net_b.subscribe(t).await.expect("subscribe");
+    let mut sub_b = net_b.subscribe(t, vec![]).await.expect("subscribe");
 
     let msg = GossipMessage::HeadsSummary(sample_heads_summary());
     net_a.publish(t, msg.clone()).await.expect("publish");
@@ -45,7 +45,7 @@ async fn mem_network_topic_isolation() {
 
     let t1 = topic(1);
     let t2 = topic(2);
-    let mut sub2 = net.subscribe(t2).await.expect("subscribe t2");
+    let mut sub2 = net.subscribe(t2, vec![]).await.expect("subscribe t2");
 
     // Publish on t1; sub2 (on t2) should NOT receive.
     net.publish(t1, GossipMessage::HeadsSummary(sample_heads_summary()))
@@ -63,7 +63,7 @@ async fn mem_network_lag_surfaces_as_sub_error() {
     let bus = MemBus::new(2); // capacity 2 — tiny on purpose
     let net = MemNetwork::new(bus);
     let t = topic(3);
-    let mut sub = net.subscribe(t).await.expect("subscribe");
+    let mut sub = net.subscribe(t, vec![]).await.expect("subscribe");
 
     // Flood 10 messages without recv'ing — broadcast channel will lag.
     for _ in 0..10 {
@@ -101,7 +101,7 @@ async fn inject_lag_forces_next_recv_to_return_lagged() {
     let bus = MemBus::new(8);
     let net = MemNetwork::new(bus.clone());
     let t = topic(4);
-    let mut sub = net.subscribe(t).await.expect("subscribe");
+    let mut sub = net.subscribe(t, vec![]).await.expect("subscribe");
 
     bus.inject_lag(t);
 

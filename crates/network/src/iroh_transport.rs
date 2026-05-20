@@ -94,7 +94,11 @@ impl IrohNetwork {
 impl Network for IrohNetwork {
     type Subscription = IrohSubscription;
 
-    async fn subscribe(&self, _topic: Topic) -> Result<Self::Subscription, NetError> {
+    async fn subscribe(
+        &self,
+        _topic: Topic,
+        _bootstrap: Vec<PeerPubkey>,
+    ) -> Result<Self::Subscription, NetError> {
         Err(NetError::Unimplemented {
             method: "Network::subscribe",
             planned_in: "B-4.1",
