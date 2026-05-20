@@ -121,6 +121,12 @@ pub trait Network: Send + Sync + 'static {
 
     /// Subscribe to a topic, with optional bootstrap peer hints.
     ///
+    /// **SemVer-breaking from B-4.0:** this trait method gained the
+    /// `bootstrap` parameter in B-4.1. Both in-tree impls
+    /// ([`MemNetwork`], [`IrohNetwork`]) and all 7 call sites were
+    /// updated atomically; out-of-tree implementors must add the
+    /// parameter. See spec §3.1 for rationale.
+    ///
     /// For transports that maintain a peer-discovery overlay
     /// ([`IrohNetwork`]), `bootstrap` is a list of `PeerPubkey`s to
     /// dial when forming the topic's swarm. An empty `bootstrap` is
