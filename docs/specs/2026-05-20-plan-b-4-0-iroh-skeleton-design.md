@@ -105,10 +105,11 @@ use myrhiza_types::{PeerPubkey, Topic};
 
 /// Iroh-backed [`Network`] implementation.
 ///
-/// Holds references to a host-level [`iroh::Endpoint`] + an
-/// [`iroh_gossip::Gossip`] instance. Per `prior-art/iroh/lessons.md`
-/// §Borrow row 1, the kernel embedder is responsible for endpoint
-/// construction; this struct does NOT own endpoint lifecycle.
+/// Holds owned (Arc-backed, cheaply cloneable) handles to a
+/// host-level [`iroh::Endpoint`] + an [`iroh_gossip::Gossip`]
+/// instance. Per `prior-art/iroh/lessons.md` §Borrow row 1, the
+/// kernel embedder constructs these once and may hand one clone
+/// here while retaining another for router-level work.
 pub struct IrohNetwork {
     endpoint: iroh::Endpoint,
     gossip: iroh_gossip::Gossip,
