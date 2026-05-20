@@ -28,7 +28,7 @@
 
 use bytes::Bytes;
 use iroh::address_lookup::MemoryLookup;
-use myrhiza_network::iroh_transport::{iroh_topic_id_from_topic, peer_pubkey_from_iroh};
+use myrhiza_network::iroh_transport::iroh_topic_id_from_topic;
 use myrhiza_network::{GossipMessage, IrohNetwork, NetError, Network, SubError, Subscription};
 use myrhiza_types::{AuthorHead, AuthorPubkey, EventHash, HeadsSummary, Topic};
 use std::time::Duration;
@@ -229,7 +229,18 @@ async fn decode_failure_surfaces_as_subscribe_decode_failed() {
                 Ok(None) => panic!("subscription closed unexpectedly"),
                 Err(SubError::DecodeFailed { peer }) => return peer,
                 Err(SubError::Lagged(_)) => {
-                    // Could happen during swarm formation; keep waiting.
+                    // Tolerated during swarm formation (membership churn
+                    // can surface Lagged before the swarm settles). If
+                    // this persists until the outer 5s timeout fires,
+                    // that is a routing-regression signal worth
+                    // investigating: the garbage broadcast SHOULD
+                    // produce DecodeFailed; persistent Lagged here
+                    // would mean SubError::DecodeFailed has been
+                    // collapsed back into SubError::Lagged at the
+                    // runtime boundary, undermining the load-bearing
+                    // routing distinction per spec §3.0 (and would
+                    // re-enable the bad-bytes-peer backfill flood
+                    // that the distinct variant exists to prevent).
                 }
             }
         }
@@ -281,23 +292,3 @@ async fn topic_id_from_topic_roundtrips() {
         "TopicId bytes must equal Topic bytes — both are 32-byte transparent newtypes"
     );
 }
-
-// ---- import-stability marker ------------------------------------------------
-//
-// These bindings keep `AuthorHead`, `AuthorPubkey`, `EventHash`,
-// `HeadsSummary`, and `peer_pubkey_from_iroh` in scope as explicitly
-// used symbols, satisfying the import checker. If clippy is clean
-// without this block, it can be deleted.
-#[allow(dead_code)]
-const _: () = {
-    let _: fn() -> HeadsSummary = || HeadsSummary {
-        authors: vec![],
-        kernel_fuel_table_version: 0,
-    };
-    let _: fn() -> AuthorHead = || AuthorHead {
-        author: AuthorPubkey::from_bytes([0; 32]),
-        seq: 0,
-        hash: EventHash::ZERO,
-    };
-    let _ = peer_pubkey_from_iroh;
-};
