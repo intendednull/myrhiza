@@ -592,6 +592,13 @@ impl Runtime {
             Ok(Inserted::NewlyApplied { topo_index, hash }) => {
                 let mut last_emit_index = topo_index;
                 let mut last_emit_hash = hash;
+                // Count inserts performed by the drain loop below; the
+                // outer NewlyApplied is the single guaranteed insert.
+                // Per plan-B-2.1 spec §3.2: tip-fast-path is sound only
+                // for single-insert calls (drain_insert_count == 0).
+                // When the drain inserts ≥ 1 events, fall back to
+                // replay_full to cover all N+1 inserts in one pass.
+                let mut drain_insert_count: usize = 0;
                 // Drain pending events that may now be insertable.
                 loop {
                     let known = self.dag.known_hashes();
@@ -609,6 +616,7 @@ impl Runtime {
                             }) => {
                                 last_emit_index = ti;
                                 last_emit_hash = h;
+                                drain_insert_count += 1;
                             }
                             Err(DagError::Equivocation {
                                 author,
@@ -685,7 +693,17 @@ impl Runtime {
                         }
                     }
                 }
-                self.replay_full()?;
+                // Per plan-B-2.1 spec §3.2: only the single-insert case
+                // (drain loop produced no additional NewlyApplied
+                // inserts) is eligible for the tip-fast-path. The
+                // drain-count gate is the primary correctness check;
+                // try_tip_incremental's prefix + tail comparison is
+                // defense-in-depth.
+                if drain_insert_count == 0 {
+                    self.replay_or_incremental(last_emit_hash)?;
+                } else {
+                    self.replay_full()?;
+                }
                 self.drain_drift_stash().await;
                 // Emit at most one drift per batch — using highest
                 // topo_index seen during the drain (plan-review C-3).
