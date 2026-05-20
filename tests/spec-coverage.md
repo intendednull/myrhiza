@@ -140,6 +140,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/persistence.rs:46
 - crates/kernel/tests/persistence.rs:66
 - crates/kernel/tests/persistence.rs:91
+- crates/network/tests/iroh_skeleton.rs:16
 
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:188
@@ -158,6 +159,12 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## mvp.md §15.1 #4
 - crates/kernel/tests/convergence.rs:203
+
+## networking.md §11.1 — iroh's `NodeID` pubkey
+- crates/network/tests/iroh_skeleton.rs:16
+
+## networking.md §11.1 — the iroh-backed transport's
+- crates/network/tests/iroh_skeleton.rs:62
 
 ## verification.md §22.1
 - crates/kernel/tests/acceptance.rs:48

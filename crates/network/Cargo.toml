@@ -17,8 +17,11 @@ tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 serde.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
+iroh = { workspace = true, optional = true }
+iroh-gossip = { workspace = true, optional = true }
 
 [features]
+default = []
 # Enables `cfg(test)`-only affordances (MemBus::inject_lag, etc.) for
 # cross-crate test code that needs deterministic lag-recovery setup
 # without paying for natural broadcast-channel overflow. See spec §6.3
@@ -26,6 +29,9 @@ bincode.workspace = true
 # tests/ activate the affordances via cfg(test); downstream crates
 # (kernel, test-utils) enable this feature in their dev-deps.
 test-helpers = []
+# Iroh transport implementation of the `Network` trait. Default-off.
+# Pulls in `iroh` + `iroh-gossip`. Per B-4.0 spec §3.1.
+network-iroh = ["dep:iroh", "dep:iroh-gossip"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "rt-multi-thread"] }

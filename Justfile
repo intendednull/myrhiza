@@ -12,6 +12,14 @@ lint:
 test:
     cargo test --workspace --all-targets
 
+# Feature-gated iroh transport tests. Default-off (see
+# crates/network/Cargo.toml `[features]`) because iroh pulls in QUIC +
+# TLS + relay deps the in-process MemNetwork double does not need.
+# Wired into `ci` below; run standalone for fast iteration on the
+# iroh transport during B-4.x work.
+test-iroh:
+    cargo test -p myrhiza-network --features network-iroh --tests
+
 check:
     cargo check --workspace --all-targets
 
@@ -64,4 +72,4 @@ spec-coverage-check: spec-coverage
         exit 1; \
     fi
 
-ci: fmt-check lint test spec-coverage-check
+ci: fmt-check lint test test-iroh spec-coverage-check

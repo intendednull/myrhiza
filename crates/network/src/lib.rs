@@ -21,8 +21,14 @@ use thiserror::Error;
 pub mod memory;
 pub mod subscription;
 
+#[cfg(feature = "network-iroh")]
+pub mod iroh_transport;
+
 pub use memory::{MemBus, MemNetwork};
 pub use subscription::{MemSubscription, Subscription};
+
+#[cfg(feature = "network-iroh")]
+pub use iroh_transport::IrohNetwork;
 
 /// Gossip message envelope — the only thing that crosses the wire.
 ///
@@ -54,6 +60,18 @@ pub enum NetError {
     /// The underlying transport rejected a publish.
     #[error("publish failed: {0}")]
     PublishFailed(String),
+    /// The transport recognizes the call but the impl is not yet
+    /// landed. Carries the method name + the slice in which it is
+    /// planned. Used by skeleton transports (B-4.0) before behavioral
+    /// implementations land. Per B-4.0 spec §3.3.
+    #[error("network transport does not yet implement {method} (planned in {planned_in})")]
+    Unimplemented {
+        /// The name of the unimplemented method (e.g. `"Network::subscribe"`).
+        method: &'static str,
+        /// The plan slice in which this method's impl is scheduled
+        /// (e.g. `"B-4.1"`).
+        planned_in: &'static str,
+    },
 }
 
 /// Errors returned by [`Subscription::recv`].
