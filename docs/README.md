@@ -31,6 +31,7 @@ Prior-art docs carry `[active]` or `[archived]`.
 
 - [Myrhiza master design](specs/2026-05-09-myrhiza-master-design/README.md) — runtime spec: three-tier architecture, four component profiles, event-log replay convergence, capability-mediated host surface, deterministic state-apply. Canonical reference for anything touching runtime semantics. `[draft]`
 - [Plan B-1 — Event DAG + MemNetwork + cross-peer convergence](specs/2026-05-10-plan-b-1-dag-memnet-design.md) — per-author Merkle DAG, HeadsSummary sync, PendingBuffer, TUTTI-shaped drift detection, async Network trait. Realized by [plan B-1](plans/2026-05-10-plan-b-1.md). `[landed]`
+- [Plan B-2.1 — Runtime perf carryovers (Q-1 + Q-7)](specs/2026-05-20-plan-b-2-1-perf-carryovers-design.md) — tip-fast-path replay optimization + `compute_anchor_digest` off-loop via `spawn_blocking`. Closes the two `TODO(B-2)` markers B-2 deferred. `[draft]`
 
 ### Networking & sync
 

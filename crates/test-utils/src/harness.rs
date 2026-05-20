@@ -237,6 +237,53 @@ impl PeerHandle {
             .expect("warnings mutex")
             .clone()
     }
+
+    /// Snapshot the peer's map of events rejected by `state-apply`,
+    /// keyed by event `wire_hash` and valued with the reject reason.
+    ///
+    /// Per plan-B-2.1 spec §3.4 / §5 test 4: surfaces drops recorded by
+    /// either `replay_full` (full-recompute path) or the tip-fast-path's
+    /// Rejected branch (in `try_tip_incremental`).
+    ///
+    /// # Panics
+    /// Panics if the underlying `dropped_at_apply` mutex is poisoned —
+    /// i.e., if the runtime task panicked while holding the lock. In a
+    /// healthy test run this is structurally unreachable.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn dropped_at_apply(&self) -> std::collections::HashMap<EventHash, String> {
+        self.runtime
+            .dropped_at_apply
+            .lock()
+            .expect("dropped_at_apply mutex")
+            .clone()
+    }
+
+    /// Read the current value of the tip-fast-path engagement counter
+    /// on the underlying [`Runtime`]. Per plan-B-2.1 spec §5.
+    ///
+    /// Returns the count of times [`Runtime::try_tip_incremental`]
+    /// engaged (combined `Accepted` + `Rejected` outcomes per spec §3.4).
+    ///
+    /// # Panics
+    /// Panics if the underlying `tip_fast_path_hits` mutex is poisoned —
+    /// i.e., if the runtime task panicked while holding the lock. In a
+    /// healthy test run this is structurally unreachable.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn tip_fast_path_hits(&self) -> usize {
+        *self
+            .runtime
+            .tip_fast_path_hits
+            .lock()
+            .expect("tip_fast_path_hits mutex poisoned")
+    }
+
+    /// Send a shutdown command to the peer's runtime task, allowing
+    /// tests to exit cleanly without leaking the spawned task.
+    pub async fn shutdown(&self) {
+        let _ = self.runtime.author_tx.send(AuthorCommand::Shutdown).await;
+    }
 }
 
 /// Fixture binding a shared [`MemBus`] + topic for in-process,

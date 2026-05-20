@@ -20,7 +20,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:408
 
 ## convergence.md §4
-- crates/kernel/src/state_apply.rs:213
+- crates/kernel/src/state_apply.rs:263
 - crates/kernel/tests/convergence.rs:28
 - crates/types/src/event.rs:177
 
@@ -53,6 +53,18 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
 - crates/kernel/tests/convergence.rs:855
 
+## convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2)
+- crates/kernel/tests/perf_carryovers.rs:309
+
+## convergence.md §4.4 — prefix-mismatch fallback path (B-2.1 §3.4)
+- crates/kernel/tests/perf_carryovers.rs:119
+
+## convergence.md §4.4 — rejected branch of `try_tip_incremental` records drop (B-2.1 §3.4)
+- crates/kernel/tests/perf_carryovers.rs:471
+
+## convergence.md §4.4 — tip-fast-path on single-author chain (B-2.1 §3)
+- crates/kernel/tests/perf_carryovers.rs:63
+
 ## convergence.md §4.4.1
 - crates/kernel/tests/convergence.rs:340
 
@@ -64,6 +76,15 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## convergence.md §4.7
 - crates/kernel/tests/convergence.rs:280
+
+## convergence.md §4.7 — `spawn_blocking` off-loop compute for drift-anchor digest (B-2.1 §4.2)
+- crates/kernel/tests/perf_carryovers.rs:636
+
+## convergence.md §4.7 — multi-author convergence regression guard for tip-fast-path landing (B-2.1 §5 test 5)
+- crates/kernel/tests/perf_carryovers.rs:563
+
+## convergence.md §4.7 — off-loop digest byte-identical to direct in-line compute (B-2.1 §4.2)
+- crates/kernel/tests/perf_carryovers.rs:785
 
 ## convergence.md §4.8
 - crates/kernel/tests/convergence.rs:387
@@ -81,7 +102,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/persistence.rs:91
 
 ## determinism.md §5.1
-- crates/kernel/src/state_apply.rs:213
+- crates/kernel/src/state_apply.rs:263
 - crates/wasmtime-backend/src/gating.rs:255
 - crates/wasmtime-backend/src/gating.rs:394
 
@@ -96,7 +117,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## determinism.md §5.4
 - crates/kernel/src/digest.rs:70
-- crates/kernel/src/state_apply.rs:213
+- crates/kernel/src/state_apply.rs:263
 
 ## distribution.md §10.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:50
@@ -155,6 +176,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## verification.md §22.5
 - crates/kernel/tests/acceptance.rs:276
+
+## verification.md §22.5 — pre-check rejection coverage
+- crates/kernel/tests/perf_carryovers.rs:471
 
 ## verification.md §22.8 — `PeerHandle::await_digest` must NOT
 - crates/kernel/tests/convergence.rs:814
