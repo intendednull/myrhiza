@@ -10,7 +10,8 @@
 use bincode::Options;
 use myrhiza_types::{
     AuthorHead, AuthorPubkey, AuthorSeq, DriftAnchor, DriftMessage, DriftSignedPayload, EventHash,
-    EventRequest, GenesisV1, HeadsRequest, HeadsSummary, PeerPubkey, canonical_bincode,
+    EventRequest, GenesisV1, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary,
+    HeadsSummarySignedPayload, PeerPubkey, canonical_bincode,
 };
 
 fn hex_dump(bytes: &[u8]) -> String {
@@ -133,12 +134,20 @@ fn heads_summary_wire_layout() {
             hash: EventHash::ZERO,
         }],
         kernel_fuel_table_version: 1,
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
     };
     let bytes = canonical_bincode().serialize(&h).expect("encode");
-    // authors: 8 (vec len = 1) + AuthorHead (40 + 8 + 40 = 88)
+    // authors: 8 (vec len = 1) + AuthorHead:
+    //   author: 40 (8 len-prefix + 32 raw, serde_bytes_32_pub)
+    //   seq: 8 (u64 BE)
+    //   hash: 40 (8 len-prefix + 32 raw, serde_bytes_32_pub)
+    //   per-entry: 88; total with vec-len-prefix: 96
     // kernel_fuel_table_version: 4 (u32 BE)
-    // = 8 + 88 + 4 = 100
-    assert_eq!(bytes.len(), 100);
+    // signed_by_peer: 40 (8 len-prefix + 32 raw, serde_bytes_32_pub)
+    // signature: 72 (8 len-prefix + 64 raw, serde_signature_64)
+    // total: 96 + 4 + 40 + 72 = 212
+    assert_eq!(bytes.len(), 212);
 }
 
 #[test]
@@ -155,10 +164,17 @@ fn event_request_wire_layout() {
 
 #[test]
 fn heads_request_wire_layout() {
-    let r = HeadsRequest { requests: vec![] };
+    let r = HeadsRequest {
+        requests: vec![],
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
+    };
     let bytes = canonical_bincode().serialize(&r).expect("encode");
     // requests: 8 (vec len = 0)
-    assert_eq!(bytes.len(), 8);
+    // signed_by_peer: 40
+    // signature: 72
+    // = 8 + 40 + 72 = 120
+    assert_eq!(bytes.len(), 120);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,11 +212,17 @@ fn sample_heads_summary() -> HeadsSummary {
     HeadsSummary {
         authors: vec![],
         kernel_fuel_table_version: 0,
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
     }
 }
 
 fn sample_heads_request() -> HeadsRequest {
-    HeadsRequest { requests: vec![] }
+    HeadsRequest {
+        requests: vec![],
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
+    }
 }
 
 fn sample_drift_message() -> DriftMessage {
@@ -265,5 +287,113 @@ fn gossip_message_drift_variant_tag_is_three_u32_be() {
         &bytes[..4],
         &[0x00, 0x00, 0x00, 0x03],
         "variant tag for GossipMessage::Drift must be 3 (u32 BE)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// B-4.2 Signed-payload wire-freeze tests.
+//
+// Pin the canonical-bincode byte layout of HeadsSummarySignedPayload +
+// HeadsRequestSignedPayload, and pin the prefix-bytes property between
+// each message and its signed-payload counterpart (mirrors the existing
+// drift_message_first_three_fields_match_signed_payload_bytes test at
+// line 91 above).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn heads_summary_signed_payload_field_order_is_authors_fuel_topic() {
+    use myrhiza_types::Topic;
+    let p = HeadsSummarySignedPayload {
+        authors: vec![],
+        kernel_fuel_table_version: 1,
+        topic: Topic::from_bytes([0xAB; 32]),
+    };
+    let bytes = canonical_bincode().serialize(&p).expect("encode");
+    // authors: 8 (vec len = 0)
+    // kernel_fuel_table_version: 4 (u32 BE)
+    // topic: 40 (8 u64-BE len-prefix + 32 raw, serde_bytes_32_pub shape)
+    // total: 8 + 4 + 40 = 52
+    assert_eq!(bytes.len(), 52);
+    // Topic's 32 raw bytes follow its 8-byte length prefix: [20..52].
+    assert_eq!(&bytes[20..52], &[0xAB; 32]);
+}
+
+#[test]
+fn heads_request_signed_payload_field_order_is_requests_topic() {
+    use myrhiza_types::Topic;
+    let p = HeadsRequestSignedPayload {
+        requests: vec![],
+        topic: Topic::from_bytes([0xCD; 32]),
+    };
+    let bytes = canonical_bincode().serialize(&p).expect("encode");
+    // requests: 8 (vec len = 0)
+    // topic: 40
+    // total: 48
+    assert_eq!(bytes.len(), 48);
+    assert_eq!(&bytes[16..48], &[0xCD; 32]);
+}
+
+#[test]
+fn heads_summary_first_n_bytes_match_signed_payload_leading_fields() {
+    use myrhiza_types::Topic;
+    let authors = vec![AuthorHead {
+        author: AuthorPubkey::from_bytes([1; 32]),
+        seq: 5,
+        hash: EventHash::ZERO,
+    }];
+    let kernel_fuel_table_version = 7;
+
+    let signed = HeadsSummarySignedPayload {
+        authors: authors.clone(),
+        kernel_fuel_table_version,
+        topic: Topic::from_bytes([0xAA; 32]),
+    };
+    let signed_bytes = canonical_bincode().serialize(&signed).expect("encode");
+
+    let msg = HeadsSummary {
+        authors,
+        kernel_fuel_table_version,
+        signed_by_peer: PeerPubkey::from_bytes([0xFF; 32]),
+        signature: [0x11; 64],
+    };
+    let msg_bytes = canonical_bincode().serialize(&msg).expect("encode");
+
+    // First (signed_bytes.len() - 40) bytes match — all of signed_bytes
+    // EXCEPT the trailing `topic` field (40 = 8 len-prefix + 32 raw).
+    let common_prefix_len = signed_bytes.len() - 40;
+    assert_eq!(
+        &msg_bytes[..common_prefix_len],
+        &signed_bytes[..common_prefix_len],
+        "HeadsSummary canonical bytes must prefix-match HeadsSummarySignedPayload's leading fields (spec §3.0)"
+    );
+}
+
+#[test]
+fn heads_request_first_n_bytes_match_signed_payload_leading_fields() {
+    use myrhiza_types::Topic;
+    let requests = vec![EventRequest {
+        author: AuthorPubkey::from_bytes([8; 32]),
+        from_seq: 1,
+        to_seq: 10,
+    }];
+
+    let signed = HeadsRequestSignedPayload {
+        requests: requests.clone(),
+        topic: Topic::from_bytes([0xAA; 32]),
+    };
+    let signed_bytes = canonical_bincode().serialize(&signed).expect("encode");
+
+    let msg = HeadsRequest {
+        requests,
+        signed_by_peer: PeerPubkey::from_bytes([0xFF; 32]),
+        signature: [0x11; 64],
+    };
+    let msg_bytes = canonical_bincode().serialize(&msg).expect("encode");
+
+    let common_prefix_len = signed_bytes.len() - 40;
+    assert_eq!(
+        &msg_bytes[..common_prefix_len],
+        &signed_bytes[..common_prefix_len],
+        "HeadsRequest canonical bytes must prefix-match HeadsRequestSignedPayload's leading fields (spec §3.0)"
     );
 }

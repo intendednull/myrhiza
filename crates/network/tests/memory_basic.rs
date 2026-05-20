@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
-use myrhiza_types::{AuthorHead, AuthorPubkey, EventHash, HeadsSummary, Topic};
+use myrhiza_types::{AuthorHead, AuthorPubkey, EventHash, HeadsSummary, PeerPubkey, Topic};
 
 fn topic(seed: u8) -> Topic {
     Topic::from_bytes([seed; 32])
@@ -16,6 +16,8 @@ fn sample_heads_summary() -> HeadsSummary {
             hash: EventHash::ZERO,
         }],
         kernel_fuel_table_version: 1,
+        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+        signature: [0; 64],
     }
 }
 

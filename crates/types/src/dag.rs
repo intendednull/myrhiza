@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AuthorPubkey, EventHash, PeerPubkey};
+use crate::{AuthorPubkey, EventHash, PeerPubkey, Topic};
 
 /// Genesis event payload (the bytes inside `Event::payload` when
 /// `event.seq == 1`).
@@ -192,10 +192,17 @@ pub struct DriftSignedPayload {
     pub digest_format: String,
 }
 
-/// `HeadsSummary` per convergence.md §4.2.
+/// `HeadsSummary` per convergence.md §4.2 + B-4.2 Q-4 attribution.
 ///
 /// Periodic per-author DAG-tip snapshot used by peers to detect when
 /// they are behind on some authors and need to issue [`HeadsRequest`].
+///
+/// **B-4.2 wire shape**: `signed_by_peer` + `signature` carry
+/// peer-level attribution (mirroring [`DriftMessage`]'s pattern at
+/// `dag.rs:150-193`). The signature covers
+/// [`HeadsSummarySignedPayload`] canonical bytes — NOT the message
+/// itself — and includes a `topic` field (signed-only, NOT on the
+/// wire) to prevent cross-topic replay.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HeadsSummary {
     /// Per-author DAG-tip entries. Order is significant for canonical
@@ -205,6 +212,37 @@ pub struct HeadsSummary {
     /// Recipients with a different version know their pre-check
     /// metering may diverge from the authority verdict.
     pub kernel_fuel_table_version: u32,
+    /// Ed25519 pubkey of the peer that emitted this summary. Excluded
+    /// from the signed payload — the signer asserts the
+    /// (`authors`, `kernel_fuel_table_version`, `topic`) triple, not
+    /// the emitter identity. Per B-4.2 spec §3.0.
+    pub signed_by_peer: PeerPubkey,
+    /// Ed25519 signature over the canonical bincode encoding of
+    /// [`HeadsSummarySignedPayload`] constructed from this message's
+    /// first two fields plus the subscription's `topic`. See spec
+    /// §3.0 for the topic-binding rationale.
+    #[serde(with = "crate::serde_helpers::serde_signature_64")]
+    pub signature: [u8; 64],
+}
+
+/// Exact byte target signed by [`HeadsSummary::signature`].
+///
+/// Field order: the first two fields mirror [`HeadsSummary`] (so
+/// emit-side and verify-side construct identical leading bytes);
+/// `topic` is appended last and is integrity-protected-only (NOT
+/// carried on the wire — the recipient reconstructs `topic` from
+/// the subscription context). Per B-4.2 spec §2 "Topic-binding
+/// location" + §3.0.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeadsSummarySignedPayload {
+    /// Mirrors [`HeadsSummary::authors`].
+    pub authors: Vec<AuthorHead>,
+    /// Mirrors [`HeadsSummary::kernel_fuel_table_version`].
+    pub kernel_fuel_table_version: u32,
+    /// Topic this summary applies to. Integrity-protected only —
+    /// NOT on the wire (the recipient reconstructs from subscription
+    /// context). Per spec §3.0.
+    pub topic: Topic,
 }
 
 /// Range request issued by a peer that detected it is behind on some
@@ -220,11 +258,37 @@ pub struct EventRequest {
 }
 
 /// Bundle of [`EventRequest`] values sent in a single wire message.
+///
+/// **B-4.2 wire shape**: `signed_by_peer` + `signature` carry
+/// peer-level attribution. The signature covers
+/// [`HeadsRequestSignedPayload`] canonical bytes including a `topic`
+/// field (signed-only, NOT on the wire) to prevent cross-topic
+/// replay. Per B-4.2 spec §3.0.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HeadsRequest {
     /// Range requests included in this bundle. Recipients SHOULD treat
     /// the bundle as a unit but MAY service entries independently.
     pub requests: Vec<EventRequest>,
+    /// Ed25519 pubkey of the peer that emitted this request. Excluded
+    /// from the signed payload. Per B-4.2 spec §3.0.
+    pub signed_by_peer: PeerPubkey,
+    /// Ed25519 signature over the canonical bincode encoding of
+    /// [`HeadsRequestSignedPayload`].
+    #[serde(with = "crate::serde_helpers::serde_signature_64")]
+    pub signature: [u8; 64],
+}
+
+/// Exact byte target signed by [`HeadsRequest::signature`].
+///
+/// Field order: `requests` mirrors [`HeadsRequest`]; `topic` is
+/// appended last and is integrity-protected-only (NOT on the wire).
+/// Per B-4.2 spec §3.0.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeadsRequestSignedPayload {
+    /// Mirrors [`HeadsRequest::requests`].
+    pub requests: Vec<EventRequest>,
+    /// Topic this request applies to. Integrity-protected only.
+    pub topic: Topic,
 }
 
 #[cfg(test)]
@@ -275,6 +339,8 @@ mod tests_drift_heads {
                 hash: EventHash::ZERO,
             }],
             kernel_fuel_table_version: 1,
+            signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+            signature: [0; 64],
         };
         let bytes = canonical_bincode().serialize(&h).expect("encode");
         let decoded: HeadsSummary = canonical_bincode().deserialize(&bytes).expect("decode");
@@ -290,9 +356,54 @@ mod tests_drift_heads {
                 from_seq: 1,
                 to_seq: 10,
             }],
+            signed_by_peer: PeerPubkey::from_bytes([0; 32]),
+            signature: [0; 64],
         };
         let bytes = canonical_bincode().serialize(&r).expect("encode");
         let decoded: HeadsRequest = canonical_bincode().deserialize(&bytes).expect("decode");
         assert_eq!(decoded.requests.len(), 1);
+    }
+
+    #[test]
+    fn heads_summary_signed_payload_round_trips() {
+        let p = HeadsSummarySignedPayload {
+            authors: vec![AuthorHead {
+                author: AuthorPubkey::from_bytes([7; 32]),
+                seq: 42,
+                hash: EventHash::blake3(b"head"),
+            }],
+            kernel_fuel_table_version: 1,
+            topic: crate::Topic::from_bytes([0xAB; 32]),
+        };
+        let bytes = canonical_bincode().serialize(&p).expect("encode");
+        let decoded: HeadsSummarySignedPayload =
+            canonical_bincode().deserialize(&bytes).expect("decode");
+        assert_eq!(p.authors, decoded.authors);
+        assert_eq!(
+            p.kernel_fuel_table_version,
+            decoded.kernel_fuel_table_version
+        );
+        assert_eq!(p.topic, decoded.topic);
+    }
+
+    #[test]
+    fn heads_request_signed_payload_round_trips() {
+        let p = HeadsRequestSignedPayload {
+            requests: vec![EventRequest {
+                author: AuthorPubkey::from_bytes([8; 32]),
+                from_seq: 1,
+                to_seq: 10,
+            }],
+            topic: crate::Topic::from_bytes([0xCD; 32]),
+        };
+        let bytes = canonical_bincode().serialize(&p).expect("encode");
+        let decoded: HeadsRequestSignedPayload =
+            canonical_bincode().deserialize(&bytes).expect("decode");
+        // EventRequest does not derive PartialEq — compare fields individually.
+        assert_eq!(decoded.requests.len(), p.requests.len());
+        assert_eq!(decoded.requests[0].author, p.requests[0].author);
+        assert_eq!(decoded.requests[0].from_seq, p.requests[0].from_seq);
+        assert_eq!(decoded.requests[0].to_seq, p.requests[0].to_seq);
+        assert_eq!(p.topic, decoded.topic);
     }
 }

@@ -19,7 +19,8 @@ use bincode::Options;
 use myrhiza_network::{GossipMessage, NetError, Network, SubError, Subscription};
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DriftAnchor, DriftMessage, DriftSignedPayload, Event,
-    EventHash, HeadsRequest, HeadsSummary, Hlc, PeerPubkey, Topic, canonical_bincode,
+    EventHash, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload,
+    Hlc, PeerPubkey, Topic, canonical_bincode,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -219,6 +220,19 @@ pub enum PeerWarning {
         /// Free-form description of the anomaly (variant name +
         /// `Debug`-formatted detail for `Err`).
         reason: String,
+    },
+
+    /// Wire-decode succeeded but the cryptographic signature did NOT
+    /// verify against the claimed `signed_by_peer` key. Distinct from
+    /// `DecodeFailed` (parse failure) — this is "parsed cleanly, but
+    /// the attribution claim is fraudulent." Per B-4.2 spec §2.
+    /// Routes to log + drop; the body-consuming handler does NOT run.
+    SignatureInvalid {
+        /// The claimed `signed_by_peer` from the message. Note: this
+        /// is the *claimed* identity — the signature failed to verify
+        /// against this key, so the claim itself may be forged. Useful
+        /// for observability + correlation, not for trust decisions.
+        peer: Option<PeerPubkey>,
     },
 }
 
@@ -546,14 +560,51 @@ impl Runtime {
     /// Called periodically by the heads-summary ticker, and on
     /// subscription-lag recovery to nudge peers into a backfill round.
     async fn publish_heads_summary(&mut self) -> Result<(), RuntimeError> {
-        let summary = HeadsSummary {
-            authors: self.dag.author_heads(),
+        let authors = self.dag.author_heads();
+        let signed_payload = HeadsSummarySignedPayload {
+            authors: authors.clone(),
             kernel_fuel_table_version: self.cfg.kernel_fuel_table_version,
+            topic: self.topic,
+        };
+        let signed_bytes = canonical_bincode()
+            .serialize(&signed_payload)
+            .map_err(|e| RuntimeError::Canonical(format!("HeadsSummarySignedPayload: {e}")))?;
+        let signature = self.peer_key.sign(&signed_bytes);
+        let summary = HeadsSummary {
+            authors,
+            kernel_fuel_table_version: self.cfg.kernel_fuel_table_version,
+            signed_by_peer: self.peer_key.public,
+            signature,
         };
         self.network
             .publish(self.topic, GossipMessage::HeadsSummary(summary))
             .await?;
         Ok(())
+    }
+
+    /// Build a signed [`HeadsRequest`] from a list of [`EventRequest`]s.
+    ///
+    /// Constructs [`HeadsRequestSignedPayload`] with `topic` bound in the
+    /// signed payload (NOT on the wire — prevents cross-topic replay per
+    /// B-4.2 spec §3.0 + §3.1). Pattern mirrors `publish_heads_summary`
+    /// and `maybe_emit_drift` (`runtime.rs:1414-1432`).
+    fn build_signed_heads_request(
+        &self,
+        requests: Vec<myrhiza_types::EventRequest>,
+    ) -> Result<HeadsRequest, RuntimeError> {
+        let signed_payload = HeadsRequestSignedPayload {
+            requests: requests.clone(),
+            topic: self.topic,
+        };
+        let signed_bytes = canonical_bincode()
+            .serialize(&signed_payload)
+            .map_err(|e| RuntimeError::Canonical(format!("HeadsRequestSignedPayload: {e}")))?;
+        let signature = self.peer_key.sign(&signed_bytes);
+        Ok(HeadsRequest {
+            requests,
+            signed_by_peer: self.peer_key.public,
+            signature,
+        })
     }
 }
 
@@ -614,8 +665,17 @@ impl Runtime {
     async fn handle_message(&mut self, msg: GossipMessage) -> Result<(), RuntimeError> {
         match msg {
             GossipMessage::Event(e) => self.handle_event(e).await?,
-            GossipMessage::HeadsSummary(h) => self.handle_heads_summary(h).await?,
-            GossipMessage::HeadsRequest(r) => self.handle_heads_request(r).await?,
+            GossipMessage::HeadsSummary(h) => {
+                if self.verify_heads_summary(&h) {
+                    self.handle_heads_summary(h).await?;
+                }
+                // Else: SignatureInvalid was pushed (or loopback) — drop.
+            }
+            GossipMessage::HeadsRequest(r) => {
+                if self.verify_heads_request(&r) {
+                    self.handle_heads_request(r).await?;
+                }
+            }
             GossipMessage::Drift(d) => self.process_drift_message(d).await,
         }
         Ok(())
@@ -853,12 +913,12 @@ impl Runtime {
         if requests.is_empty() {
             return;
         }
+        let Ok(req) = self.build_signed_heads_request(requests) else {
+            return;
+        };
         let _ = self
             .network
-            .publish(
-                self.topic,
-                GossipMessage::HeadsRequest(HeadsRequest { requests }),
-            )
+            .publish(self.topic, GossipMessage::HeadsRequest(req))
             .await;
     }
 
@@ -921,12 +981,10 @@ impl Runtime {
             .await;
 
         if !requests.is_empty() {
+            let req = self.build_signed_heads_request(requests)?;
             let _ = self
                 .network
-                .publish(
-                    self.topic,
-                    GossipMessage::HeadsRequest(HeadsRequest { requests }),
-                )
+                .publish(self.topic, GossipMessage::HeadsRequest(req))
                 .await;
         }
         Ok(())
@@ -1434,6 +1492,84 @@ impl Runtime {
             .network
             .publish(self.topic, GossipMessage::Drift(msg))
             .await;
+    }
+
+    /// Verify a `HeadsSummary`'s peer signature against its claimed
+    /// `signed_by_peer`. Returns `true` if the message should be
+    /// processed, `false` if it should be dropped.
+    ///
+    /// Follows the structural shape of `process_drift_message`
+    /// (`runtime.rs:1450-1466`) but extends it: the drift handler
+    /// **silently drops** on bad sig; this fn pushes
+    /// `PeerWarning::SignatureInvalid { peer }` at the same decision
+    /// point, then returns `false` so the body-consuming handler skips.
+    /// (Backfilling `PeerWarning::SignatureInvalid` into
+    /// `process_drift_message` is a follow-up — see spec §10.)
+    ///
+    /// Loopback: returns `false` for own-published messages, causing
+    /// the dispatch site to skip the body handler. `MemNetwork` echoes
+    /// own publishes (broadcast channel); `IrohNetwork` does NOT
+    /// (Plumtree). See spec §2 "Loopback filter" row.
+    ///
+    /// Per B-4.2 spec §3.2.
+    fn verify_heads_summary(&self, h: &HeadsSummary) -> bool {
+        // Loopback filter — MemNetwork echoes own publishes through its
+        // tokio broadcast channel; IrohNetwork does not (Plumtree).
+        // Either way, our own HeadsSummary is a self-diff no-op; skip.
+        if h.signed_by_peer == self.peer_key.public {
+            return false;
+        }
+        let signed_payload = HeadsSummarySignedPayload {
+            authors: h.authors.clone(),
+            kernel_fuel_table_version: h.kernel_fuel_table_version,
+            topic: self.topic,
+        };
+        let Ok(bytes) = canonical_bincode().serialize(&signed_payload) else {
+            // Encode of a payload we just constructed cannot fail in
+            // practice; defensive return matches the drift handler shape.
+            return false;
+        };
+        if myrhiza_manifest::verify_signature(h.signed_by_peer.as_bytes(), &bytes, &h.signature)
+            .is_err()
+        {
+            #[allow(clippy::expect_used)]
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::SignatureInvalid {
+                    peer: Some(h.signed_by_peer),
+                });
+            return false;
+        }
+        true
+    }
+
+    /// Verify a `HeadsRequest`'s peer signature. See
+    /// [`Self::verify_heads_summary`] for the design rationale.
+    fn verify_heads_request(&self, r: &HeadsRequest) -> bool {
+        if r.signed_by_peer == self.peer_key.public {
+            return false;
+        }
+        let signed_payload = HeadsRequestSignedPayload {
+            requests: r.requests.clone(),
+            topic: self.topic,
+        };
+        let Ok(bytes) = canonical_bincode().serialize(&signed_payload) else {
+            return false;
+        };
+        if myrhiza_manifest::verify_signature(r.signed_by_peer.as_bytes(), &bytes, &r.signature)
+            .is_err()
+        {
+            #[allow(clippy::expect_used)]
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::SignatureInvalid {
+                    peer: Some(r.signed_by_peer),
+                });
+            return false;
+        }
+        true
     }
 
     /// Process an incoming drift message per spec §8.4: loopback
