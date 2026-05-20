@@ -68,6 +68,18 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.8
 - crates/kernel/tests/convergence.rs:387
 
+## crypto.md §9.1
+- crates/kernel/tests/persistence.rs:129
+- crates/kernel/tests/persistence.rs:161
+- crates/kernel/tests/persistence.rs:191
+- crates/kernel/tests/persistence.rs:237
+- crates/kernel/tests/persistence.rs:268
+- crates/kernel/tests/persistence.rs:32
+- crates/kernel/tests/persistence.rs:52
+- crates/kernel/tests/persistence.rs:77
+- crates/kernel/tests/persistence.rs:9
+- crates/kernel/tests/persistence.rs:94
+
 ## determinism.md §5.1
 - crates/kernel/src/state_apply.rs:213
 - crates/wasmtime-backend/src/gating.rs:255
@@ -95,6 +107,18 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## distribution.md §10.5
 - crates/kernel/tests/acceptance.rs:408
 - crates/kernel/tests/acceptance.rs:48
+
+## identity.md §6
+- crates/kernel/tests/persistence.rs:129
+- crates/kernel/tests/persistence.rs:161
+- crates/kernel/tests/persistence.rs:191
+- crates/kernel/tests/persistence.rs:237
+- crates/kernel/tests/persistence.rs:268
+- crates/kernel/tests/persistence.rs:32
+- crates/kernel/tests/persistence.rs:52
+- crates/kernel/tests/persistence.rs:77
+- crates/kernel/tests/persistence.rs:9
+- crates/kernel/tests/persistence.rs:94
 
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:188
