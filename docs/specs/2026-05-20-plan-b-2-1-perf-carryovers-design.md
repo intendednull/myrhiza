@@ -67,11 +67,42 @@ fn replay_or_incremental(
 ) -> Result<(), RuntimeError> { /* ... */ }
 ```
 
-Call sites in `Runtime`:
+**Call-site eligibility — single-insert vs multi-insert paths:**
 
-- `handle_event` (event arrived via gossip) — change `self.replay_full()` to `self.replay_or_incremental(hash)` (the `Inserted::NewlyApplied { hash, .. }` arm already has the hash).
-- `author` (locally-authored event) — same call-site change.
-- `drain_drift_stash` and other internal flows that currently call `replay_full` directly: audit each. If they're called after batch arrivals (multiple inserts), they should call `replay_full` (the conservative path) until batching lands.
+The fast path is only sound when the caller knows **exactly one** event was inserted since the last replay. Two distinct paths in `Runtime` exist:
+
+- **`Runtime::author`** (`runtime.rs:1098`) — inserts exactly one event per call, then replays. Single-insert by construction. Direct call: `self.replay_or_incremental(hash)`.
+- **`Runtime::handle_event`** (`runtime.rs:562`) — inserts the gossip-received event, then enters a drain loop (`runtime.rs:568-659`) that may insert N additional events as pending deps become satisfied. After the drain, ONE `replay_*` call covers all N+1 inserts. Multi-insert when N > 0; single-insert when N == 0.
+
+The `handle_event` path must **count drain inserts** to know which to call:
+
+```rust
+async fn handle_event(&mut self, event: Event) -> Result<(), RuntimeError> {
+    match self.dag.insert(event.clone()) {
+        Ok(Inserted::NewlyApplied { topo_index, hash }) => {
+            let mut last_emit_index = topo_index;
+            let mut last_emit_hash = hash;
+            let mut drain_insert_count: usize = 0;   // NEW
+            // ... existing drain loop, with the NewlyApplied arm
+            // incrementing `drain_insert_count += 1` at the same
+            // place it updates last_emit_index/hash ...
+
+            // After the drain loop:
+            if drain_insert_count == 0 {
+                self.replay_or_incremental(last_emit_hash)?;
+            } else {
+                self.replay_full()?;
+            }
+            // ... rest unchanged ...
+        }
+        // ... other arms unchanged ...
+    }
+}
+```
+
+This makes the fast-path's eligibility check redundantly verified: the dispatcher's `new_order.len() == prior_len + 1` check will already reject a multi-event delta (which is why the system stays correct even if a future refactor accidentally calls `replay_or_incremental` from a multi-insert path), but the explicit drain count is the **primary** correctness gate and the redundant check is defense-in-depth.
+
+**Other internal `replay_full` call sites audited:** `drain_drift_stash` does NOT currently call `replay_full` (it only handles drift-message stashing, not state recomputation — verify in `runtime.rs:1163` onwards). If any future code path needs replay after batch arrivals, it should call `replay_full` directly, never `replay_or_incremental`.
 
 ### 3.3 `replay_full` signature change
 
@@ -138,14 +169,24 @@ fn try_tip_incremental(
         ApplyOutcome::Rejected(reason) => {
             // The newly-inserted event was rejected by state-apply.
             // Per spec §4.4 / §14 edge-case 8: event stays in DAG;
-            // state ignores it. Record the drop and update topo cache
-            // anyway (the DAG holds the event, the state doesn't).
+            // state ignores it. Record the drop and update topo cache.
+            // `last_topo_order` reflects the DAG's topo_sort output
+            // (which includes the rejected event); `self.state` reflects
+            // apply outcomes (which excludes it). The two structures can
+            // legitimately be one-event-out-of-sync; the next replay
+            // (full or incremental-success) re-aligns them.
             self.last_topo_order = new_order;
             #[allow(clippy::expect_used)]
             self.dropped_at_apply
                 .lock()
                 .expect("dropped_at_apply mutex poisoned")
                 .insert(inserted_hash, reason);
+            // Match `replay_full`'s digest_watch semantics: publish even
+            // when state is unchanged. `replay_full` always publishes
+            // post-loop; subscribers MAY see duplicates either way. Not
+            // suppressing here preserves the contract that "every
+            // replay_or_incremental call results in at least one
+            // digest_watch send."
             let _ = self.digest_watch_tx.send(self.state.clone());
             Ok(true)
         }
@@ -266,6 +307,14 @@ fn compute_subset_digest(
 }
 ```
 
+### 4.2.1 Error vs panic semantics in the spawn_blocking body
+
+`compute_subset_digest` (§4.2 free fn) handles state-apply *failures* via `.ok()?` — any `Err` from `handle.apply` or `handle.state_digest` short-circuits the function returning `None`. The handle is still moved back through the task's return tuple, so the move-out/move-in roundtrip completes normally and `self.handle` is restored. The caller sees `None` and skips the drift compare (matching current behavior — `compute_anchor_digest` already returns `Option<[u8;32]>` for the same reason).
+
+**True panics inside the `spawn_blocking` body** (e.g. mutex poisoning, an `unreachable!()` macro firing) propagate via `JoinError` from `.await`. In that case `result` is `Err(JoinError)`, the handle is **NOT** returned, and `self.handle` is left as a tombstone. Subsequent runtime activity touching `self.handle` would panic via the tombstone's `unreachable!()`. §10 (Edge cases) documents this as a v1 gap; the recovery path is "halt the runtime" rather than "rebuild the handle" — building a fresh handle requires the backend + manifest pipeline that lives in `InstallFlow`, well outside the runtime's surface.
+
+Acceptable for v1 because: (a) state-apply backend errors are routed through `Err` (covered by `.ok()?`); (b) the only paths that can panic inside `spawn_blocking` are kernel-internal invariants (mutex poison, unreachable hit, allocator OOM); (c) any of those panics indicates a deeper bug that warrants a runtime halt anyway.
+
 ### 4.3 `StateApplyHandle::tombstone()` — placeholder during move
 
 `std::mem::replace` requires a value to swap in. We can't construct a `StateApplyHandle` without an underlying `ComponentInstance`, but the runtime task is the only consumer — the tombstone is never observed externally. Add:
@@ -307,14 +356,15 @@ Within the same `Runtime` task, sequential ordering is preserved: anchor-digest 
 
 New tests in `crates/kernel/tests/perf_carryovers.rs` (or extend `convergence.rs` — choice up to plan):
 
-| # | Test | Covers |
-|---|---|---|
-| 1 | `tip_fast_path_taken_for_single_author_extension` | Single peer authors 100 events; assert via a (temporary, test-only) counter that `replay_or_incremental` took the fast path ≥ 99 times. Counter is wrapped in `#[cfg(test)]` and removed for production. |
-| 2 | `replay_fallback_when_topo_reorders` | Two peers; peer A authors A1; peer B authors B1 with lex-smaller hash than A1; peer A receives B1; assert fast path was rejected (counter remained at 1 from A1's self-authoring). |
-| 3 | `incremental_apply_reject_records_drop` | Single peer, event that state-apply rejects; assert event lands in `dropped_at_apply` via incremental path; assert `digest_watch` published. |
-| 4 | `convergence_unchanged_after_tip_fast_path_landing` | Re-run B-1's `convergence.rs::two_peers_two_authors_converge_to_identical_digest`; must still pass. Regression guarantee. |
-| 5 | `compute_anchor_digest_off_loop_does_not_block_membus_publish` | Two peers; peer A primed with a 200-event DAG; peer B sends a `DriftMessage` whose anchor is uncovered, then immediately publishes 5 new events. Assert peer A receives at least one of the 5 new events into its pending/dag during the anchor-digest compute (i.e., MemBus publish wasn't gated on the compute). |
-| 6 | `anchor_digest_correctness_after_off_loop_move` | Direct call: peer A computes an anchor digest via the new off-loop path; peer B computes the same anchor digest via the old in-line path. Bytes must match. |
+| # | Test | Tokio flavor | Covers |
+|---|---|---|---|
+| 1 | `tip_fast_path_taken_for_single_author_via_author_path` | default | Drive 100 events through `Runtime::author` (not `handle_event`) to guarantee single-insert per call. Assert via a `#[cfg(test)]`-gated counter on `Runtime` that the fast path took ≥ 99 times (first call has empty prior `last_topo_order`; subsequent 99 are tip-extensions). Author path is the right driver because B-2.1's drain-count guard at `handle_event` would only allow fast-path when drain_count == 0 — true sometimes via `handle_event` but never guaranteed for gossip arrival ordering. |
+| 2 | `replay_fallback_when_topo_reorders` | default | Two peers; peer A authors A1; peer B authors B1 with lex-smaller hash than A1; peer A receives B1; assert fast path was rejected (counter remained at 1 from A1's self-authoring). |
+| 3 | `replay_fallback_when_drain_loop_inserts_multiple` | default | Pre-load peer A's pending buffer with two events waiting on a missing dep. Deliver the dep. The `handle_event` drain loop inserts 3 events (the dep + the 2 drained). Assert: `drain_insert_count == 2` path was taken; fast-path counter did NOT increment; final state matches a freshly-replayed peer B. |
+| 4 | `incremental_apply_reject_records_drop` | default | Single peer (author path), event that state-apply rejects; assert event lands in `dropped_at_apply` via incremental path; assert `digest_watch` published. |
+| 5 | `convergence_unchanged_after_tip_fast_path_landing` | default | Re-run B-1's `convergence.rs::two_peers_two_authors_converge_to_identical_digest`; must still pass. Regression guarantee. |
+| 6 | `compute_anchor_digest_off_loop_does_not_block_membus_publish` | **`multi_thread`, worker_threads = 2** | Two peers; peer A primed with a 200-event DAG; peer B sends a `DriftMessage` whose anchor is uncovered, then immediately publishes 5 new events. Assert peer A receives at least one of the 5 new events into its pending/dag during the anchor-digest compute. Requires multi-thread runtime so spawn_blocking has a separate worker. Use `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`. |
+| 7 | `anchor_digest_correctness_after_off_loop_move` | default | Direct call: peer A computes an anchor digest via the new off-loop path; peer B computes the same anchor digest via a fresh-handle in-line path. Bytes must match. |
 
 Existing B-1 convergence tests (`crates/kernel/tests/convergence.rs`) must continue to pass unchanged — this is the regression guarantee.
 
@@ -327,8 +377,10 @@ Spec-coverage annotations:
 ## 6. Cross-references to backend/state-apply contracts
 
 - `crates/backend/src/lib.rs:84` — `pub trait ComponentInstance: Send + 'static`. The `Send` bound is **load-bearing** for B-2.1: `spawn_blocking` requires the value moved in to be `Send + 'static`. Documenting here so a future change tightening or loosening the trait bound flags B-2.1's spawn_blocking as a consumer.
-- `crates/kernel/src/state_apply.rs::StateApplyHandle` — currently not `Clone`. B-2.1 does NOT change that. If a future plan wants concurrent compute (multiple anchor digests in parallel), it will need either (a) a `Backend::spawn_parallel_instance(&self) -> Result<StateApplyHandle>` API, or (b) a `Clone`-able variant. Out of scope.
-- `crates/kernel/src/runtime.rs:1124-1161` — current `replay_full` body. B-2.1 keeps this as the fallback; adds the cache update at the end.
+- `crates/kernel/src/state_apply.rs:82-153` — `StateApplyHandle` struct + impl. Currently not `Clone`. B-2.1 does NOT change that. B-2.1 adds `StateApplyHandle::tombstone()` (doc-hidden) at the bottom of the impl block. If a future plan wants concurrent compute (multiple anchor digests in parallel), it will need either (a) a `Backend::spawn_parallel_instance(&self) -> Result<StateApplyHandle>` API, or (b) a `Clone`-able variant. Out of scope.
+- `crates/kernel/src/runtime.rs:1124-1161` — current `replay_full` body. B-2.1 keeps this as the fallback; adds the `last_topo_order` cache update at the end.
+- `crates/kernel/src/runtime.rs:562-660` — current `handle_event` body. B-2.1 adds the `drain_insert_count` counter and the dispatcher choice at line 660.
+- `Event` (in `crates/types/src/event.rs`) is `Send + 'static` (owns its fields, no borrowed lifetimes). If a future refactor introduces a borrowed `Event<'a>`, B-2.1's `spawn_blocking` body (which clones the subset to `Vec<Event>`) will not compile — flagging the invariant for future readers.
 
 ## 7. Surface change summary
 
@@ -389,7 +441,7 @@ Decisions in §2 were grounded in:
 - **Equivocation insert that re-runs topo from scratch**: `dag.insert` returns `Inserted::NewlyApplied` whose `topo_index` reflects the new position. The tip-fast-path's prefix check catches this — if the new topo's prefix doesn't match `last_topo_order`, it falls back to `replay_full`. No special handling.
 - **DAG with single author + monotonic seq**: topo order is strictly seq-order. Every new event is tip-extension; fast path engages 100% of the time. The expected common case.
 - **`Inserted::Pending` arriving and being drained by later event**: drain happens before `handle_event` returns; the runtime caller still sees just one `Inserted::NewlyApplied` if the drain successfully advances state. The tip-fast-path eligibility check would fail (multiple new tip entries) — falls back to `replay_full`. Safe.
-- **`spawn_blocking` task panic**: the `.await.ok()?` on the result swallows the panic. The handle is GONE — we never restore `self.handle` from a tombstone. Next call panics via `unreachable!()`. Fix: explicit `.await` match arm logs the panic, restores a fresh handle if possible, OR halts the runtime. Document this as a known gap; v1 acceptable because spawn_blocking task bodies are deterministic.
+- **`spawn_blocking` task panic** (per §4.2.1): the `.await.ok()?` on the result swallows the panic. The handle is GONE — we never restore `self.handle` from a tombstone. Next call panics via `unreachable!()`. Recovery path is "halt the runtime" (no in-runtime backend rebuild surface exists). v1 acceptable because (a) state-apply errors route through `Err` not panic, covered by `.ok()?` inside the task body; (b) the only panic sources inside `spawn_blocking` are kernel-internal invariants (mutex poison, unreachable, allocator OOM) — any of which warrants runtime halt regardless.
 - **`compute_anchor_digest` called concurrently with author**: `handle_drift` and `author` are both `&mut self` on `Runtime`. They serialize naturally through the single-task ownership of `Runtime`. No new race.
 
 ## 11. Future work — explicit deferrals
