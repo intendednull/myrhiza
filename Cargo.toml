@@ -51,6 +51,11 @@ tokio = { version = "1", default-features = false, features = ["sync", "rt", "ma
 # Wasmtime LTS — kernel-major bump per browser-native.md §14.2.
 wasmtime = { version = "=36.0.9", default-features = false, features = ["component-model", "cranelift", "runtime"] }
 wasmtime-wasi = { version = "=36.0.9", default-features = false }
+# Iroh transport substrate. Pinned tight per
+# prior-art/iroh/lessons.md §Avoid row 1 (iroh pre-1.0 API churn —
+# "every minor is breaking"). Bump deliberately.
+iroh = "=1.0.0-rc.0"
+iroh-gossip = "=0.99.0"
 # Test/dev only.
 anyhow = "1"
 hex-literal = "0.4"
