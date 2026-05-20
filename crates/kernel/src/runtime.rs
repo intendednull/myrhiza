@@ -265,6 +265,13 @@ pub struct RuntimeHandle {
 
     /// `Some(reason)` once the runtime task halts; `None` while alive.
     pub halt_watch: watch::Receiver<Option<String>>,
+
+    /// Test-only counter of tip-fast-path engagements in
+    /// [`Runtime::try_tip_incremental`]. Acceptance tests read this to
+    /// verify the fast path is taken when expected and skipped when not
+    /// (e.g. drain-loop multi-insert, re-topo). Per plan-B-2.1 spec §5.
+    #[cfg(test)]
+    pub tip_fast_path_hits: Arc<Mutex<usize>>,
 }
 
 /// Per-topic runtime — owns the event DAG, pending buffer, and
@@ -298,6 +305,12 @@ pub struct Runtime {
     handle: StateApplyHandle,
     /// Latest replayed state bytes.
     state: Vec<u8>,
+    /// Cached topo order corresponding to `self.state`. Per
+    /// plan-B-2.1 spec §3.1. Used by [`Self::try_tip_incremental`]
+    /// to detect tip-fast-path eligibility — when a new topo extends
+    /// this by exactly one tail element, the new event can be applied
+    /// incrementally instead of replaying from scratch.
+    last_topo_order: Vec<EventHash>,
     /// Peer identity (signs drift messages).
     peer_key: PeerKeypair,
     /// Author identity (signs authored events). `None` for read-only
@@ -336,6 +349,14 @@ pub struct Runtime {
     /// HLC logical-component counter (Tasks 18-19 use; declared here so
     /// the field set is stable across the scaffold commit).
     hlc_logical_counter: u32,
+    /// Test-only instrumentation: counts engagements of the tip-fast-path
+    /// in [`Self::try_tip_incremental`] (both `Accepted` and `Rejected`
+    /// outcomes). Used by B-2.1 acceptance tests to assert the fast path
+    /// is being taken when expected and skipped when not. Shared with
+    /// [`RuntimeHandle::tip_fast_path_hits`] so the test thread can read
+    /// the counter. Per plan-B-2.1 spec §5 test 1.
+    #[cfg(test)]
+    tip_fast_path_hits: Arc<Mutex<usize>>,
 }
 
 impl Runtime {
@@ -374,6 +395,8 @@ impl Runtime {
         let equivocation_log = Arc::new(Mutex::new(Vec::new()));
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
         let dropped_at_apply = Arc::new(Mutex::new(HashMap::new()));
+        #[cfg(test)]
+        let tip_fast_path_hits = Arc::new(Mutex::new(0_usize));
         let (digest_watch_tx, digest_watch) = watch::channel(Vec::<u8>::new());
         let (halt_watch_tx, halt_watch) = watch::channel(None::<String>);
 
@@ -394,6 +417,7 @@ impl Runtime {
             pending,
             handle,
             state: Vec::new(),
+            last_topo_order: Vec::new(),
             peer_key,
             author_key,
             cfg,
@@ -407,6 +431,8 @@ impl Runtime {
             digest_watch_tx,
             halt_watch_tx,
             hlc_logical_counter: 0,
+            #[cfg(test)]
+            tip_fast_path_hits: tip_fast_path_hits.clone(),
         };
 
         tokio::spawn(async move {
@@ -427,6 +453,8 @@ impl Runtime {
             dropped_at_apply,
             digest_watch,
             halt_watch,
+            #[cfg(test)]
+            tip_fast_path_hits,
         })
     }
 
@@ -1094,10 +1122,14 @@ impl Runtime {
             return Err(RuntimeError::PreCheckRejected(reason));
         }
 
-        // Self-insert + replay + drift drain + maybe emit.
+        // Self-insert + replay + drift drain + maybe emit. The author
+        // path is single-insert by construction (one event per call),
+        // so the tip-fast-path is always eligible to attempt — gated
+        // by [`Self::try_tip_incremental`]'s prefix + tail checks. Per
+        // plan-B-2.1 spec §3.2.
         let inserted = self.dag.insert(event.clone())?;
         if let Inserted::NewlyApplied { topo_index, hash } = inserted {
-            self.replay_full()?;
+            self.replay_or_incremental(hash)?;
             self.drain_drift_stash().await;
             self.maybe_emit_drift(topo_index, hash).await;
         }
@@ -1109,18 +1141,118 @@ impl Runtime {
         Ok(event.wire_hash())
     }
 
-    /// Re-run state-apply over the full DAG topological order and
-    /// publish the resulting state on the digest watch channel.
+    /// Fast-path-then-fallback wrapper for [`Self::replay_full`]. Per
+    /// plan-B-2.1 spec §3.2.
+    ///
+    /// Caller must guarantee that `inserted_hash` corresponds to a
+    /// **single-insert** since the last replay. Multi-insert paths
+    /// (drain loops, batch arrivals) must call [`Self::replay_full`]
+    /// directly — the eligibility check inside
+    /// [`Self::try_tip_incremental`] catches accidental misuse via the
+    /// `new_order.len() == prior_len + 1` guard, but the caller-side
+    /// guarantee is the primary correctness gate (defense-in-depth).
     ///
     /// # Errors
     /// Propagates canonical-encoding errors or [`ApplyError`] from the
     /// underlying state-apply handle.
-    //
-    // TODO(B-2): `replay_full` is O(N) per call and is invoked on every
-    // accepted insert via [`Self::handle_event`]. For DAGs > ~10k events
-    // this O(N) replay dominates the select loop and starves incoming
-    // gossip. Plan B-2 owns replacing this with an incremental apply
-    // driven by topo_index deltas (carry-over from review-finding Q-1).
+    fn replay_or_incremental(&mut self, inserted_hash: EventHash) -> Result<(), RuntimeError> {
+        if self.try_tip_incremental(inserted_hash)? {
+            return Ok(());
+        }
+        self.replay_full()
+    }
+
+    /// Attempt incremental tip-extension apply. Returns `Ok(true)` if
+    /// the fast path was taken (state, `digest_watch`, and topo cache
+    /// updated); `Ok(false)` to signal the caller should fall back to
+    /// [`Self::replay_full`]. Errors propagate.
+    ///
+    /// Per plan-B-2.1 spec §3.4. Eligibility:
+    /// - The new topo order extends `last_topo_order` by exactly one.
+    /// - The prefix of the new order matches the cached order.
+    /// - The new tail element matches `inserted_hash`.
+    ///
+    /// On `Accepted`: state, topo cache, and `digest_watch` are updated.
+    /// On `Rejected`: the event stays in the DAG (per spec §4.4 /
+    /// §14 edge-case 8), `dropped_at_apply` records the reason,
+    /// `last_topo_order` is refreshed (DAG-sourced; legitimately
+    /// differs from state by the one rejected event), and
+    /// `digest_watch` publishes unchanged state to match
+    /// `replay_full`'s "always publish post-loop" contract.
+    ///
+    /// # Errors
+    /// Propagates canonical-encoding errors or [`ApplyError`] from the
+    /// underlying state-apply handle.
+    fn try_tip_incremental(&mut self, inserted_hash: EventHash) -> Result<bool, RuntimeError> {
+        let new_order = self.dag.topo_sort();
+        if new_order.len() != self.last_topo_order.len() + 1 {
+            return Ok(false);
+        }
+        if new_order[..self.last_topo_order.len()] != self.last_topo_order[..] {
+            return Ok(false);
+        }
+        let Some(&last) = new_order.last() else {
+            return Ok(false);
+        };
+        if last != inserted_hash {
+            return Ok(false);
+        }
+
+        let Some(event) = self.dag.get(&inserted_hash) else {
+            // `Inserted::NewlyApplied` should guarantee presence in
+            // the DAG. Belt-and-suspenders fallback.
+            return Ok(false);
+        };
+        let bytes = canonical_bincode().serialize(event)?;
+        let result = self.handle.apply(&self.state, &bytes)?;
+        #[cfg(test)]
+        {
+            #[allow(clippy::expect_used)]
+            let mut guard = self
+                .tip_fast_path_hits
+                .lock()
+                .expect("tip_fast_path_hits mutex poisoned");
+            *guard += 1;
+        }
+        match result.outcome {
+            ApplyOutcome::Accepted => {
+                self.state = result.new_state;
+                self.last_topo_order = new_order;
+                let _ = self.digest_watch_tx.send(self.state.clone());
+                Ok(true)
+            }
+            ApplyOutcome::Rejected(reason) => {
+                // Per spec §4.4 / §14 edge-case 8 + B-2.1 spec §3.4 +
+                // §3.5: event stays in DAG; state ignores it. Topo
+                // cache reflects DAG; can legitimately differ from
+                // state by this one rejected event. The next replay
+                // (full or incremental-success) re-aligns them.
+                self.last_topo_order = new_order;
+                #[allow(clippy::expect_used)]
+                self.dropped_at_apply
+                    .lock()
+                    .expect("dropped_at_apply mutex poisoned")
+                    .insert(inserted_hash, reason);
+                // Match replay_full's digest_watch semantics: publish
+                // even when state is unchanged (B-2.1 spec §3.5).
+                let _ = self.digest_watch_tx.send(self.state.clone());
+                Ok(true)
+            }
+        }
+    }
+
+    /// Re-run state-apply over the full DAG topological order and
+    /// publish the resulting state on the digest watch channel.
+    ///
+    /// Authoritative full-recompute path. Used as the fallback for
+    /// [`Self::replay_or_incremental`] when the tip-fast-path is
+    /// ineligible (re-topo, multi-insert drain loops, etc.). Always
+    /// refreshes [`Self::last_topo_order`] to keep the tip-fast-path
+    /// eligibility cache aligned with `self.state`.
+    ///
+    /// # Errors
+    /// Propagates canonical-encoding errors or [`ApplyError`] from the
+    /// underlying state-apply handle.
     fn replay_full(&mut self) -> Result<(), RuntimeError> {
         let order = self.dag.topo_sort();
         let mut state = Vec::new();
@@ -1132,19 +1264,20 @@ impl Runtime {
         // sticky — future replays with a different topo ordering may
         // accept the same event.
         let mut drops: HashMap<EventHash, String> = HashMap::new();
-        for hash in order {
-            if let Some(event) = self.dag.get(&hash) {
+        for hash in &order {
+            if let Some(event) = self.dag.get(hash) {
                 let bytes = canonical_bincode().serialize(event)?;
                 let r = self.handle.apply(&state, &bytes)?;
                 match r.outcome {
                     ApplyOutcome::Accepted => state = r.new_state,
                     ApplyOutcome::Rejected(reason) => {
-                        drops.insert(hash, reason);
+                        drops.insert(*hash, reason);
                     }
                 }
             }
         }
         state.clone_into(&mut self.state);
+        self.last_topo_order = order;
         // Atomic publish of the new drops snapshot. Mutex poisoning
         // would mean another task panicked while holding the map —
         // unreachable because the runtime task is the only writer.
