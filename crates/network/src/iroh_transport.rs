@@ -1,15 +1,11 @@
 //! Iroh transport implementation of the [`Network`] trait.
 //!
-//! B-4.1 STATE (this commit, Task 4 of plan B-4.1): `subscribe` +
-//! [`IrohSubscription::recv`] are real iroh-gossip 0.99.0-backed
-//! implementations. `publish` and `unsubscribe` still return
-//! [`crate::NetError::Unimplemented`]:
-//! - `publish` is landed in the next commit (Task 5 of this plan).
-//! - `unsubscribe` is deferred to B-4.2 — drop semantics on
-//!   [`IrohSubscription`] cover practical "stop receiving".
-//!
-//! Q-4 sender attribution + real cross-process tests are B-4.2 /
-//! B-4.3 scope.
+//! B-4.1 STATE: `subscribe` + `publish` are real iroh-gossip
+//! 0.99.0-backed implementations. `unsubscribe` still returns
+//! [`crate::NetError::Unimplemented`] (planned in B-4.2 — drop
+//! semantics on [`IrohSubscription`] cover practical "stop
+//! receiving"). Q-4 sender attribution + real cross-process tests
+//! are B-4.2 / B-4.3 scope.
 //!
 //! ## Why phased
 //!
@@ -44,6 +40,7 @@
 //!    conversion moves into `myrhiza-types` behind a feature gate.
 
 use bincode::Options;
+use bytes::Bytes;
 use futures_lite::StreamExt;
 use iroh_gossip::api::{Event, GossipTopic};
 use myrhiza_types::canonical_bincode;
@@ -119,17 +116,41 @@ impl Network for IrohNetwork {
         Ok(IrohSubscription::new(gossip_topic))
     }
 
-    async fn publish(&self, _topic: Topic, _msg: GossipMessage) -> Result<(), NetError> {
-        Err(NetError::Unimplemented {
-            method: "Network::publish",
-            planned_in: "B-4.1",
-        })
+    async fn publish(&self, topic: Topic, msg: GossipMessage) -> Result<(), NetError> {
+        let topic_id = iroh_topic_id_from_topic(topic);
+        let bytes = canonical_bincode()
+            .serialize(&msg)
+            .map_err(|e| NetError::PublishFailed(format!("bincode encode: {e}")))?;
+        // TRADE-OFF (per spec §3.2): each publish re-subscribes + splits
+        // the GossipTopic. Iroh-gossip's actor architecture spawns a
+        // fresh topic_subscriber_loop task per subscribe call
+        // (`gossip/src/net.rs:600-643`); per-publish this is task-spawn
+        // churn. The GossipTopic departs the swarm when its sender +
+        // receiver drop, so cost is bounded per call. B-4.2/B-4.3 may
+        // cache a per-topic GossipSender — flagged in spec §11.
+        let gossip_topic = self
+            .gossip
+            .subscribe(topic_id, vec![])
+            .await
+            .map_err(|e| NetError::PublishFailed(format!("iroh-gossip subscribe: {e}")))?;
+        let (sender, _receiver) = gossip_topic.split();
+        sender
+            .broadcast(Bytes::from(bytes))
+            .await
+            .map_err(|e| NetError::PublishFailed(format!("iroh-gossip broadcast: {e}")))?;
+        Ok(())
     }
 
     async fn unsubscribe(&self, _topic: Topic) -> Result<(), NetError> {
+        // GossipTopic self-cleans when all senders + receivers drop
+        // (iroh-gossip-0.99.0 gossip/src/api.rs:207-210 — implicit
+        // cleanup via the dropped mpsc sender inside the actor; no
+        // explicit Drop impl). The IrohSubscription's own lifetime
+        // already covers the practical "stop receiving" case.
+        // Explicit swarm-departure signaling is deferred to B-4.2.
         Err(NetError::Unimplemented {
             method: "Network::unsubscribe",
-            planned_in: "B-4.1",
+            planned_in: "B-4.2",
         })
     }
 }
