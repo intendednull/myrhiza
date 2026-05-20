@@ -69,16 +69,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:387
 
 ## crypto.md §9.1
-- crates/kernel/tests/persistence.rs:129
-- crates/kernel/tests/persistence.rs:161
-- crates/kernel/tests/persistence.rs:191
-- crates/kernel/tests/persistence.rs:237
-- crates/kernel/tests/persistence.rs:268
-- crates/kernel/tests/persistence.rs:32
-- crates/kernel/tests/persistence.rs:52
-- crates/kernel/tests/persistence.rs:77
-- crates/kernel/tests/persistence.rs:9
-- crates/kernel/tests/persistence.rs:94
+- crates/kernel/tests/persistence.rs:108
+- crates/kernel/tests/persistence.rs:143
+- crates/kernel/tests/persistence.rs:175
+- crates/kernel/tests/persistence.rs:205
+- crates/kernel/tests/persistence.rs:23
+- crates/kernel/tests/persistence.rs:251
+- crates/kernel/tests/persistence.rs:282
+- crates/kernel/tests/persistence.rs:46
+- crates/kernel/tests/persistence.rs:66
+- crates/kernel/tests/persistence.rs:91
 
 ## determinism.md §5.1
 - crates/kernel/src/state_apply.rs:213
@@ -109,16 +109,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:48
 
 ## identity.md §6
-- crates/kernel/tests/persistence.rs:129
-- crates/kernel/tests/persistence.rs:161
-- crates/kernel/tests/persistence.rs:191
-- crates/kernel/tests/persistence.rs:237
-- crates/kernel/tests/persistence.rs:268
-- crates/kernel/tests/persistence.rs:32
-- crates/kernel/tests/persistence.rs:52
-- crates/kernel/tests/persistence.rs:77
-- crates/kernel/tests/persistence.rs:9
-- crates/kernel/tests/persistence.rs:94
+- crates/kernel/tests/persistence.rs:108
+- crates/kernel/tests/persistence.rs:143
+- crates/kernel/tests/persistence.rs:175
+- crates/kernel/tests/persistence.rs:205
+- crates/kernel/tests/persistence.rs:23
+- crates/kernel/tests/persistence.rs:251
+- crates/kernel/tests/persistence.rs:282
+- crates/kernel/tests/persistence.rs:46
+- crates/kernel/tests/persistence.rs:66
+- crates/kernel/tests/persistence.rs:91
 
 ## mvp.md §15.1
 - crates/kernel/tests/acceptance.rs:188
