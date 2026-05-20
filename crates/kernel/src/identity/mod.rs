@@ -6,7 +6,7 @@
 //! the persistent-storage layer added by plan B-2:
 //!
 //! - [`IdentityStore`] — pluggable backend trait (this module's `store`).
-//! - `FilesystemIdentityStore` — disk-backed impl with bech32m
+//! - [`FilesystemIdentityStore`] — disk-backed impl with bech32m
 //!   `wuser`-HRP author filenames and raw-bytes secret files (this
 //!   module's `fs`).
 //! - [`IdentityError`] — failure surface.
@@ -126,6 +126,7 @@ mod store;
 pub use store::{IdentityError, IdentityStore};
 
 mod fs;
+pub use fs::FilesystemIdentityStore;
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
