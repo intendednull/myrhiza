@@ -6,8 +6,10 @@
 
 use myrhiza_kernel::identity::{FilesystemIdentityStore, IdentityStore};
 
-/// Covers: spec §6 round-trip happy path. plan-b-1 §10 (peer identity
-/// — persistence replaces the in-memory stub).
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6 round-trip happy path; replaces plan-B-1 §10's
+/// in-memory peer-identity stub.
 #[tokio::test]
 async fn peer_key_round_trip_persists_across_store_reopen() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -27,8 +29,10 @@ async fn peer_key_round_trip_persists_across_store_reopen() {
     assert_eq!(sig1, sig2, "deterministic sig under same key must match");
 }
 
-/// Covers: spec §6 round-trip happy path for `AuthorKeypair`.
-/// plan-b-1 §11 (kernel runtime — author keypair handling).
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6 round-trip happy path for `AuthorKeypair`;
+/// extends plan-B-1 §11 author keypair handling with persistence.
 #[tokio::test]
 async fn author_key_round_trip_persists_across_store_reopen() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -45,8 +49,10 @@ async fn author_key_round_trip_persists_across_store_reopen() {
     assert_eq!(auth2.author, pk);
 }
 
-/// Covers: spec §6 `list_authors`. plan-b-1 §11 (kernel runtime —
-/// author keypair handling).
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6 `list_authors`; extends plan-B-1 §11 kernel-runtime
+/// author keypair handling.
 #[tokio::test]
 async fn list_authors_returns_all_created_authors_sorted() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -68,7 +74,10 @@ async fn list_authors_returns_all_created_authors_sorted() {
     assert_eq!(listed, expected, "list_authors must return sorted pubkeys");
 }
 
-/// Covers: spec §6 `load_or_create_peer` idempotence. plan-b-1 §10.
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6 `load_or_create_peer` idempotence; complements
+/// plan-B-1 §10 peer-identity semantics.
 #[tokio::test]
 async fn load_or_create_peer_is_idempotent_within_one_store() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -82,7 +91,9 @@ async fn load_or_create_peer_is_idempotent_within_one_store() {
     assert_eq!(pub1, peer2.public);
 }
 
-/// Covers: spec §6.3 permission enforcement. identity.md §6 custody.
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6.3 permission enforcement; kernel-custody discipline.
 #[cfg(unix)]
 #[tokio::test]
 async fn load_rejects_loose_unix_permissions() {
@@ -115,7 +126,9 @@ async fn load_rejects_loose_unix_permissions() {
     }
 }
 
-/// Covers: spec §6.3 seed-length enforcement. identity.md §6 custody.
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6.3 seed-length enforcement; kernel-custody discipline.
 #[tokio::test]
 async fn load_rejects_seed_length_mismatch() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -145,7 +158,10 @@ async fn load_rejects_seed_length_mismatch() {
     }
 }
 
-/// Covers: spec §6.3 / §4 filename discipline. identity.md §6 custody.
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6.3 / §4 filename discipline; kernel-custody hygiene
+/// against tampered or mis-named author files.
 #[tokio::test]
 async fn load_rejects_corrupted_filename_bech32m() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -172,7 +188,10 @@ async fn load_rejects_corrupted_filename_bech32m() {
     }
 }
 
-/// Covers: spec §6.3 pubkey-filename cross-check. identity.md §6 custody.
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6.3 pubkey-filename cross-check; kernel-custody guard
+/// against tampered filenames.
 #[tokio::test]
 async fn load_author_rejects_pubkey_filename_mismatch() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -215,7 +234,10 @@ async fn load_author_rejects_pubkey_filename_mismatch() {
     );
 }
 
-/// Covers: spec §6.3 dir creation mode. identity.md §6 custody.
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6.3 dir creation mode; kernel-custody discipline at
+/// store-open time.
 #[cfg(unix)]
 #[tokio::test]
 async fn open_creates_directory_with_0700_mode() {
@@ -243,9 +265,10 @@ async fn open_creates_directory_with_0700_mode() {
     assert_eq!(authors_mode, 0o700);
 }
 
-/// Covers: spec §6.4 atomic write under concurrency. plan-b-1 §10
-/// peer-keypair custody (the same atomic-write idiom protects peer
-/// and author keys identically).
+/// Covers: identity.md §6, crypto.md §9.1
+///
+/// B-2 design §6.4 atomic write under concurrency; same atomic-write
+/// idiom protects peer and author keys identically.
 #[tokio::test]
 async fn concurrent_store_writes_do_not_corrupt_key() {
     use std::sync::Arc;
