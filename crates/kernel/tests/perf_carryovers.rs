@@ -60,7 +60,7 @@ fn fast_cfg() -> RuntimeCfg {
 // Test 1: tip_fast_path_taken_for_single_author_via_author_path
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §3 + plan-b-1 §11.3 (Runtime author path).
+/// Covers: convergence.md §4.4 — tip-fast-path on single-author chain (B-2.1 §3).
 ///
 /// 100 events driven through `Runtime::author` must engage the
 /// tip-fast-path at least 99 times. The first call (genesis) has an
@@ -116,7 +116,7 @@ async fn tip_fast_path_taken_for_single_author_via_author_path() {
 // Test 2: replay_fallback_when_topo_reorders
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §3.4 prefix-mismatch fallback path.
+/// Covers: convergence.md §4.4 — prefix-mismatch fallback path (B-2.1 §3.4).
 ///
 /// Construct a topology where peer A's tip-fast-path is forced to
 /// reject eligibility on the second insert. Setup:
@@ -306,7 +306,7 @@ async fn replay_fallback_when_topo_reorders() {
 // Test 3: replay_fallback_when_drain_loop_inserts_multiple
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §3.2 drain-count gate.
+/// Covers: convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2).
 ///
 /// `handle_event` only takes the tip-fast-path when `drain_insert_count
 /// == 0`. We construct a scenario where the drain loop inserts ≥ 1
@@ -468,7 +468,7 @@ async fn replay_fallback_when_drain_loop_inserts_multiple() {
 // Test 4: incremental_apply_reject_records_drop
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §3.4 Rejected branch of `try_tip_incremental`.
+/// Covers: convergence.md §4.4 — rejected branch of `try_tip_incremental` records drop (B-2.1 §3.4), verification.md §22.5 — pre-check rejection coverage.
 ///
 /// Use the pre-check-rejector handle so state-apply rejects every
 /// event. The originator's `Runtime::author` calls `pre_check` BEFORE
@@ -560,8 +560,9 @@ async fn incremental_apply_reject_records_drop() {
 // Test 5: convergence_unchanged_after_tip_fast_path_landing
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §5 test 5 — regression for B-1 multi-author
-/// convergence. Direct port of `convergence::concurrent_multi_author_converges`
+/// Covers: convergence.md §4.7 — multi-author convergence regression guard for tip-fast-path landing (B-2.1 §5 test 5).
+///
+/// Direct port of `convergence::concurrent_multi_author_converges`
 /// (the existing B-1 test) to a fresh harness in this file. If the
 /// tip-fast-path implementation breaks convergence for any reason,
 /// this test fails before the dedicated convergence suite even runs.
@@ -632,7 +633,7 @@ async fn convergence_unchanged_after_tip_fast_path_landing() {
 // Test 6: compute_anchor_digest_off_loop_does_not_block_membus_publish
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §4.2 `spawn_blocking` off-loop.
+/// Covers: convergence.md §4.7 — `spawn_blocking` off-loop compute for drift-anchor digest (B-2.1 §4.2).
 ///
 /// Build up a multi-event DAG on peer A, then send a `DriftMessage`
 /// whose anchor is *covered* by A's DAG. The cache-miss path drives
@@ -781,8 +782,7 @@ async fn compute_anchor_digest_off_loop_does_not_block_membus_publish() {
 // Test 7: anchor_digest_correctness_after_off_loop_move
 // ---------------------------------------------------------------------------
 
-/// Covers: B-2.1 §4.2 — off-loop digest computation produces
-/// byte-identical output to a direct in-line compute.
+/// Covers: convergence.md §4.7 — off-loop digest byte-identical to direct in-line compute (B-2.1 §4.2).
 ///
 /// Strategy: drive a peer to a known DAG state, then compute the same
 /// anchor digest two ways:
