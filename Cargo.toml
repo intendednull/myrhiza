@@ -56,14 +56,20 @@ wasmtime-wasi = { version = "=36.0.9", default-features = false }
 # "every minor is breaking"). Bump deliberately.
 iroh = "=1.0.0-rc.0"
 iroh-gossip = "=0.99.0"
-# Stream adapter for iroh-gossip's `GossipTopic` (which is a
-# `n0_future::Stream`). Iroh-gossip's own examples use this crate.
+# iroh-gossip's `GossipTopic` implements `n0_future::Stream`;
+# `futures-lite::StreamExt` provides the `.next()` adapter we use to
+# poll it. Tight-pinned in lockstep with the iroh ecosystem (per
+# prior-art/iroh/lessons.md §Avoid row 1 — pin all data-plane crates
+# together; this crate gates how we drive iroh-gossip's stream).
 # Feature-gated under `network-iroh` on `myrhiza-network`. Per B-4.1
 # spec §3.2.
-futures-lite = "2"
-# Iroh-gossip's broadcast payload type. Explicit dep avoids transitive
-# reliance. Feature-gated under `network-iroh`. Per B-4.1 spec §3.2.
-bytes = "1"
+futures-lite = "=2.6.1"
+# Iroh-gossip's broadcast payload type — `bytes::Bytes` crosses the
+# iroh-gossip public API boundary (`GossipSender::broadcast(Bytes)`).
+# Tight-pinned in lockstep with the iroh ecosystem (per
+# prior-art/iroh/lessons.md §Avoid row 1) so the ABI seam stays
+# coherent. Feature-gated under `network-iroh`. Per B-4.1 spec §3.2.
+bytes = "=1.11.1"
 # Test/dev only.
 anyhow = "1"
 hex-literal = "0.4"
