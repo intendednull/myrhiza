@@ -28,6 +28,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:81
 
 ## convergence.md §4.2
+- crates/kernel/tests/attribution.rs:43
+- crates/kernel/tests/attribution.rs:94
 - crates/kernel/tests/convergence.rs:157
 - crates/kernel/tests/convergence.rs:387
 
@@ -35,7 +37,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:421
 
 ## convergence.md §4.2 — `MemBus::inject_lag(topic)` test affordance for
-- crates/network/tests/memory_basic.rs:83
+- crates/network/tests/memory_basic.rs:85
 
 ## convergence.md §4.2 — when an inbound event reveals the receiver is
 - crates/kernel/tests/convergence.rs:509
@@ -49,12 +51,15 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:276
 - crates/kernel/tests/acceptance.rs:71
+- crates/kernel/tests/attribution.rs:355
+- crates/kernel/tests/attribution.rs:471
+- crates/kernel/tests/attribution.rs:578
+
+## convergence.md §4.4 — User-visible contract: a single-peer
+- crates/kernel/tests/attribution.rs:671
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
 - crates/kernel/tests/convergence.rs:858
-
-## convergence.md §4.4 — `unsubscribe` still returns
-- crates/network/tests/iroh_gossip.rs:259
 
 ## convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2)
 - crates/kernel/tests/perf_carryovers.rs:309
@@ -69,7 +74,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/perf_carryovers.rs:63
 
 ## convergence.md §4.4 — wire-decode failure surfaces as
-- crates/network/tests/iroh_gossip.rs:184
+- crates/network/tests/iroh_gossip.rs:186
 
 ## convergence.md §4.4.1
 - crates/kernel/tests/convergence.rs:340
@@ -78,6 +83,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:671
 
 ## convergence.md §4.6
+- crates/kernel/tests/attribution.rs:143
+- crates/kernel/tests/attribution.rs:194
+- crates/kernel/tests/attribution.rs:244
+- crates/kernel/tests/attribution.rs:304
 - crates/kernel/tests/convergence.rs:203
 
 ## convergence.md §4.7
@@ -166,17 +175,23 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## mvp.md §15.1 #4
 - crates/kernel/tests/convergence.rs:203
 
+## networking.md §11.1
+- crates/kernel/tests/attribution.rs:755
+
+## networking.md §11.1 — `IrohNetwork::publish` and the
+- crates/kernel/tests/attribution.rs:785
+
 ## networking.md §11.1 — iroh's `NodeID` pubkey
 - crates/network/tests/iroh_skeleton.rs:15
 
 ## networking.md §11.1 — the topic-id conversion free
-- crates/network/tests/iroh_gossip.rs:282
+- crates/network/tests/iroh_gossip.rs:261
 
 ## networking.md §11.1 — three-peer chain A↔B↔C. A publishes;
-- crates/network/tests/iroh_gossip.rs:145
+- crates/network/tests/iroh_gossip.rs:147
 
 ## networking.md §11.1 — two iroh peers form a swarm and
-- crates/network/tests/iroh_gossip.rs:108
+- crates/network/tests/iroh_gossip.rs:110
 
 ## verification.md §22.1
 - crates/kernel/tests/acceptance.rs:48
