@@ -32,7 +32,7 @@ This slice lands **none** of:
 | **`PeerWarning::SignatureInvalid` variant** | Add a new variant `PeerWarning::SignatureInvalid { peer }` parallel to `PeerWarning::DecodeFailed`. Pushed when `verify_signature` returns Err on either of the two new arms. `peer` is the *claimed* `signed_by_peer` from the message (not the last-hop delivered-from neighbor); the runtime does not yet know if the claim is fraudulent — only that the signature didn't verify against the claimed key. | (a) Reuse `DecodeFailed { peer }` for sig failures; (b) Halt the runtime on any sig failure; (c) Silently drop with no warning | Sig failures and decode failures are categorically different — `DecodeFailed` is "I cannot parse this"; `SignatureInvalid` is "I parsed it but the cryptographic claim doesn't hold." Surfacing them separately lets app-level dashboards count each correctly (per `prior-art/willow/identity.md` §"Ed25519 as identity root" — sig failures are diagnostically distinct from envelope-malformed errors). Reuse-DecodeFailed (a) collapses two debug paths into one. Halt (b) is hostile — one malicious peer could halt every honest peer's runtime; signature failures are routine in adversarial conditions and must be non-fatal. Silent drop (c) violates CLAUDE.md "no swallowing errors." |
 | **Wire-freeze strategy** | Regenerate the affected snapshot bytes / sizes in `crates/types/tests/wire_freeze.rs` (specifically: `heads_summary_wire_layout`, `heads_request_wire_layout`, plus three new tests pinning the prefix-bytes property between message and signed-payload structs and three more pinning the four-variant `GossipMessage` tag stability). Existing `gossip_message_*_variant_tag_is_*_u32_be` tests stay green — the variant *order* in `GossipMessage` does not change, only the variant *payload* bytes lengthen. Pre-launch wire-freeze break, no kernel-major bump (acknowledged-OK in §1). | Bump a wire-version envelope (`enum WireV2 { V1(GossipMessage), V2(GossipMessageV2) }` style) | Pre-launch the wire-version envelope is pure ceremony; landed peers do not exist. Reserve wire-version machinery for the first post-1.0 wire change. |
 | **Real unsubscribe** | `IrohNetwork::unsubscribe` returns `Ok(())`. Rustdoc documents that the load-bearing cleanup IS subscription drop (iroh-gossip 0.99.0 has no explicit leave API; verified at `iroh-gossip/api.rs` lines 355-363). | (a) Wait for an explicit leave API upstream; (b) Best-effort send-then-drop the GossipSender to nudge a leave signal | (a) blocks B-4.2 on n0's roadmap. (b) is over-engineering: the actor cleans up when its receivers + senders all drop; an extra zero-byte broadcast wouldn't even be a leave signal at the protocol level (iroh-gossip doesn't synthesize one). Drop IS the v1 implementation. **However**: the `IrohNetwork::unsubscribe` method by itself does NOT trigger a drop — `IrohNetwork` doesn't hold any subscriptions to drop. The caller (the runtime) holds the `IrohSubscription` and drops it when its scope ends. So `unsubscribe` returning `Ok(())` is honest only if rustdoc explicitly notes the method is a no-op semantically because the cleanup happens through caller-side subscription drop. See §3.3 for the rustdoc draft. |
-| **Loopback filter** | Add loopback filter to both new verification arms — if `signed_by_peer == self.peer_key.public`, return early (we don't need to verify our own message; we'd just be double-counting our own publishes). Mirrors `process_drift_message:1450-1452`. | No loopback filter — verify own messages too | Iroh-gossip echoes the publisher's own broadcasts back through `Event::Received` (verified: every gossip overlay including Plumtree does, because the publisher is part of the swarm). The runtime would otherwise pay a sig-verify CPU cost on every own-publish for no reason. The Drift handler already has this filter; consistency wins. |
+| **Loopback filter** | Add loopback filter to both new verification arms — if `signed_by_peer == self.peer_key.public`, `verify_*` returns `false` so the body-consuming handler doesn't run (we'd be self-diffing our own claim — a guaranteed no-op). Mirrors `process_drift_message:1450-1452` which uses `return;` in a void fn for the same purpose. | No loopback filter — verify own messages too | **`MemNetwork` (used in kernel acceptance tests) uses a tokio broadcast channel, which delivers own publishes back to own receivers.** Without a loopback filter, a single-peer runtime would attempt to verify its own HeadsSummary as inbound, paying sig-verify CPU on every own-publish for no semantic benefit. **`IrohNetwork` does NOT echo own broadcasts** (Plumtree's `broadcast()` at `iroh-gossip-0.99.0/src/proto/plumtree.rs:467-487` pushes to eager peers but never emits `OutEvent::EmitEvent(Received(...))` for own messages), so the filter is a safety no-op for production traffic. Filter is still load-bearing for the MemNetwork test path and for consistency with the existing drift handler. |
 | **`peer_key.sign` source-of-truth** | Both publish-side signing sites call `self.peer_key.sign(canonical_bincode(payload))` exactly as `maybe_emit_drift` does at `runtime.rs:1425`. No new identity machinery. | New helper `sign_envelope(payload)` on `PeerKeypair` | One-call sign-site is already small enough; adding an envelope helper would only justify itself if there were three or more callers. There are exactly three drift+heads-summary+heads-request publishes after B-4.2; revisit if a fourth lands. |
 | **Verification helper extraction** | Add `verify_heads_summary` and `verify_heads_request` as private fn-on-`Runtime` (mirrors how the drift verify is inline in `process_drift_message` but the body is small and self-contained). Each takes `&HeadsSummary` / `&HeadsRequest` + `&Topic`, returns `bool`. Inline at the dispatch site. | Single generic `verify_signed_message<P: Serialize>(payload: &P, sig: &[u8; 64], pk: &PeerPubkey) -> bool` helper | The two payload-shape reconstructions differ (different fields), so the "generic" helper would just be `verify_signature` itself wrapped. Cost > benefit. |
 | **`Signed*Payload` struct visibility** | `pub` in `myrhiza_types` (matching `DriftSignedPayload`). Both struct definitions live in `crates/types/src/dag.rs` alongside the message types they shadow. | `pub(crate)` | Tests in `crates/kernel/tests/perf_carryovers.rs:732` construct `DriftSignedPayload` directly to forge a hand-signed drift message; the equivalent B-4.2 acceptance tests need the same shape for `HeadsSummarySignedPayload` and `HeadsRequestSignedPayload`. Cross-crate test visibility requires `pub`. |
@@ -265,18 +265,26 @@ The two `verify_*` private fns:
 /// Verify the signature on a [`HeadsSummary`]. Returns `true` if the
 /// message should be processed, `false` if it should be dropped.
 ///
-/// Mirrors the verify flow in `process_drift_message` (lines 1450-1466):
-/// loopback filter; reconstruct signed payload; call
-/// `myrhiza_manifest::verify_signature`; bail on err. Bad-sig surfaces
-/// a `PeerWarning::SignatureInvalid { peer }`; loopback returns
-/// silently (own messages are routine echoes through gossip).
+/// Follows the structural shape of `process_drift_message`
+/// (`runtime.rs:1450-1466`) but extends it: the drift handler
+/// **silently drops** on bad sig; the two `verify_*` fns push
+/// `PeerWarning::SignatureInvalid { peer }` at the same decision
+/// point, then return `false` so the body-consuming handler skips.
+/// (Backfilling `PeerWarning::SignatureInvalid` into
+/// `process_drift_message` is a follow-up — see §10.)
+///
+/// Loopback: `verify_*` returns `false` for own-published messages,
+/// which causes the dispatch site to skip the body handler.
+/// MemNetwork echoes own publishes (broadcast channel); IrohNetwork
+/// does NOT (Plumtree). See §2 "Loopback filter" row.
 ///
 /// Per plan-B-4.2 spec §3.2.
 fn verify_heads_summary(&self, h: &HeadsSummary) -> bool {
-    // Loopback filter — iroh-gossip echoes own broadcasts back to the
-    // publisher. We don't need to verify our own message.
+    // Loopback filter — MemNetwork echoes own publishes through its
+    // tokio broadcast channel; IrohNetwork does not (Plumtree).
+    // Either way, our own HeadsSummary is a self-diff no-op; skip.
     if h.signed_by_peer == self.peer_key.public {
-        return true;
+        return false;
     }
     let signed_payload = myrhiza_types::HeadsSummarySignedPayload {
         authors: h.authors.clone(),
@@ -416,13 +424,14 @@ fn heads_summary_signed_payload_field_order_is_authors_fuel_topic() {
         topic: Topic::from_bytes([0xAB; 32]),
     };
     let bytes = canonical_bincode().serialize(&p).expect("encode");
-    // authors: 8 (vec len = 0) = 8
+    // authors: 8 (vec len = 0)
     // kernel_fuel_table_version: 4 (u32 BE)
-    // topic: 32 raw (transparent newtype over [u8; 32])
-    // total: 8 + 4 + 32 = 44
-    assert_eq!(bytes.len(), 44);
-    // Topic bytes are the last 32 bytes.
-    assert_eq!(&bytes[12..44], &[0xAB; 32]);
+    // topic: 40 (8 u64-BE len-prefix + 32 raw bytes, serde_bytes shape
+    //        per crates/types/src/topic.rs:13 using serde_bytes_32_pub)
+    // total: 8 + 4 + 40 = 52
+    assert_eq!(bytes.len(), 52);
+    // Topic's 32 raw bytes follow its 8-byte length prefix: [20..52].
+    assert_eq!(&bytes[20..52], &[0xAB; 32]);
 }
 
 #[test]
@@ -433,10 +442,10 @@ fn heads_request_signed_payload_field_order_is_requests_topic() {
     };
     let bytes = canonical_bincode().serialize(&p).expect("encode");
     // requests: 8 (vec len = 0)
-    // topic: 32
-    // total: 40
-    assert_eq!(bytes.len(), 40);
-    assert_eq!(&bytes[8..40], &[0xCD; 32]);
+    // topic: 40 (8 len-prefix + 32 raw)
+    // total: 48
+    assert_eq!(bytes.len(), 48);
+    assert_eq!(&bytes[16..48], &[0xCD; 32]);
 }
 
 #[test]
@@ -470,9 +479,10 @@ fn heads_summary_first_n_bytes_match_signed_payload_leading_fields() {
     };
     let msg_bytes = canonical_bincode().serialize(&msg).expect("encode");
 
-    // First (signed_bytes.len() - 32) bytes match — i.e. all of
-    // signed_bytes EXCEPT the trailing `topic` field.
-    let common_prefix_len = signed_bytes.len() - 32;
+    // First (signed_bytes.len() - 40) bytes match — i.e. all of
+    // signed_bytes EXCEPT the trailing `topic` field (40 = 8 len-prefix
+    // + 32 raw per Topic's serde_bytes_32_pub shape).
+    let common_prefix_len = signed_bytes.len() - 40;
     assert_eq!(
         &msg_bytes[..common_prefix_len],
         &signed_bytes[..common_prefix_len],
@@ -501,7 +511,8 @@ fn heads_request_first_n_bytes_match_signed_payload_leading_fields() {
     };
     let msg_bytes = canonical_bincode().serialize(&msg).expect("encode");
 
-    let common_prefix_len = signed_bytes.len() - 32;
+    // Topic is 40 bytes (8 len-prefix + 32 raw); see preceding test.
+    let common_prefix_len = signed_bytes.len() - 40;
     assert_eq!(
         &msg_bytes[..common_prefix_len],
         &signed_bytes[..common_prefix_len],
@@ -580,7 +591,7 @@ Updates + new tests listed in §3.4. Existing variant-tag tests stay green; size
 | 7 | `runtime_drops_heads_summary_with_bad_signature` | `multi_thread, worker_threads = 2` | Construct two `Runtime` instances over a shared `MemNetwork`. Peer A publishes a HAND-FORGED `HeadsSummary` via `MemNetwork::publish` directly (bypassing `Runtime::publish_heads_summary`), with a deliberately wrong signature (zero bytes). Peer B's runtime receives it; assert (a) `B.peer_warnings` accumulates `PeerWarning::SignatureInvalid { peer: Some(a_peer) }`; (b) the body-consuming handler does NOT run — verify this by inspecting that peer B did not publish a backfill `HeadsRequest` in response (the bad-sig HeadsSummary should be dropped before `handle_heads_summary` runs the diff). Covers spec §3.2 + the runtime drop semantics. **MemNetwork** is the load-bearing transport here: the test does not need iroh's network stack, just the runtime's dispatch logic. |
 | 8 | `runtime_drops_heads_request_with_bad_signature` | `multi_thread, worker_threads = 2` | Same shape as #7 for `HeadsRequest`. Verify: (a) `SignatureInvalid` warning surfaces; (b) `handle_heads_request` does NOT run — peer B did not publish the requested events. |
 | 9 | `runtime_accepts_heads_summary_with_good_signature` | `multi_thread, worker_threads = 2` | Sanity check counterpart to #7: peer A's *real* `publish_heads_summary` produces a HeadsSummary peer B accepts (no `SignatureInvalid` warning; handler runs; the existing behavior — `KernelFuelTableMismatch` / backfill — is preserved). Ensures B-4.2 doesn't break existing convergence tests. |
-| 10 | `runtime_loopback_filter_skips_own_heads_summary_verify` | `multi_thread, worker_threads = 2` | One-peer runtime publishes a `HeadsSummary`; iroh-gossip / MemNetwork echoes it back. Assert `peer_warnings` does NOT accumulate `SignatureInvalid` (loopback filter triggered). Verifies spec §2 "Loopback filter" row. |
+| 10 | `runtime_loopback_filter_skips_own_heads_summary_verify` | `multi_thread, worker_threads = 2` | One-peer runtime over **`MemNetwork`** (which echoes own publishes via its tokio broadcast channel) publishes a `HeadsSummary`. Assert `peer_warnings` does NOT accumulate `SignatureInvalid` (loopback filter triggered, `verify_heads_summary` returns `false`, body handler skipped). NOTE: this scenario only fires on MemNetwork — `IrohNetwork` doesn't echo own broadcasts (Plumtree never emits `OutEvent::EmitEvent(Received(_))` for own messages). Verifies spec §2 "Loopback filter" row. |
 
 ### 4.4 Iroh transport unsubscribe test — extend `crates/network/tests/iroh_gossip.rs`
 
@@ -599,7 +610,7 @@ Tests 5, 6 → `convergence.md §4.6` (topic identity / cross-topic isolation).
 Tests 7, 8 → `runtime.rs handle_message` dispatch / spec §3.2.
 Test 9 → `convergence.md §4.2` happy path.
 Test 10 → `runtime.rs:1450-1452` loopback parallel.
-Tests 11, 12 → spec §3.3 + `iroh-gossip/api.rs:355-363`.
+Tests 11, 12 → spec §3.3 + `iroh-gossip/api.rs:207` (`GossipTopic` rustdoc: drop = leave swarm).
 
 ## 5. Justfile changes
 
@@ -614,7 +625,7 @@ None expected. The existing `just test` and `just test-iroh` recipes cover the n
 - **A peer at iroh-gossip layer (delivered_from = Y) forwarding a HeadsSummary legitimately signed by X.** Plumtree forwarding is exactly this case. Verification under X's pubkey succeeds (the bytes are X's bytes; Y is just a transport hop). The `SubError::DecodeFailed { peer }` field would carry `Some(Y)` if decode failed, but for *signature* verification we use `signed_by_peer` (claimed = X), NOT the last-hop. The runtime treats the message as authentic from X; correct.
 - **Cross-topic replay attempt under attribution.** Attacker captures peer X's signed `HeadsSummary` for topic A. Re-broadcasts the exact same bytes on topic B. Recipient on topic B reconstructs `HeadsSummarySignedPayload` with `topic = B` (the recipient's local self.topic). Canonical bincode of the reconstructed payload differs from canonical bincode of the *signed* payload (which had `topic = A`). Verify under X's pubkey fails. `PeerWarning::SignatureInvalid { peer: Some(X) }` surfaces. Tests 5 + 6 are the deterministic version of this property; test 7 + 8 are the runtime-integration version.
 - **Cross-peer drift detection (`process_drift_message`) is unchanged.** B-4.2 does not touch DriftMessage / DriftSignedPayload; that path is already attribution-attested via the existing peer-key signature.
-- **`Topic` newtype is `#[serde(transparent)]` over `[u8; 32]`.** Canonical bincode encodes it as 32 raw bytes (no length prefix), per `crates/types/src/topic.rs:11-13`. The `*SignedPayload` size calculations in §3.4 assume this; if `Topic`'s serde shape ever changes, the wire-freeze tests catch the discrepancy.
+- **`Topic` newtype uses `#[serde(with = "crate::hash::serde_bytes_32_pub")]` over `[u8; 32]`** (per `crates/types/src/topic.rs:13`). Canonical bincode encodes this as `8-byte u64 length-prefix + 32 raw bytes = 40 bytes total` (NOT 32 raw — the `serde_bytes::Bytes` shape adds the length prefix). The `*SignedPayload` size calculations in §3.4 use this 40-byte total; if `Topic`'s serde shape ever changes (e.g. switched to `#[serde(transparent)]`), the wire-freeze tests catch the discrepancy.
 - **`PeerKeypair::sign` is infallible** (per `crates/kernel/src/identity/mod.rs:69`). The `clippy::expect_used` annotations on canonical_bincode().serialize calls match the pattern already in `maybe_emit_drift:1421-1424`; the schema is fixed-shape and bincode does not fail on it. If a future schema change introduces a serialization-failure mode, those expect annotations become bugs — caught by review, not by tests.
 
 ## 7. Surface change summary
@@ -713,7 +724,7 @@ Consulted via the `using-prior-art` skill, 2026-05-20:
 - `crates/manifest/src/signature.rs:33` — `verify_signature` API.
 - `crates/network/src/iroh_transport.rs:156-167` — current `unsubscribe` body (modified in §3.3).
 - `crates/types/tests/wire_freeze.rs:128-162` — wire-freeze layout for HeadsSummary + HeadsRequest (modified in §3.4).
-- `iroh-gossip-0.99.0/src/api.rs` lines 355-363 — `GossipTopic` rustdoc: drop = leave swarm; no explicit leave API.
+- `iroh-gossip-0.99.0/src/api.rs:207` — `GossipTopic` rustdoc: drop = leave swarm; no explicit leave API.
 - `iroh-gossip-0.99.0/src/api.rs` lines 433-447 — `Event` enum.
 - `iroh-gossip-0.99.0/src/api.rs` lines 449-462 — `Message` struct with `delivered_from`.
 - `iroh-gossip-0.99.0/src/api.rs` lines 395-410 — `GossipReceiver::joined`.
