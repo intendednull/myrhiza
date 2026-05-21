@@ -170,32 +170,53 @@ Drop the `HeadsRequest` import from `myrhiza_types::{...}` at the top of the fil
 
 ### 3.6 Wire-freeze regen — `crates/types/tests/wire_freeze.rs`
 
-After deletions:
+**Audit finding (2026-05-21)**: original draft missed two additional tests. Full deletion list:
 
-1. Remove the `heads_request_wire_freeze` and `heads_request_signed_payload_wire_freeze` test cases.
-2. Remove the helper `fn sample_heads_request()`.
-3. Update the `GossipMessage` variant-tag tests:
-   - Remove the `gossip_message_heads_request_variant_tag_is_2` test.
-   - Update the comment block listing variant tags (Event=0, HeadsSummary=1, Drift=2 after removal).
-   - The existing `gossip_message_drift_variant_tag_is_3` test must update to `gossip_message_drift_variant_tag_is_2` and regenerate its hex.
-4. Run `cargo test -p myrhiza-types --test wire_freeze` once to fail with the new hex output captured; paste in; re-run to PASS.
+1. **Delete tests**:
+   - `heads_request_wire_freeze`
+   - `heads_request_signed_payload_wire_freeze`
+   - `heads_request_signed_payload_field_order_is_requests_topic` (line ~323)
+   - `heads_request_first_n_bytes_match_signed_payload_leading_fields` (line ~373)
+2. **Delete helper** `fn sample_heads_request()` (line ~221).
+3. **Delete** `gossip_message_heads_request_variant_tag_is_2` test.
+4. **Update** comment block listing variant tags (Event=0, HeadsSummary=1, Drift=2 after removal).
+5. **Rename + regenerate** `gossip_message_drift_variant_tag_is_3` → `gossip_message_drift_variant_tag_is_2` with new hex.
+6. Run `cargo test -p myrhiza-types --test wire_freeze` once to fail with the new hex output captured; paste in; re-run to PASS.
 
 ### 3.7 Update existing tests that rely on the gossip-routed path
 
+**Audit finding (2026-05-21)**: the original draft missed multiple test sites. Full list:
+
 - **`crates/kernel/tests/convergence.rs::pending_event_triggers_heads_request_not_heads_summary`** (around line 541):
   - The assertion that the tap captures `GossipMessage::HeadsRequest` is INVALID after B-4.7 — that variant no longer exists.
-  - Two options:
-    - (a) Update to assert `GossipMessage::HeadsSummary` (the new soft-nudge).
-    - (b) Delete the test entirely; the B-4.6 peer_authority_index.rs tests cover the substantive recovery paths.
-  - **Pick (a)**: keep the test as a regression guard on the soft-nudge behavior. Rename to `pending_event_triggers_heads_summary_nudge_when_index_empty`. Update the docstring + assertion. The test's existing setup leaves the index empty (per audit), so this is a natural rename.
+  - **Update path (a)**: keep the test as a regression guard on the soft-nudge behavior. Rename to `pending_event_triggers_heads_summary_nudge_when_index_empty`. Update the docstring + assertion. The test's existing setup leaves the index empty (per audit), so the new soft-nudge path fires.
 
 - **`crates/kernel/tests/peer_authority_index.rs::pending_event_with_unknown_author_falls_back_to_gossip`** (test 5):
   - Currently asserts `GossipMessage::HeadsRequest` arrives on the tap.
-  - Update to assert `GossipMessage::HeadsSummary` (the new soft-nudge). Rename to `pending_event_with_unknown_author_publishes_heads_summary_nudge`.
+  - Update: rename to `pending_event_with_unknown_author_publishes_heads_summary_nudge`. Assertion changes to expect `GossipMessage::HeadsSummary`.
+
+- **`crates/kernel/tests/attribution.rs`** (4 tests, found by audit):
+  - `heads_request_sign_then_verify_roundtrips` (line ~99) — pure-types round-trip of `HeadsRequest` + `HeadsRequestSignedPayload`. **Delete** — the signing primitives (`verify_signature`) remain covered by the equivalent `HeadsSummary` tests.
+  - `verify_rejects_bad_signature_heads_request` (line ~200) — pure-types negative test for bad signature. **Delete** — the equivalent `HeadsSummary` negative test covers the same primitive.
+  - `verify_rejects_cross_topic_replay_heads_request` (line ~309) — pure-types negative test for cross-topic replay. **Delete** — the equivalent `HeadsSummary` cross-topic test covers the same property.
+  - `runtime_drops_heads_request_with_bad_signature` (line ~493) — runtime-level test that publishes `GossipMessage::HeadsRequest(bad_sig_request)` and asserts `PeerWarning::SignatureInvalid` fires. **Delete** — the handler being removed eliminates the attack surface entirely; there is no remaining behavior to assert. The `SignatureInvalid` for `HeadsSummary` analog continues to test the equivalent surface for gossip-routed sumamries.
+
+- **`crates/kernel/tests/direct_backfill.rs::direct_backfill_legacy_gossip_routed_request_still_serviced`** (line ~387, the test labeled "Test 4" in the B-4.5 plan):
+  - Publishes `GossipMessage::HeadsRequest(req)` and asserts `handle_heads_request` services it via a tap subscription.
+  - **Delete entirely** — the test's stated purpose is "legacy gossip-routed HeadsRequest is still serviced," which is exactly the property being removed.
+  - Update the module header comment at `direct_backfill.rs:14-17` (the cross-reference to `convergence.rs:541` and the "deferred or cited" Test 5 explanation) to acknowledge the cleanup.
+
+**Net deletions**:
+
+- 5 tests deleted (4 in attribution.rs, 1 in direct_backfill.rs).
+- 2 tests renamed/updated (convergence.rs + peer_authority_index.rs Test 5).
+- Workspace test count drops by 5 ⇒ no convergence/equivocation/signature coverage is lost (each deleted test has a `HeadsSummary` analog still in the suite).
 
 ### 3.8 Cleanup of stale B-4.6 comments — `crates/kernel/src/runtime.rs`
 
-The fallback-gossip comment in `request_author_chain_gap` is replaced (covered in §3.1). Other comments that mention "the gossip-routed fallback" or "B-4.7 retires" should be removed or updated to past tense ("B-4.7 retired ...").
+- The fallback-gossip comment in `request_author_chain_gap` is replaced (covered in §3.1).
+- The `handle_message` docstring at line ~886 currently cites "§7.1 (HeadsSummary + HeadsRequest)" — remove the `+ HeadsRequest` portion since the variant no longer exists.
+- Other comments mentioning "the gossip-routed fallback" or "B-4.7 retires" should be removed or updated to past tense ("B-4.7 retired ...").
 
 ## 4. Acceptance tests
 
