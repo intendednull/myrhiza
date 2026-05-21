@@ -53,6 +53,7 @@ fn fast_cfg() -> RuntimeCfg {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     }
 }
 

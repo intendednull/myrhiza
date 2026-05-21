@@ -24,6 +24,9 @@ struct TopicState {
     /// live inside each [`MemSubscription`]; [`MemBus::inject_lag`]
     /// upgrades each weak and sets it to `true`.
     force_lag_flags: Vec<Weak<AtomicBool>>,
+    /// Mirrors `force_lag_flags`. Set via [`MemBus::inject_transport_error`].
+    /// One entry per live subscription on this topic. Per B-4.3 spec §3.4.
+    force_transport_error_flags: Vec<Weak<AtomicBool>>,
 }
 
 /// In-process broadcast bus shared across multiple [`MemNetwork`]
@@ -59,14 +62,23 @@ impl MemBus {
         let state = topics.entry(topic).or_insert_with(|| TopicState {
             sender: tokio::sync::broadcast::channel(self.capacity_per_topic).0,
             force_lag_flags: Vec::new(),
+            force_transport_error_flags: Vec::new(),
         });
-        let flag = Arc::new(AtomicBool::new(false));
+        let lag_flag = Arc::new(AtomicBool::new(false));
+        let transport_flag = Arc::new(AtomicBool::new(false));
         // GC dead weaks while we're holding the lock anyway.
         state.force_lag_flags.retain(|w| w.strong_count() > 0);
-        state.force_lag_flags.push(Arc::downgrade(&flag));
+        state
+            .force_transport_error_flags
+            .retain(|w| w.strong_count() > 0);
+        state.force_lag_flags.push(Arc::downgrade(&lag_flag));
+        state
+            .force_transport_error_flags
+            .push(Arc::downgrade(&transport_flag));
         MemSubscription {
             rx: state.sender.subscribe(),
-            force_lag: flag,
+            force_lag: lag_flag,
+            force_transport_error: transport_flag,
         }
     }
 
@@ -80,6 +92,7 @@ impl MemBus {
             .or_insert_with(|| TopicState {
                 sender: tokio::sync::broadcast::channel(self.capacity_per_topic).0,
                 force_lag_flags: Vec::new(),
+                force_transport_error_flags: Vec::new(),
             })
             .sender
             .clone()
@@ -124,6 +137,36 @@ impl MemBus {
         // If `topic` has no live subscriptions, the call is a no-op.
         // Tests that need the flag to fire must subscribe before
         // calling inject_lag — same precondition as natural overflow.
+    }
+
+    /// Arm every live subscription on `topic` so that its next `recv`
+    /// returns `Err(SubError::TransportError("injected by ..."))`
+    /// exactly once, then resumes normal delivery.
+    ///
+    /// Gate-paired with [`MemBus::inject_lag`]: both are deterministic
+    /// test affordances that bypass the natural-overflow / natural-actor-
+    /// death paths which are timing-dependent and hard to assert against.
+    ///
+    /// Per B-4.3 spec §3.4.
+    ///
+    /// # Panics
+    /// Does not panic. Mutex poisoning is recovered transparently.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn inject_transport_error(&self, topic: Topic) {
+        let mut topics = self
+            .topics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(state) = topics.get_mut(&topic) {
+            state
+                .force_transport_error_flags
+                .retain(|w| w.strong_count() > 0);
+            for weak in &state.force_transport_error_flags {
+                if let Some(flag) = weak.upgrade() {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            }
+        }
     }
 }
 

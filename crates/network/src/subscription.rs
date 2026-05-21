@@ -19,14 +19,17 @@ pub trait Subscription: Send {
     ///   the runtime MUST NOT trigger `HeadsSummary` backfill on this
     ///   variant (distinct from `Lagged`). See [`SubError::DecodeFailed`]
     ///   for the full rationale.
+    /// - `Err(SubError::TransportError(reason))` — the underlying
+    ///   transport reported an error mid-stream. The runtime counts
+    ///   consecutive occurrences and halts after a configurable
+    ///   threshold; see [`SubError::TransportError`] for the full
+    ///   rationale. Per B-4.3 spec §3.0.
     /// - `Ok(None)` — subscription closed
     ///
     /// # Errors
-    /// `Lagged` and `DecodeFailed` are both non-fatal. `DecodeFailed`
-    /// must NOT trigger a `HeadsSummary` publish — routing wire-decode
-    /// failures through the backfill path would let a single bad-bytes
-    /// peer flood the network; see [`SubError::DecodeFailed`] for the
-    /// full rationale.
+    /// `Lagged`, `DecodeFailed`, and `TransportError` are all non-fatal
+    /// at the trait surface. Policy decisions (backfill vs discard vs
+    /// halt) live in the consumer (`Runtime`). Per B-4.3 spec §3.0.
     async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError>;
 }
 
@@ -44,11 +47,27 @@ pub struct MemSubscription {
     /// to `false` on consumption — the affordance fires exactly once
     /// per arm.
     pub(crate) force_lag: Arc<AtomicBool>,
+    /// Per-subscription one-shot transport-error flag. Set via
+    /// [`MemBus::inject_transport_error`]. `pub(crate)` so
+    /// `MemBus::make_subscription` in `memory.rs` can initialize it
+    /// directly (same pattern as `rx` + `force_lag`).
+    ///
+    /// Per B-4.3 spec §3.4.
+    pub(crate) force_transport_error: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
 impl Subscription for MemSubscription {
     async fn recv(&mut self) -> Result<Option<GossipMessage>, SubError> {
+        // Transport-error injection (B-4.3 spec §3.4): checked BEFORE the
+        // lag flag because transport-error represents a more severe failure
+        // mode. Both flags can be set independently; transport-error has
+        // priority. Fires exactly once per arm (swap to false on consume).
+        if self.force_transport_error.swap(false, Ordering::SeqCst) {
+            return Err(SubError::TransportError(
+                "injected by MemBus::inject_transport_error".to_string(),
+            ));
+        }
         // Deterministic-lag injection (spec §6.3 / review-finding M-3):
         // if the bus armed this subscription's flag, consume the flag
         // and surface a synthetic `Lagged(1)`. The underlying

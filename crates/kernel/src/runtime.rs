@@ -70,6 +70,12 @@ pub struct RuntimeCfg {
     /// Maximum number of incoming drift messages stashed pending an
     /// anchor-covering replay. Defaults to 256.
     pub drift_stash_cap: usize,
+
+    /// Number of consecutive `SubError::TransportError` returns from
+    /// `Subscription::recv` after which the runtime halts. Default 5.
+    /// Set tighter (e.g. 2) in tests to validate the halt path.
+    /// Per B-4.3 spec §3.2.
+    pub transport_error_halt_threshold: usize,
 }
 
 impl Default for RuntimeCfg {
@@ -83,6 +89,7 @@ impl Default for RuntimeCfg {
             broadcast_capacity: 256,
             kernel_fuel_table_version: 1,
             drift_stash_cap: 256,
+            transport_error_halt_threshold: 5,
         }
     }
 }
@@ -233,6 +240,19 @@ pub enum PeerWarning {
         /// against this key, so the claim itself may be forged. Useful
         /// for observability + correlation, not for trust decisions.
         peer: Option<PeerPubkey>,
+    },
+
+    /// `Subscription::recv` returned a `SubError::TransportError`.
+    /// Pushed on every sub-threshold occurrence (each error
+    /// increments `consecutive`). The runtime halts when
+    /// `consecutive` reaches `cfg.transport_error_halt_threshold`.
+    /// Per B-4.3 spec §3.0.
+    TransportError {
+        /// Description string from the underlying error.
+        reason: String,
+        /// Consecutive-error count at the time this warning was
+        /// pushed (1, 2, 3, ... up to `transport_error_halt_threshold`).
+        consecutive: usize,
     },
 }
 
@@ -390,6 +410,15 @@ pub struct Runtime {
     /// test 1. See [`RuntimeHandle::tip_fast_path_hits`] for the
     /// always-on rationale.
     tip_fast_path_hits: Arc<Mutex<usize>>,
+
+    /// Count of consecutive `SubError::TransportError` returns from
+    /// the active subscription. Resets to 0 on `Ok(Some(_))`.
+    /// `Ok(None)` exits the task immediately (clean close path)
+    /// without touching this counter. `Lagged` and `DecodeFailed`
+    /// leave it unchanged (neutral). When this reaches
+    /// `cfg.transport_error_halt_threshold`, the runtime signals
+    /// halt and exits the task. Per B-4.3 spec §3.3.
+    consecutive_transport_errors: usize,
 }
 
 impl Runtime {
@@ -467,6 +496,7 @@ impl Runtime {
             halt_watch_tx,
             hlc_logical_counter: 0,
             tip_fast_path_hits: tip_fast_path_hits.clone(),
+            consecutive_transport_errors: 0,
         };
 
         tokio::spawn(async move {
@@ -516,7 +546,10 @@ impl Runtime {
                     Some(AuthorCommand::Shutdown) | None => return Ok(()),
                 },
                 recv_result = sub.recv() => match recv_result {
-                    Ok(Some(m)) => { let _ = self.handle_message(m).await; }
+                    Ok(Some(m)) => {
+                        self.consecutive_transport_errors = 0;
+                        let _ = self.handle_message(m).await;
+                    }
                     Ok(None) => return Ok(()),
                     Err(SubError::Lagged(n)) => {
                         // Mutex poisoning here would mean another task
@@ -548,6 +581,25 @@ impl Runtime {
                             .lock()
                             .expect("peer_warnings mutex poisoned")
                             .push(PeerWarning::DecodeFailed { peer });
+                    }
+                    Err(SubError::TransportError(reason)) => {
+                        self.consecutive_transport_errors += 1;
+                        if self.consecutive_transport_errors >= self.cfg.transport_error_halt_threshold {
+                            let halt_msg = format!(
+                                "transport halted: {} consecutive errors (latest: {})",
+                                self.consecutive_transport_errors, reason
+                            );
+                            let _ = self.halt_watch_tx.send(Some(halt_msg));
+                            return Ok(());
+                        }
+                        #[allow(clippy::expect_used)]
+                        self.peer_warnings
+                            .lock()
+                            .expect("peer_warnings mutex poisoned")
+                            .push(PeerWarning::TransportError {
+                                reason,
+                                consecutive: self.consecutive_transport_errors,
+                            });
                     }
                 },
                 _ = ticker.tick() => { self.publish_heads_summary().await?; }

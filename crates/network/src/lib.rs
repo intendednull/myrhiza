@@ -109,6 +109,17 @@ pub enum SubError {
         /// sender identity ([`MemNetwork`] never emits this variant).
         peer: Option<PeerPubkey>,
     },
+
+    /// The transport layer (e.g. iroh-gossip's actor) reported an
+    /// error mid-stream. Semantically distinct from
+    /// [`SubError::Lagged`] (broadcast-channel overrun, recoverable
+    /// via backfill) and [`SubError::DecodeFailed`] (wire-byte parse
+    /// failure on a single message). May indicate the underlying
+    /// transport has DIED; the runtime accumulates these and halts
+    /// after `RuntimeCfg::transport_error_halt_threshold` consecutive
+    /// occurrences. Per B-4.3 spec §3.0.
+    #[error("transport error: {0}")]
+    TransportError(String),
 }
 
 /// Network transport abstraction. Implementations are responsible for
