@@ -628,6 +628,13 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
                     // our send side with FIN (not RESET_STREAM)
                     // for symmetry with the no-handler path.
                     let _ = send_stream.finish();
+                    // Keep the connection alive until the requester closes
+                    // from their side. Without this await, dropping the
+                    // `connection` handle here would send CONNECTION_CLOSE
+                    // before the FIN frame is processed by the requester,
+                    // causing a "connection lost" error instead of clean EOF.
+                    // Pattern from iroh's own Echo example (protocol.rs §tests).
+                    connection.closed().await;
                     return Ok(());
                 }
                 Err(e) => {
@@ -652,6 +659,9 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
                 // No handler installed — close stream cleanly.
                 // Requester sees zero events + EOF.
                 let _ = send_stream.finish();
+                // Keep connection alive until requester closes (same
+                // reasoning as the clean-EOF-before-request path above).
+                connection.closed().await;
                 return Ok(());
             };
 
@@ -703,10 +713,14 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
                 }
             }
 
-            // Wait for the handler task to drain (or confirm it was
-            // aborted), then close the send side cleanly.
+            // Wait for the handler task to drain (or confirm it was aborted),
+            // then close the send side cleanly and keep the connection alive
+            // until the requester closes from their side.
             let _ = handler_task.await;
             let _ = send_stream.finish();
+            // Keep the connection alive until the requester closes from their
+            // side (same FIN-vs-CONNECTION_CLOSE race fix as above).
+            connection.closed().await;
             Ok(())
         }
     }
