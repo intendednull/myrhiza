@@ -1,0 +1,622 @@
+//! B-4.5 acceptance tests for the kernel-side direct-stream backfill.
+//!
+//! Per docs/specs/2026-05-21-plan-b-4-5-kernel-runtime-integration-design.md §4.1.
+//!
+//! All tests that exercise cross-task communication use
+//! `multi_thread, worker_threads = 2` so the runtime task, drainer
+//! task, and handler task can run concurrently.
+//!
+//! ## Test 5 — deferred (existing coverage cited)
+//!
+//! `direct_backfill_pending_path_still_emits_gossip_routed_heads_request`
+//! is NOT implemented here. `convergence.rs::
+//! pending_event_triggers_heads_request_not_heads_summary` (line 541)
+//! already proves that the `Pending` / `InvalidChain` path in
+//! `request_author_chain_gap` still emits
+//! `GossipMessage::HeadsRequest` on the gossip topic — and that code
+//! path was deliberately NOT changed by B-4.5. Duplicating the
+//! assertion here would add noise without additional coverage.
+
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use bincode::Options;
+use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
+use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime, RuntimeCfg};
+use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
+use myrhiza_types::{
+    AuthorHead, AuthorPubkey, BundleHash, DirectHeadsRequest, EventHash, EventRequest, GenesisV1,
+    HeadsRequest, HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload, Topic,
+    canonical_bincode,
+};
+use tokio::time::timeout;
+
+mod helpers;
+
+// ---- shared constants --------------------------------------------------------
+
+const APP_BUNDLE: BundleHash = BundleHash::from_bytes([0xAB; 32]);
+const TOPIC_SEED: [u8; 32] = [0xCD; 32];
+
+fn topic() -> Topic {
+    Topic::derive(&APP_BUNDLE, &TOPIC_SEED, "main")
+}
+
+fn fast_cfg() -> RuntimeCfg {
+    RuntimeCfg {
+        drift_interval: 1,
+        drift_min_interval: Duration::from_secs(0),
+        drift_daily_cap: u32::MAX,
+        heads_summary_tick: Duration::from_millis(50),
+        ..RuntimeCfg::default()
+    }
+}
+
+// ---- helpers -----------------------------------------------------------------
+
+/// Build a correctly-signed `HeadsSummary` from `kp`, advertising a
+/// single `AuthorHead` at `seq`. The head hash is `EventHash::ZERO`
+/// (placeholder — the receiving runtime's DAG lookup is what matters).
+///
+/// Used by `direct_backfill_target_peer_unreachable_logs_warning` to
+/// forge a message that passes `verify_heads_summary` so
+/// `handle_heads_summary` actually runs and tries the direct-stream
+/// backfill.
+fn build_signed_heads_summary(kp: &PeerKeypair, t: Topic, seq: u64) -> HeadsSummary {
+    let author = AuthorPubkey::from_bytes([0x42; 32]);
+    let authors = vec![AuthorHead {
+        author,
+        seq,
+        hash: EventHash::ZERO,
+    }];
+    let payload = HeadsSummarySignedPayload {
+        authors: authors.clone(),
+        kernel_fuel_table_version: 1,
+        topic: t,
+    };
+    let bytes = canonical_bincode().serialize(&payload).expect("encode");
+    let signature = kp.sign(&bytes);
+    HeadsSummary {
+        authors,
+        kernel_fuel_table_version: 1,
+        signed_by_peer: kp.public,
+        signature,
+    }
+}
+
+/// Build a correctly-signed gossip-routed `HeadsRequest`. Used by
+/// `direct_backfill_legacy_gossip_routed_request_still_serviced`.
+fn build_signed_heads_request(
+    kp: &PeerKeypair,
+    t: Topic,
+    author: AuthorPubkey,
+    from_seq: u64,
+    to_seq: u64,
+) -> HeadsRequest {
+    let requests = vec![EventRequest {
+        author,
+        from_seq,
+        to_seq,
+    }];
+    let payload = HeadsRequestSignedPayload {
+        requests: requests.clone(),
+        topic: t,
+    };
+    let bytes = canonical_bincode().serialize(&payload).expect("encode");
+    let signature = kp.sign(&bytes);
+    HeadsRequest {
+        requests,
+        signed_by_peer: kp.public,
+        signature,
+    }
+}
+
+/// Construct the `GenesisV1` payload that the counter fixture expects for
+/// seq=1. Each runtime must author genesis before subsequent events.
+fn genesis_payload(seed: [u8; 32], founder: AuthorPubkey) -> Vec<u8> {
+    let g = GenesisV1 {
+        seed,
+        founder_pubkey: founder,
+        app_payload: 0_i64.to_be_bytes().to_vec(),
+    };
+    canonical_bincode().serialize(&g).expect("encode genesis")
+}
+
+// ===========================================================================
+// Test 1: end-to-end two-peer convergence over direct-streams
+// ===========================================================================
+
+/// Covers: B-4.5 §4.1 test 1.
+///
+/// A authors a genesis event + 4 increments (5 events total). B starts
+/// empty. A's periodic `HeadsSummary` tick fires (50ms), B receives it,
+/// classifies the gap, and calls `issue_direct_backfill(A, …)`. A's
+/// `KernelRequestHandler` receives the inbound request, forwards it to
+/// A's runtime task, which runs `serve_direct_heads_request` and streams
+/// all 5 events back. B's drainer forwards each event into
+/// `internal_event_rx`; the select-loop arm calls `handle_event`; B
+/// converges to A's digest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_backfill_two_peer_convergence_over_mem() {
+    let bus = MemBus::new(256);
+    let t = topic();
+
+    // Peer A — author-capable.
+    let kp_a = PeerKeypair::deterministic(101);
+    let author_kp_a = AuthorKeypair::deterministic(101);
+    let net_a = MemNetwork::new(bus.clone(), kp_a.public);
+    let runtime_a = Runtime::start(
+        net_a,
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_a,
+        Some(AuthorKeypair::deterministic(101)),
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_a start");
+
+    // Peer B — read-only, starts empty.
+    let kp_b = PeerKeypair::deterministic(102);
+    let net_b = MemNetwork::new(bus.clone(), kp_b.public);
+    let runtime_b = Runtime::start(
+        net_b,
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_b,
+        None,
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_b start");
+
+    // A authors genesis (seq=1) + 4 increments = 5 events.
+    let (tx0, rx0) = tokio::sync::oneshot::channel();
+    runtime_a
+        .author_tx
+        .send(AuthorCommand::Author {
+            payload: genesis_payload(TOPIC_SEED, author_kp_a.author),
+            deps: BTreeSet::new(),
+            reply: tx0,
+        })
+        .await
+        .expect("author genesis");
+    rx0.await.expect("genesis reply").expect("genesis ok");
+
+    for delta in [1_i64, 1, 1, 1] {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        runtime_a
+            .author_tx
+            .send(AuthorCommand::Author {
+                payload: delta.to_be_bytes().to_vec(),
+                deps: BTreeSet::new(),
+                reply: tx,
+            })
+            .await
+            .expect("author increment");
+        rx.await.expect("increment reply").expect("increment ok");
+    }
+
+    // Wait for B to converge to A's digest.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut digest_b = runtime_b.digest_watch.clone();
+    let digest_a = runtime_a.digest_watch.clone();
+    loop {
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "convergence timeout — A digest {:?}, B digest {:?}",
+            digest_a.borrow().as_slice(),
+            digest_b.borrow().as_slice(),
+        );
+        let a = digest_a.borrow().clone();
+        let b = digest_b.borrow().clone();
+        if !a.is_empty() && a == b {
+            break;
+        }
+        let _ = timeout(Duration::from_millis(50), digest_b.changed()).await;
+    }
+
+    assert_eq!(
+        digest_a.borrow().as_slice(),
+        digest_b.borrow().as_slice(),
+        "B must converge to A's digest via direct-stream backfill"
+    );
+}
+
+// ===========================================================================
+// Test 2: unreachable target peer logs DirectRequestFailed
+// ===========================================================================
+
+/// Covers: B-4.5 §4.1 test 2.
+///
+/// Forge a correctly-signed `HeadsSummary` from peer A (a real
+/// `PeerKeypair` so the signature verifies) and publish it onto the bus.
+/// However, A's `MemNetwork` has no `KernelRequestHandler` registered
+/// (no `Runtime::start` was called for A), so B's `request_heads(A, …)`
+/// returns `NetError::RequestFailed`. B must surface
+/// `PeerWarning::DirectRequestFailed { peer: A, … }`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_backfill_target_peer_unreachable_logs_warning() {
+    let bus = MemBus::new(256);
+    let t = topic();
+
+    // Peer B — read-only runtime.
+    let kp_b = PeerKeypair::deterministic(202);
+    let net_b = MemNetwork::new(bus.clone(), kp_b.public);
+    let runtime_b = Runtime::start(
+        net_b,
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_b,
+        None,
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_b start");
+
+    // Peer A — a MemNetwork with NO Runtime attached. No
+    // install_request_handler is ever called, so the MemBus has no
+    // handler entry for kp_a.public. B's request_heads will return
+    // NetError::RequestFailed.
+    let kp_a = PeerKeypair::deterministic(201);
+    let net_a = MemNetwork::new(bus.clone(), kp_a.public);
+    // Publish a valid HeadsSummary so B's verify_heads_summary passes
+    // and handle_heads_summary calls issue_direct_backfill.
+    let summary = build_signed_heads_summary(&kp_a, t, 1);
+    net_a
+        .publish(t, GossipMessage::HeadsSummary(summary))
+        .await
+        .expect("publish heads_summary");
+
+    // Wait for B to record DirectRequestFailed { peer: kp_a.public }.
+    let target_peer = kp_a.public;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if std::time::Instant::now() > deadline {
+            let warnings = runtime_b.peer_warnings.lock().unwrap().clone();
+            panic!(
+                "DirectRequestFailed warning for peer {target_peer:?} never appeared; \
+                 warnings={warnings:?}"
+            );
+        }
+        let saw = runtime_b.peer_warnings.lock().unwrap().iter().any(|w| {
+            matches!(
+                w,
+                PeerWarning::DirectRequestFailed { peer, .. } if *peer == target_peer
+            )
+        });
+        if saw {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Cleanup.
+    let _ = runtime_b.author_tx.send(AuthorCommand::Shutdown).await;
+}
+
+// ===========================================================================
+// Test 3: handler topic-validation drops wrong-topic requests (clean EOF)
+// ===========================================================================
+
+/// Covers: B-4.5 §4.1 test 3.
+///
+/// Peer A's `KernelRequestHandler` is bound to `topic_a`. A requester
+/// sends a `DirectHeadsRequest` carrying `topic_b` (mismatched). The
+/// handler's topic-validation branch drops the responder (clean EOF)
+/// without forwarding to the runtime task. The requester receives
+/// `stream.next() == None`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
+    let bus = MemBus::new(256);
+    let topic_a = topic();
+    let topic_b = Topic::derive(&APP_BUNDLE, &[0xEF; 32], "main");
+    assert_ne!(
+        topic_a, topic_b,
+        "topics must differ for this test to be meaningful"
+    );
+
+    // Peer A — runtime bound to topic_a.
+    let kp_a = PeerKeypair::deterministic(301);
+    let net_a = MemNetwork::new(bus.clone(), kp_a.public);
+    let _runtime_a = Runtime::start(
+        net_a.clone(),
+        topic_a,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_a,
+        None,
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_a start");
+
+    // Requester — a plain MemNetwork (no runtime).
+    let kp_req = PeerKeypair::deterministic(302);
+    let net_req = MemNetwork::new(bus.clone(), kp_req.public);
+
+    // Issue a direct-stream request with the WRONG topic.
+    let wrong_topic_req = DirectHeadsRequest {
+        topic: topic_b, // mismatched: A is bound to topic_a
+        requests: vec![EventRequest {
+            author: AuthorPubkey::from_bytes([0x11; 32]),
+            from_seq: 1,
+            to_seq: 3,
+        }],
+    };
+    let mut stream = net_req
+        .request_heads(PeerKeypair::deterministic(301).public, wrong_topic_req)
+        .await
+        .expect("request_heads should succeed at the network level");
+
+    // Wrong-topic → handler drops responder → requester sees clean EOF.
+    let first = timeout(Duration::from_secs(2), stream.next()).await;
+    match first {
+        Ok(None) => { /* expected: clean EOF */ }
+        Ok(Some(Ok(_))) => panic!("expected clean EOF, got an event"),
+        Ok(Some(Err(e))) => panic!("expected clean EOF, got stream error: {e:?}"),
+        Err(e) => panic!("timeout waiting for EOF on wrong-topic request: {e}"),
+    }
+}
+
+// ===========================================================================
+// Test 4: legacy gossip-routed HeadsRequest is still serviced
+// ===========================================================================
+
+/// Covers: B-4.5 §4.1 test 4 + spec note "`handle_heads_request` stays
+/// active for gossip-routed inbound requests".
+///
+/// Peer A has authored 3 events. A tap peer publishes a gossip-routed
+/// `GossipMessage::HeadsRequest` covering A's author chain. A's runtime
+/// must respond by publishing the matching events on the gossip topic
+/// (via `handle_heads_request` — unchanged by B-4.5). The tap observes
+/// at least one `GossipMessage::Event` in response.
+///
+/// This confirms the backwards-compatible path stays live after the
+/// `handle_heads_summary` switchover.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_backfill_legacy_gossip_routed_request_still_serviced() {
+    let bus = MemBus::new(256);
+    let t = topic();
+
+    // Peer A — author-capable.
+    let kp_a = PeerKeypair::deterministic(401);
+    let author_kp_a = AuthorKeypair::deterministic(401);
+    let net_a = MemNetwork::new(bus.clone(), kp_a.public);
+    let runtime_a = Runtime::start(
+        net_a,
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_a,
+        Some(AuthorKeypair::deterministic(401)),
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_a start");
+
+    // Author genesis + 2 increments = 3 events.
+    let (tx0, rx0) = tokio::sync::oneshot::channel();
+    runtime_a
+        .author_tx
+        .send(AuthorCommand::Author {
+            payload: genesis_payload(TOPIC_SEED, author_kp_a.author),
+            deps: BTreeSet::new(),
+            reply: tx0,
+        })
+        .await
+        .expect("author genesis");
+    rx0.await.expect("genesis reply").expect("genesis ok");
+
+    for delta in [1_i64, 1] {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        runtime_a
+            .author_tx
+            .send(AuthorCommand::Author {
+                payload: delta.to_be_bytes().to_vec(),
+                deps: BTreeSet::new(),
+                reply: tx,
+            })
+            .await
+            .expect("author increment");
+        rx.await.expect("increment reply").expect("ok");
+    }
+
+    // Tap — subscribes to the topic to observe A's gossip response.
+    let kp_tap = PeerKeypair::deterministic(402);
+    let net_tap = MemNetwork::new(bus.clone(), kp_tap.public);
+    let mut tap = net_tap.subscribe(t, vec![]).await.expect("tap subscribe");
+
+    // Publish a gossip-routed HeadsRequest for A's author chain.
+    let real_author = author_kp_a.author;
+    let req = build_signed_heads_request(&kp_tap, t, real_author, 1, 3);
+    net_tap
+        .publish(t, GossipMessage::HeadsRequest(req))
+        .await
+        .expect("publish HeadsRequest");
+
+    // Drain the tap until we see at least one GossipMessage::Event from A.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut saw_event = false;
+    while std::time::Instant::now() < deadline {
+        let r = timeout(Duration::from_millis(50), tap.recv()).await;
+        if let Ok(Ok(Some(GossipMessage::Event(_)))) = r {
+            saw_event = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_event,
+        "tap must see at least one gossip-routed Event from A's handle_heads_request \
+         (backwards-compat path must remain active after B-4.5 switchover)"
+    );
+}
+
+// ===========================================================================
+// Test 6: multiple concurrent backfills converge (three peers)
+// ===========================================================================
+
+/// Author a genesis event + `increments` additional events on `runtime`.
+/// Genesis uses `seed` and `founder`. Returns without blocking on state-apply
+/// outcome for post-genesis events (B's chain uses a non-TOPIC_SEED genesis
+/// which the counter fixture may reject, but the events are still authored
+/// and placed in the DAG for backfill).
+async fn author_chain(
+    runtime: &myrhiza_kernel::runtime::RuntimeHandle,
+    seed: [u8; 32],
+    founder: myrhiza_types::AuthorPubkey,
+    increments: &[i64],
+    must_succeed: bool,
+) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    runtime
+        .author_tx
+        .send(AuthorCommand::Author {
+            payload: genesis_payload(seed, founder),
+            deps: BTreeSet::new(),
+            reply: tx,
+        })
+        .await
+        .expect("genesis send");
+    if must_succeed {
+        rx.await.expect("genesis reply").expect("genesis ok");
+    } else {
+        let _ = rx.await;
+    }
+    for &delta in increments {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        runtime
+            .author_tx
+            .send(AuthorCommand::Author {
+                payload: delta.to_be_bytes().to_vec(),
+                deps: BTreeSet::new(),
+                reply: tx,
+            })
+            .await
+            .expect("increment send");
+        let _ = rx.await; // ignore state-apply result for non-canonical chains
+    }
+}
+
+/// Poll `watcher` until its value equals `target`, timing out after
+/// `deadline`.
+async fn await_converge(
+    watcher: &mut tokio::sync::watch::Receiver<Vec<u8>>,
+    target: &[u8],
+    deadline: std::time::Instant,
+) {
+    loop {
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "convergence timeout — current={:?}, want={target:?}",
+            watcher.borrow().as_slice(),
+        );
+        if watcher.borrow().as_slice() == target {
+            break;
+        }
+        let _ = timeout(Duration::from_millis(50), watcher.changed()).await;
+    }
+}
+
+/// Covers: B-4.5 §4.1 test 6.
+///
+/// Three peers on a shared bus. A and B both author chains. C starts
+/// empty and receives `HeadsSummary` from A and B in rapid succession,
+/// triggering two concurrent `issue_direct_backfill` calls. Both
+/// drainer tasks feed into C's single `internal_event_rx`. C converges
+/// to A's digest (A is the canonical genesis founder via `TOPIC_SEED`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_backfill_multiple_concurrent_backfills_converge() {
+    let bus = MemBus::new(256);
+    let t = topic();
+
+    // Peer A — canonical genesis founder (seed = TOPIC_SEED).
+    let kp_a = PeerKeypair::deterministic(601);
+    let author_kp_a = AuthorKeypair::deterministic(601);
+    let runtime_a = Runtime::start(
+        MemNetwork::new(bus.clone(), kp_a.public),
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_a,
+        Some(AuthorKeypair::deterministic(601)),
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_a start");
+    author_chain(&runtime_a, TOPIC_SEED, author_kp_a.author, &[1, 1], true).await;
+
+    // Peer B — separate author, separate chain (non-canonical genesis).
+    let kp_b = PeerKeypair::deterministic(602);
+    let author_kp_b = AuthorKeypair::deterministic(602);
+    let runtime_b = Runtime::start(
+        MemNetwork::new(bus.clone(), kp_b.public),
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_b,
+        Some(AuthorKeypair::deterministic(602)),
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_b start");
+    author_chain(&runtime_b, [0xBB; 32], author_kp_b.author, &[2, 2], false).await;
+
+    // Peer C — empty, read-only. Receives HeadsSummary from A and B.
+    let kp_c = PeerKeypair::deterministic(603);
+    let runtime_c = Runtime::start(
+        MemNetwork::new(bus.clone(), kp_c.public),
+        t,
+        APP_BUNDLE,
+        "main".into(),
+        helpers::counter_handle(),
+        kp_c,
+        None,
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_c start");
+
+    // Wait until A's digest is non-empty (A's own state-apply has run).
+    let mut watch_a = runtime_a.digest_watch.clone();
+    let deadline_a = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        assert!(
+            std::time::Instant::now() <= deadline_a,
+            "A's digest never became non-empty"
+        );
+        if !watch_a.borrow().is_empty() {
+            break;
+        }
+        let _ = timeout(Duration::from_millis(50), watch_a.changed()).await;
+    }
+    let target = watch_a.borrow().clone();
+
+    // C converges to A's digest via concurrent direct-stream backfills.
+    let mut watch_c = runtime_c.digest_watch.clone();
+    let deadline_c = std::time::Instant::now() + Duration::from_secs(6);
+    await_converge(&mut watch_c, &target, deadline_c).await;
+
+    let final_c = runtime_c.digest_watch.borrow().clone();
+    assert!(
+        !final_c.is_empty(),
+        "C's digest must be non-empty after concurrent direct-stream backfills"
+    );
+    assert_eq!(
+        target, final_c,
+        "C must converge to A's digest (A is the canonical genesis founder)"
+    );
+}
