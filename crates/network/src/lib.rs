@@ -14,7 +14,9 @@
 
 #![doc(html_no_source)]
 
-use myrhiza_types::{DriftMessage, Event, HeadsRequest, HeadsSummary, PeerPubkey, Topic};
+use myrhiza_types::{
+    DirectHeadsRequest, DriftMessage, Event, HeadsRequest, HeadsSummary, PeerPubkey, Topic,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -26,6 +28,10 @@ pub mod subscription;
 pub mod iroh_transport;
 
 pub use memory::{MemBus, MemNetwork};
+pub use request::{
+    ArcRequestHandler, HEADS_REQUEST_ALPN, HeadsResponder, HeadsStream, HeadsStreamError,
+    RequestHandler,
+};
 pub use subscription::{MemSubscription, Subscription};
 
 #[cfg(feature = "network-iroh")]
@@ -79,6 +85,15 @@ pub enum NetError {
     /// diagnostic. Per B-4.1 spec §3.0.
     #[error("subscribe failed: {0}")]
     SubscribeFailed(String),
+    /// Direct-stream request to a peer failed to establish (dial error,
+    /// ALPN refusal, peer unreachable). Per B-4.4 spec §3.2.
+    #[error("request to peer {peer:?} failed: {reason}")]
+    RequestFailed {
+        /// The target peer that the request was directed at.
+        peer: PeerPubkey,
+        /// Human-readable diagnostic.
+        reason: String,
+    },
 }
 
 /// Errors returned by [`Subscription::recv`].
@@ -171,4 +186,47 @@ pub trait Network: Send + Sync + 'static {
     /// # Errors
     /// Returns [`NetError::SubscribeClosed`] only if the transport is shut down.
     async fn unsubscribe(&self, topic: Topic) -> Result<(), NetError>;
+
+    /// Issue a direct-stream HeadsRequest to a specific peer.
+    ///
+    /// Returns a [`HeadsStream`] that yields response events as they
+    /// arrive. Stream terminates with `None` when the responder closes
+    /// cleanly, or with an `Err` for transport / decode / handler
+    /// failures.
+    ///
+    /// For transports without point-to-point semantics, this is the
+    /// only correct backfill primitive. The gossip-routed
+    /// [`GossipMessage::HeadsRequest`] variant is retained for
+    /// wire-freeze stability but is being deprecated in favor of this
+    /// method (B-4.5 will switch the kernel runtime over).
+    ///
+    /// **SemVer-breaking** — added in B-4.4. Out-of-tree implementors
+    /// must add it; both in-tree impls ([`MemNetwork`], [`IrohNetwork`])
+    /// are updated in this PR.
+    ///
+    /// Per B-4.4 spec §3.2.
+    ///
+    /// # Errors
+    /// Returns [`NetError::RequestFailed`] if the transport cannot
+    /// dial the peer or establish a request stream.
+    async fn request_heads(
+        &self,
+        peer: PeerPubkey,
+        request: DirectHeadsRequest,
+    ) -> Result<HeadsStream, NetError>;
+
+    /// Install a [`RequestHandler`] for the accept side of
+    /// direct-stream requests. Idempotent — last call wins.
+    ///
+    /// Embedders construct the handler with whatever state it needs
+    /// (DAG access, topic filter, rate limiter) and install it on the
+    /// network at startup. Without an installed handler, inbound
+    /// direct-stream requests are silently rejected (clean EOF
+    /// to the requester).
+    ///
+    /// **SemVer-breaking** — added in B-4.4. Out-of-tree implementors
+    /// must add it.
+    ///
+    /// Per B-4.4 spec §3.2.
+    fn install_request_handler(&self, handler: ArcRequestHandler);
 }
