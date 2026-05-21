@@ -230,7 +230,7 @@ async fn decode_failure_surfaces_as_subscribe_decode_failed() {
                 Ok(Some(_)) => panic!("unexpectedly got a decoded message"),
                 Ok(None) => panic!("subscription closed unexpectedly"),
                 Err(SubError::DecodeFailed { peer }) => return peer,
-                Err(SubError::Lagged(_)) => {
+                Err(SubError::Lagged(_) | SubError::TransportError(_)) => {
                     // Tolerated during swarm formation (membership churn
                     // can surface Lagged before the swarm settles). If
                     // this persists until the outer 5s timeout fires,
@@ -243,6 +243,11 @@ async fn decode_failure_surfaces_as_subscribe_decode_failed() {
                     // routing distinction per spec §3.0 (and would
                     // re-enable the bad-bytes-peer backfill flood
                     // that the distinct variant exists to prevent).
+                    //
+                    // TransportError (B-4.3): not expected on this path;
+                    // tolerate and continue — persistent TransportError
+                    // before timeout would indicate ApiError → DecodeFailed
+                    // conflation regression.
                 }
             }
         }

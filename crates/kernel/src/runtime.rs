@@ -549,6 +549,12 @@ impl Runtime {
                             .expect("peer_warnings mutex poisoned")
                             .push(PeerWarning::DecodeFailed { peer });
                     }
+                    Err(SubError::TransportError(_)) => {
+                        // TODO: B-4.3 Task 3 wires this arm with the real
+                        // consecutive-error counter + halt logic. This
+                        // stopgap exists only to keep the match exhaustive
+                        // while Task 1 is committed independently.
+                    }
                 },
                 _ = ticker.tick() => { self.publish_heads_summary().await?; }
             }
