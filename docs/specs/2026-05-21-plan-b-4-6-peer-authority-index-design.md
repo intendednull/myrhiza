@@ -248,15 +248,11 @@ A future tuning step could add `PeerWarning::PeerAuthorityIndexEmpty { author }`
 
 ### 4.2 Updates to existing tests
 
-- `crates/kernel/tests/convergence.rs::pending_event_triggers_heads_request_not_heads_summary` (line ~541) currently asserts that the Pending path emits `GossipMessage::HeadsRequest`. **Under B-4.6, this test may change behavior**: if the runtime's peer-authority index is populated by an earlier HeadsSummary in the test setup, the Pending path will go direct-stream instead.
+- `crates/kernel/tests/convergence.rs::pending_event_triggers_heads_request_not_heads_summary` (line ~541): **audit-confirmed that this test requires NO change under B-4.6**.
 
-  **Diagnosis approach**: read the test setup. If the runtime observes a HeadsSummary BEFORE the Pending event, B-4.6 will use direct-stream → the test's assertion that the tap sees `GossipMessage::HeadsRequest` will fail. The fix is either:
-  - (a) Restructure the test so no HeadsSummary precedes the Pending → empty index → fallback to gossip-routed → test passes.
-  - (b) Update the test to assert direct-stream usage instead.
+  The test's setup never injects a HeadsSummary covering `kp_a.author` BEFORE the Pending event fires: `net_pub` publishes only `GossipMessage::Event(e3)`, the tap opens after B's own startup HeadsSummary flushes (B's own startup summary carries B's empty DAG state — no `kp_a` entries), and no other Runtime is spawned. Under B-4.6, B's peer-authority index for `kp_a.author` will be empty when `request_author_chain_gap` fires; the fallback gossip path is taken, and the test's existing assertion continues to validate that fallback. The test therefore continues to exercise the EXACT path that B-4.7 will eventually remove.
 
-  **Pick (a)** for minimal change: the test's INTENT is "Pending fires gossip-routed HeadsRequest," and B-4.6's design says the fallback is still gossip-routed when index is empty. By ensuring the test setup has no preceding HeadsSummary, the test continues to validate the fallback path — which is the exact behavior B-4.7 will eventually remove.
-
-  Document the test update inline with a comment citing this rationale.
+  No action required during B-4.6 implementation. Document this with an inline comment in the test acknowledging the audit, citing this spec section.
 
 ### 4.3 `RuntimeHandle::peek_peer_authority_index_for` test affordance — deferred
 
@@ -341,7 +337,7 @@ If a future test requires it, expose under `#[cfg(any(test, feature = "test-help
 - `crates/kernel/src/runtime.rs:1048-1056` — `InvalidChain` arm in `handle_event` (second caller of `request_author_chain_gap`).
 - `crates/kernel/src/runtime.rs:1178+` — `handle_heads_summary` (modified in §3.3).
 - `crates/kernel/src/runtime.rs:1150+` — `issue_direct_backfill` (B-4.5 helper, reused).
-- `crates/kernel/src/runtime.rs:1822-1840` — `verify_heads_summary` loopback filter (cited in §6 edge cases).
+- `crates/kernel/src/runtime.rs:1832-1862` — `verify_heads_summary` (loopback filter check at line 1836; cited in §6 edge cases).
 - `crates/kernel/tests/convergence.rs:541` — Pending-path test that may need restructuring (per §4.2).
 - [`docs/specs/2026-05-20-plan-b-4-2-attribution-design.md`](2026-05-20-plan-b-4-2-attribution-design.md).
 - [`docs/specs/2026-05-21-plan-b-4-5-kernel-runtime-integration-design.md`](2026-05-21-plan-b-4-5-kernel-runtime-integration-design.md).
