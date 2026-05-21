@@ -220,7 +220,8 @@ async fn coexistence_two_topics_no_event_crossing() {
     let cfg = fast_cfg();
 
     // Peer1 spawns runtimes on BOTH topics.
-    let net = myrhiza_network::MemNetwork::new(bus.clone());
+    let peer_key_1 = myrhiza_kernel::identity::PeerKeypair::deterministic(1);
+    let net = myrhiza_network::MemNetwork::new(bus.clone(), peer_key_1.public);
     let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
     let runtime_a = myrhiza_kernel::runtime::Runtime::start(
         net.clone(),
@@ -228,21 +229,22 @@ async fn coexistence_two_topics_no_event_crossing() {
         app_bundle_hash,
         "main".into(),
         helpers::counter_handle(),
-        myrhiza_kernel::identity::PeerKeypair::deterministic(1),
+        peer_key_1,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(1)),
         cfg.clone(),
     )
     .await
     .expect("runtime_a");
 
-    let net2 = myrhiza_network::MemNetwork::new(bus.clone());
+    let peer_key_2 = myrhiza_kernel::identity::PeerKeypair::deterministic(2);
+    let net2 = myrhiza_network::MemNetwork::new(bus.clone(), peer_key_2.public);
     let runtime_b = myrhiza_kernel::runtime::Runtime::start(
         net2,
         topic_b,
         app_bundle_hash,
         "main".into(),
         helpers::counter_handle(),
-        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        peer_key_2,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(2)),
         cfg,
     )
@@ -532,6 +534,10 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
 /// the expected (author, range). This proves the protocol shape rather
 /// than just the eventual-convergence outcome.
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear scenario test; splitting into helpers would obscure the protocol-shape assertion this test makes"
+)]
 async fn pending_event_triggers_heads_request_not_heads_summary() {
     use myrhiza_kernel::identity::AuthorKeypair;
     use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
@@ -561,14 +567,15 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
     };
 
     // Spawn peer B (read-only — it never authors).
-    let net_b = MemNetwork::new(bus.clone());
+    let peer_key_b = myrhiza_kernel::identity::PeerKeypair::deterministic(2);
+    let net_b = MemNetwork::new(bus.clone(), peer_key_b.public);
     let runtime_b = myrhiza_kernel::runtime::Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        peer_key_b,
         None,
         cfg,
     )
@@ -582,7 +589,10 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Now open the tap — captures everything published from this point on.
-    let net_tap = MemNetwork::new(bus.clone());
+    let net_tap = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xA3; 32]),
+    );
     let mut tap = net_tap
         .subscribe(topic, vec![])
         .await
@@ -608,7 +618,10 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
     // InvalidChain { author: A, expected_seq: 1, got_seq: 3 }, and the
     // runtime's same-author-chain-skip arm publishes a HeadsRequest for
     // A's missing range [1..=2].
-    let net_pub = MemNetwork::new(bus.clone());
+    let net_pub = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xA4; 32]),
+    );
     net_pub
         .publish(topic, GossipMessage::Event(e3.clone()))
         .await
@@ -719,14 +732,15 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
     };
 
     // Spawn read-only B. No author key — B never authors, only observes.
-    let net_b = MemNetwork::new(bus.clone());
+    let peer_key_b2 = myrhiza_kernel::identity::PeerKeypair::deterministic(2);
+    let net_b = MemNetwork::new(bus.clone(), peer_key_b2.public);
     let runtime_b = myrhiza_kernel::runtime::Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        peer_key_b2,
         None,
         cfg,
     )
@@ -755,7 +769,10 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
     // Publish both directly onto the bus (hostile publisher path — NOT
     // going through a Runtime::author call, which would refuse to author
     // two seq=1 events).
-    let net_pub = MemNetwork::new(bus.clone());
+    let net_pub = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xB3; 32]),
+    );
     net_pub
         .publish(topic, GossipMessage::Event(g1.clone()))
         .await
@@ -926,14 +943,15 @@ async fn dropped_at_apply_records_rejected_events() {
 
     // Spawn read-only B with the rejector handle. No author key — B
     // never authors, only observes the event we inject.
-    let net_b = MemNetwork::new(bus.clone());
+    let peer_key_b3 = myrhiza_kernel::identity::PeerKeypair::deterministic(2);
+    let net_b = MemNetwork::new(bus.clone(), peer_key_b3.public);
     let runtime_b = myrhiza_kernel::runtime::Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::pre_check_rejector_handle(),
-        myrhiza_kernel::identity::PeerKeypair::deterministic(2),
+        peer_key_b3,
         None,
         cfg,
     )
@@ -965,7 +983,10 @@ async fn dropped_at_apply_records_rejected_events() {
     // Publish the event directly onto the bus. B's recv loop will pick
     // it up, the DAG accepts it (sig + chain valid; DAG does NOT run
     // state-apply), then `replay_full` rejects it and records the drop.
-    let net_pub = MemNetwork::new(bus.clone());
+    let net_pub = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xC3; 32]),
+    );
     net_pub
         .publish(topic, GossipMessage::Event(genesis.clone()))
         .await

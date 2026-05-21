@@ -54,7 +54,8 @@ async fn spawn_peer_runtime(
 ) -> myrhiza_kernel::runtime::RuntimeHandle {
     // Construction shape mirrors `pending_event_triggers_heads_request_not_heads_summary`
     // in crates/kernel/tests/convergence.rs — the simplest single-peer form.
-    let net = MemNetwork::new(bus);
+    let peer_key = PeerKeypair::deterministic(u64::from(peer_seed));
+    let net = MemNetwork::new(bus, peer_key.public);
     let bundle_hash = test_bundle_hash(peer_seed);
     Runtime::start(
         net,
@@ -62,7 +63,7 @@ async fn spawn_peer_runtime(
         bundle_hash,
         "main".into(),
         helpers::counter_handle(),
-        PeerKeypair::deterministic(u64::from(peer_seed)),
+        peer_key,
         None, // read-only — no author key
         halt_cfg(threshold),
     )
@@ -167,7 +168,10 @@ fn transport_error_variant_decodes_and_displays() {
 #[tokio::test]
 async fn mem_bus_inject_transport_error_surfaces_in_recv() {
     let bus = MemBus::new(64);
-    let net_a = MemNetwork::new(bus.clone());
+    let net_a = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xA1; 32]),
+    );
     let topic = test_topic(2);
 
     let mut sub = net_a
@@ -386,7 +390,7 @@ async fn successful_recv_resets_consecutive_counter() {
 
     // Peer B's keypair for signing a real HeadsSummary.
     let kp_b = PeerKeypair::deterministic(55);
-    let net_b = MemNetwork::new(bus.clone());
+    let net_b = MemNetwork::new(bus.clone(), kp_b.public);
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 

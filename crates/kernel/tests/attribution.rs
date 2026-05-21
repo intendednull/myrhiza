@@ -378,14 +378,15 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
     assert_ne!(pub_a, pub_b);
 
     // Spawn peer B (read-only).
-    let net_b = MemNetwork::new(bus.clone());
+    let peer_kp_b_t7 = PeerKeypair::deterministic(12);
+    let net_b = MemNetwork::new(bus.clone(), peer_kp_b_t7.public);
     let runtime_b = Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        PeerKeypair::deterministic(12),
+        peer_kp_b_t7,
         None,
         fast_cfg(),
     )
@@ -397,7 +398,10 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
 
     // Open the tap AFTER B's startup emit, so we only capture
     // B's reaction to A's bad-sig message.
-    let net_tap = MemNetwork::new(bus.clone());
+    let net_tap = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xE1; 32]),
+    );
     let mut tap = net_tap
         .subscribe(topic, vec![])
         .await
@@ -416,7 +420,10 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
         signature: [0xFF; 64],
     };
 
-    let net_a = MemNetwork::new(bus.clone());
+    let net_a = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xE2; 32]),
+    );
     net_a
         .publish(topic, GossipMessage::HeadsSummary(bad_sig_summary))
         .await
@@ -488,14 +495,15 @@ async fn runtime_drops_heads_request_with_bad_signature() {
     assert_ne!(pub_a, pub_b);
 
     // Spawn peer B (read-only).
-    let net_b = MemNetwork::new(bus.clone());
+    let peer_kp_b_t8 = PeerKeypair::deterministic(14);
+    let net_b = MemNetwork::new(bus.clone(), peer_kp_b_t8.public);
     let runtime_b = Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        PeerKeypair::deterministic(14),
+        peer_kp_b_t8,
         None,
         fast_cfg(),
     )
@@ -505,7 +513,10 @@ async fn runtime_drops_heads_request_with_bad_signature() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Open the tap.
-    let net_tap = MemNetwork::new(bus.clone());
+    let net_tap = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xE3; 32]),
+    );
     let mut tap = net_tap
         .subscribe(topic, vec![])
         .await
@@ -522,7 +533,10 @@ async fn runtime_drops_heads_request_with_bad_signature() {
         signature: [0xFF; 64],
     };
 
-    let net_a = MemNetwork::new(bus.clone());
+    let net_a = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xE4; 32]),
+    );
     net_a
         .publish(topic, GossipMessage::HeadsRequest(bad_sig_request))
         .await
@@ -612,14 +626,15 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
     assert_ne!(pub_a, pub_b);
 
     // Spawn peer A (author-capable — we want it to emit HeadsSummary).
-    let net_a = MemNetwork::new(bus.clone());
+    let kp_a_for_runtime = PeerKeypair::deterministic(15);
+    let net_a = MemNetwork::new(bus.clone(), kp_a_for_runtime.public);
     let runtime_a = Runtime::start(
         net_a,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        PeerKeypair::deterministic(15),
+        kp_a_for_runtime,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(15)),
         cfg_a,
     )
@@ -627,14 +642,15 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
     .expect("runtime_a start");
 
     // Spawn peer B (read-only) with the default (long) tick.
-    let net_b = MemNetwork::new(bus.clone());
+    let kp_for_b_runtime = PeerKeypair::deterministic(16);
+    let net_b = MemNetwork::new(bus.clone(), kp_for_b_runtime.public);
     let runtime_b = Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        PeerKeypair::deterministic(16),
+        kp_for_b_runtime,
         None,
         fast_cfg(),
     )
@@ -711,14 +727,15 @@ async fn runtime_loopback_filter_skips_own_heads_summary_verify() {
         transport_error_halt_threshold: 5,
     };
 
-    let net = MemNetwork::new(bus.clone());
+    let peer_kp_t10 = PeerKeypair::deterministic(17);
+    let net = MemNetwork::new(bus.clone(), peer_kp_t10.public);
     let runtime = Runtime::start(
         net,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        PeerKeypair::deterministic(17),
+        peer_kp_t10,
         None,
         cfg,
     )
@@ -802,7 +819,7 @@ async fn unsubscribe_returns_ok() {
 ///   neighbor's subscription drop.
 ///
 /// What this test does NOT prove (gap acknowledged):
-/// - The actor on B's side actually signaled NeighborDown to A
+/// - The actor on B's side actually signaled `NeighborDown` to A
 /// - A's swarm-membership state reflects B's leave
 ///
 /// Per B-4.2 spec §3.3 + §10 (real-cross-process tests deferred).
@@ -811,6 +828,7 @@ async fn unsubscribe_returns_ok() {
 async fn iroh_publish_after_subscription_drop_does_not_error() {
     use iroh::address_lookup::MemoryLookup;
     use myrhiza_network::IrohNetwork;
+    use myrhiza_types::PeerPubkey;
 
     let lookup = MemoryLookup::new();
 
@@ -866,7 +884,6 @@ async fn iroh_publish_after_subscription_drop_does_not_error() {
     // neighbor's drop. This is a regression check for "drop +
     // publish-after-drop doesn't crash the gossip actor"; it does NOT
     // prove B actually left the swarm at the actor level.
-    use myrhiza_types::PeerPubkey;
     let summary = HeadsSummary {
         authors: vec![],
         kernel_fuel_table_version: 1,
