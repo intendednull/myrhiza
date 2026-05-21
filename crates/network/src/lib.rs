@@ -14,9 +14,7 @@
 
 #![doc(html_no_source)]
 
-use myrhiza_types::{
-    DirectHeadsRequest, DriftMessage, Event, HeadsRequest, HeadsSummary, PeerPubkey, Topic,
-};
+use myrhiza_types::{DirectHeadsRequest, DriftMessage, Event, HeadsSummary, PeerPubkey, Topic};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -47,11 +45,8 @@ pub enum GossipMessage {
     /// A canonical [`Event`] envelope broadcast on a topic.
     Event(Event),
     /// Periodic per-author tip summary used by late joiners to detect
-    /// missing events and trigger backfill via [`HeadsRequest`].
+    /// missing events and trigger backfill via direct-stream requests.
     HeadsSummary(HeadsSummary),
-    /// Explicit request for missing events identified from a
-    /// [`HeadsSummary`] diff against local DAG state.
-    HeadsRequest(HeadsRequest),
     /// Equivocation / fork evidence broadcast by any peer that detects
     /// a chain violation for an author.
     Drift(DriftMessage),
@@ -196,9 +191,8 @@ pub trait Network: Send + Sync + 'static {
     ///
     /// For transports without point-to-point semantics, this is the
     /// only correct backfill primitive. The gossip-routed
-    /// [`GossipMessage::HeadsRequest`] variant is retained for
-    /// wire-freeze stability but is being deprecated in favor of this
-    /// method (B-4.5 will switch the kernel runtime over).
+    /// `HeadsRequest` variant has been retired (B-4.7); this direct-stream
+    /// method is the sole backfill primitive going forward.
     ///
     /// **SemVer-breaking** — added in B-4.4. Out-of-tree implementors
     /// must add it; both in-tree impls ([`MemNetwork`], [`IrohNetwork`])

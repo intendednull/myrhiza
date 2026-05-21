@@ -510,35 +510,34 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
 }
 
 /// Covers: convergence.md §4.2 — when an inbound event reveals the receiver is
-/// behind on the event's author chain, the recovery action MUST be a
-/// targeted `HeadsRequest` for that author's missing range, NOT a
-/// generic `HeadsSummary` nudge (review-finding I-1).
+/// behind on the event's author chain AND the peer-authority index is empty
+/// (no `HeadsSummary` has been received from any peer for that author), the
+/// recovery action post-B-4.7 is a `HeadsSummary` soft-nudge, NOT a
+/// gossip-routed `HeadsRequest` (which was retired in B-4.7).
 ///
 /// Setup: peer B subscribes to a shared bus. Peer A is *not* spawned as
 /// a runtime — instead, the test manually constructs A's signed events
 /// (genesis seq=1, seq=2, seq=3) via `EventBuilder` and injects ONLY
 /// event 3 directly onto the bus. B has never observed A before, so the
 /// DAG's chain-integrity check rejects event 3 with
-/// `DagError::InvalidChain { expected_seq: 1, got_seq: 3 }`. Per spec
-/// §7.2 the runtime must publish a `HeadsRequest` covering
-/// `from_seq=1..=2` on author A's chain.
+/// `DagError::InvalidChain { expected_seq: 1, got_seq: 3 }`.
 ///
-/// (Strictly, `Inserted::Pending` is only returned when explicit
-/// `deps` are unknown; same-author chain gaps surface as
-/// `DagError::InvalidChain`. The recovery path is identical for both —
-/// publish a targeted `HeadsRequest` — and the fix routes both arms
-/// through `request_author_chain_gap`.)
+/// Because no `HeadsSummary` from any peer was preloaded, B's
+/// peer-authority index is empty. `request_author_chain_gap` finds no
+/// target peer and falls through to `publish_heads_summary()` — the same
+/// soft-nudge primitive used by the cross-author Pending recovery path in
+/// `request_missing_for`. Per B-4.7 spec §3.1.
 ///
 /// A third "tap" subscription on the bus captures B's outbound gossip
-/// and we assert at least one captured message is `HeadsRequest` with
-/// the expected (author, range). This proves the protocol shape rather
-/// than just the eventual-convergence outcome.
+/// and we assert at least one captured message is `HeadsSummary`. This
+/// proves the soft-nudge protocol shape rather than just eventual
+/// convergence.
 #[tokio::test]
 #[allow(
     clippy::too_many_lines,
     reason = "linear scenario test; splitting into helpers would obscure the protocol-shape assertion this test makes"
 )]
-async fn pending_event_triggers_heads_request_not_heads_summary() {
+async fn pending_event_triggers_heads_summary_nudge_when_index_empty() {
     use myrhiza_kernel::identity::AuthorKeypair;
     use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
     use myrhiza_test_utils::EventBuilder;
@@ -615,9 +614,10 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
     );
 
     // Inject ONLY event 3 onto the bus. B's DAG returns
-    // InvalidChain { author: A, expected_seq: 1, got_seq: 3 }, and the
-    // runtime's same-author-chain-skip arm publishes a HeadsRequest for
-    // A's missing range [1..=2].
+    // InvalidChain { author: A, expected_seq: 1, got_seq: 3 }. Because
+    // B's peer-authority index is empty (no HeadsSummary preloaded),
+    // request_author_chain_gap publishes a HeadsSummary soft-nudge
+    // (B-4.7 §3.1) instead of a gossip-routed HeadsRequest.
     let net_pub = MemNetwork::new(
         bus.clone(),
         myrhiza_types::PeerPubkey::from_bytes([0xA4; 32]),
@@ -627,37 +627,20 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
         .await
         .expect("publish e3");
 
-    // Drain the tap for up to ~300ms looking for B's recovery emission.
-    // Filter out the Event(e3) we just published. Look for HeadsRequest.
+    // Drain the tap for up to ~300ms looking for B's soft-nudge emission.
+    // Filter out the Event(e3) we just published. Look for HeadsSummary.
     let deadline = std::time::Instant::now() + Duration::from_millis(300);
-    let mut saw_heads_request_for_a = false;
-    let mut saw_heads_summary = false;
+    let mut saw_heads_summary_nudge = false;
     let mut captured: Vec<GossipMessage> = Vec::new();
     while std::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let r = tokio::time::timeout(remaining.min(Duration::from_millis(50)), tap.recv()).await;
         match r {
             Ok(Ok(Some(msg))) => {
-                match &msg {
-                    GossipMessage::HeadsRequest(req) => {
-                        // Look for a request covering A's author chain
-                        // with a range that includes [1..=2] (i.e.,
-                        // from_seq <= 1 and to_seq >= 2). Spec requires
-                        // from_seq = known_head_seq + 1 = 1 and
-                        // to_seq = event.seq - 1 = 2.
-                        for entry in &req.requests {
-                            if entry.author == kp_a.author
-                                && entry.from_seq <= 1
-                                && entry.to_seq >= 2
-                            {
-                                saw_heads_request_for_a = true;
-                            }
-                        }
-                    }
-                    GossipMessage::HeadsSummary(_) => {
-                        saw_heads_summary = true;
-                    }
-                    _ => {}
+                if let GossipMessage::HeadsSummary(_) = &msg {
+                    // B published a HeadsSummary soft-nudge in response to
+                    // the empty-index recovery path (B-4.7 §3.1).
+                    saw_heads_summary_nudge = true;
                 }
                 captured.push(msg);
             }
@@ -670,9 +653,9 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
     }
 
     assert!(
-        saw_heads_request_for_a,
-        "B must publish a HeadsRequest covering A's chain (from_seq=1, to_seq=2) on \
-         a Pending insert, per spec §7.2. Saw HeadsSummary instead: {saw_heads_summary}. \
+        saw_heads_summary_nudge,
+        "B must publish a HeadsSummary soft-nudge when the peer-authority index is \
+         empty on an InvalidChain recovery (B-4.7 §3.1). \
          Captured messages: {captured:#?}"
     );
 

@@ -195,7 +195,9 @@ pub struct DriftSignedPayload {
 /// `HeadsSummary` per convergence.md §4.2 + B-4.2 Q-4 attribution.
 ///
 /// Periodic per-author DAG-tip snapshot used by peers to detect when
-/// they are behind on some authors and need to issue [`HeadsRequest`].
+/// they are behind on some authors and need to issue a backfill
+/// request (via direct-stream `request_heads`; see
+/// [`DirectHeadsRequest`]).
 ///
 /// **B-4.2 wire shape**: `signed_by_peer` + `signature` carry
 /// peer-level attribution (mirroring [`DriftMessage`]'s pattern at
@@ -257,49 +259,16 @@ pub struct EventRequest {
     pub to_seq: u64,
 }
 
-/// Bundle of [`EventRequest`] values sent in a single wire message.
-///
-/// **B-4.2 wire shape**: `signed_by_peer` + `signature` carry
-/// peer-level attribution. The signature covers
-/// [`HeadsRequestSignedPayload`] canonical bytes including a `topic`
-/// field (signed-only, NOT on the wire) to prevent cross-topic
-/// replay. Per B-4.2 spec §3.0.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HeadsRequest {
-    /// Range requests included in this bundle. Recipients SHOULD treat
-    /// the bundle as a unit but MAY service entries independently.
-    pub requests: Vec<EventRequest>,
-    /// Ed25519 pubkey of the peer that emitted this request. Excluded
-    /// from the signed payload. Per B-4.2 spec §3.0.
-    pub signed_by_peer: PeerPubkey,
-    /// Ed25519 signature over the canonical bincode encoding of
-    /// [`HeadsRequestSignedPayload`].
-    #[serde(with = "crate::serde_helpers::serde_signature_64")]
-    pub signature: [u8; 64],
-}
-
-/// Exact byte target signed by [`HeadsRequest::signature`].
-///
-/// Field order: `requests` mirrors [`HeadsRequest`]; `topic` is
-/// appended last and is integrity-protected-only (NOT on the wire).
-/// Per B-4.2 spec §3.0.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HeadsRequestSignedPayload {
-    /// Mirrors [`HeadsRequest::requests`].
-    pub requests: Vec<EventRequest>,
-    /// Topic this request applies to. Integrity-protected only.
-    pub topic: Topic,
-}
-
-/// Direct-stream variant of [`HeadsRequest`] sent over a dedicated
+/// Direct-stream backfill request sent over a dedicated
 /// ALPN-multiplexed QUIC bidi stream (per B-4.4 spec §1).
 ///
-/// **Distinguishing from [`HeadsRequest`]:** the gossip-routed
-/// `HeadsRequest` carries `signed_by_peer` + `signature` because
-/// Plumtree forwarding hides the original publisher (B-4.2 §3.0).
-/// Direct-stream has no such issue — mutual QUIC TLS authenticates the
-/// requester; the topic is carried in the request payload and bound to
-/// one stream on one ALPN, so cross-topic replay has no vector.
+/// **No in-band signature**: mutual QUIC TLS authenticates the
+/// requester at the transport layer; the topic is carried in the
+/// request payload and bound to one stream on one ALPN, so cross-topic
+/// replay has no vector. (Historical note: a gossip-routed `HeadsRequest`
+/// variant existed pre-B-4.7 and carried `signed_by_peer` + `signature`
+/// because Plumtree forwarding obscured the publisher; the gossip-routed
+/// path was retired in B-4.7 in favor of direct-streams only.)
 ///
 /// **Wire layout (canonical bincode v1, normative)**:
 ///   1. `topic`: `Topic` (`serde_bytes_32_pub`, 40 bytes)
@@ -312,8 +281,9 @@ pub struct DirectHeadsRequest {
     /// Topic this request applies to. The responder MUST verify it
     /// services this topic before serving events.
     pub topic: Topic,
-    /// Range requests included in this request. Same bounded-by-256
-    /// semantics as [`HeadsRequest::requests`].
+    /// Range requests included in this request. A single request may
+    /// cover at most 256 events (`to_seq - from_seq <= 255`); the
+    /// responder silently drops over-sized entries.
     pub requests: Vec<EventRequest>,
 }
 
@@ -375,22 +345,6 @@ mod tests_drift_heads {
     }
 
     #[test]
-    fn heads_request_round_trips() {
-        let r = HeadsRequest {
-            requests: vec![EventRequest {
-                author: AuthorPubkey::from_bytes([8; 32]),
-                from_seq: 1,
-                to_seq: 10,
-            }],
-            signed_by_peer: PeerPubkey::from_bytes([0; 32]),
-            signature: [0; 64],
-        };
-        let bytes = canonical_bincode().serialize(&r).expect("encode");
-        let decoded: HeadsRequest = canonical_bincode().deserialize(&bytes).expect("decode");
-        assert_eq!(decoded.requests.len(), 1);
-    }
-
-    #[test]
     fn heads_summary_signed_payload_round_trips() {
         let p = HeadsSummarySignedPayload {
             authors: vec![AuthorHead {
@@ -409,27 +363,6 @@ mod tests_drift_heads {
             p.kernel_fuel_table_version,
             decoded.kernel_fuel_table_version
         );
-        assert_eq!(p.topic, decoded.topic);
-    }
-
-    #[test]
-    fn heads_request_signed_payload_round_trips() {
-        let p = HeadsRequestSignedPayload {
-            requests: vec![EventRequest {
-                author: AuthorPubkey::from_bytes([8; 32]),
-                from_seq: 1,
-                to_seq: 10,
-            }],
-            topic: crate::Topic::from_bytes([0xCD; 32]),
-        };
-        let bytes = canonical_bincode().serialize(&p).expect("encode");
-        let decoded: HeadsRequestSignedPayload =
-            canonical_bincode().deserialize(&bytes).expect("decode");
-        // EventRequest does not derive PartialEq — compare fields individually.
-        assert_eq!(decoded.requests.len(), p.requests.len());
-        assert_eq!(decoded.requests[0].author, p.requests[0].author);
-        assert_eq!(decoded.requests[0].from_seq, p.requests[0].from_seq);
-        assert_eq!(decoded.requests[0].to_seq, p.requests[0].to_seq);
         assert_eq!(p.topic, decoded.topic);
     }
 

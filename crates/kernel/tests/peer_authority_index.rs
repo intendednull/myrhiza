@@ -656,18 +656,20 @@ async fn pending_event_with_known_author_uses_direct_stream() {
 }
 
 // ===========================================================================
-// Test 5: Pending event with unknown author falls back to gossip
+// Test 5: Pending event with unknown author publishes HeadsSummary soft-nudge
 // ===========================================================================
 
-/// Covers: convergence.md §4.2 — Pending/InvalidChain fallback to gossip when index is empty (B-4.6 §4.1 test 5).
+/// Covers: convergence.md §4.2 — Pending/InvalidChain soft-nudge when index is empty (B-4.7 §3.1).
 ///
 /// B's peer-authority index is empty (no HeadsSummary from any peer has
 /// been received). An event with a same-author chain gap is injected.
-/// `request_author_chain_gap` finds no peer in the index and falls back to
-/// the legacy gossip-routed `publish(GossipMessage::HeadsRequest)` path.
-/// A tap subscription captures the gossip-routed HeadsRequest.
+/// `request_author_chain_gap` finds no peer in the index and calls
+/// `publish_heads_summary()` — the same soft-nudge primitive used by the
+/// cross-author Pending recovery path in `request_missing_for`.
+/// A tap subscription captures the HeadsSummary soft-nudge.
+/// The gossip-routed HeadsRequest path was retired in B-4.7.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pending_event_with_unknown_author_falls_back_to_gossip() {
+async fn pending_event_with_unknown_author_publishes_heads_summary_nudge() {
     let bus = MemBus::new(256);
     let t = topic();
 
@@ -695,7 +697,7 @@ async fn pending_event_with_unknown_author_falls_back_to_gossip() {
     // (opened below) doesn't capture it and confuse the assertion.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Tap — subscribes to the topic to capture B's gossip-routed emissions.
+    // Tap — subscribes to the topic to capture B's soft-nudge emissions.
     let kp_tap = PeerKeypair::deterministic(502);
     let net_tap = MemNetwork::new(bus.clone(), kp_tap.public);
     let mut tap = net_tap.subscribe(t, vec![]).await.expect("tap subscribe");
@@ -718,26 +720,25 @@ async fn pending_event_with_unknown_author_falls_back_to_gossip() {
 
     // Inject event 3 (gap: B never saw seq=1 or seq=2). B's DAG returns
     // InvalidChain{expected_seq=1, got_seq=3}. Since the index is empty for
-    // this author, B falls back to gossip-routed HeadsRequest.
+    // this author, B publishes a HeadsSummary soft-nudge (B-4.7 §3.1).
     let net_pub = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xA5; 32]));
     net_pub
         .publish(t, GossipMessage::Event(e3))
         .await
         .expect("inject e3");
 
-    // Drain the tap for up to 500ms looking for a gossip-routed HeadsRequest.
+    // Drain the tap for up to 500ms looking for the HeadsSummary soft-nudge.
     let deadline = std::time::Instant::now() + Duration::from_millis(500);
-    let mut saw_heads_request = false;
+    let mut saw_heads_summary_nudge = false;
     while std::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let r = timeout(remaining.min(Duration::from_millis(50)), tap.recv()).await;
         match r {
-            Ok(Ok(Some(GossipMessage::HeadsRequest(req)))) => {
-                // Look for a request covering the injected author's chain.
-                if req.requests.iter().any(|e| e.author == author_kp.author) {
-                    saw_heads_request = true;
-                    break;
-                }
+            Ok(Ok(Some(GossipMessage::HeadsSummary(_)))) => {
+                // B published a HeadsSummary soft-nudge (empty index recovery,
+                // B-4.7 §3.1 — replaces the retired gossip-routed HeadsRequest).
+                saw_heads_summary_nudge = true;
+                break;
             }
             Ok(Ok(None) | Err(_)) => break,
             _ => {}
@@ -745,9 +746,9 @@ async fn pending_event_with_unknown_author_falls_back_to_gossip() {
     }
 
     assert!(
-        saw_heads_request,
-        "B must emit a gossip-routed HeadsRequest for the unknown author when the \
-         peer-authority index is empty (legacy fallback path, retained until B-4.7)"
+        saw_heads_summary_nudge,
+        "B must emit a HeadsSummary soft-nudge when the peer-authority index is \
+         empty and an unknown author's chain gap is detected (B-4.7 §3.1)"
     );
 }
 
