@@ -181,13 +181,15 @@ impl Network for IrohNetwork {
 /// Wraps a [`iroh_gossip::GossipTopic`] (a stream of
 /// `Result<Event, ApiError>`), filters events to only surface
 /// [`Event::Received`] payloads (decoded via canonical bincode),
-/// maps [`Event::Lagged`] and stream-level `ApiError` to
-/// [`SubError::Lagged(0)`] (count fidelity lost — see spec §6),
+/// maps [`Event::Lagged`] to [`SubError::Lagged(0)`] (count fidelity
+/// lost — see spec §6), maps stream-level `ApiError` to
+/// [`SubError::TransportError`] (potentially terminal — runtime counts
+/// consecutive occurrences and halts; see B-4.3 spec §3.1),
 /// maps bincode-decode failures to [`SubError::DecodeFailed`], and
 /// silently consumes membership events ([`Event::NeighborUp`],
 /// [`Event::NeighborDown`]).
 ///
-/// Per B-4.1 spec §3.2.
+/// Per B-4.1 spec §3.2 + B-4.3 spec §3.1.
 pub struct IrohSubscription {
     inner: GossipTopic,
 }
@@ -207,16 +209,21 @@ impl Subscription for IrohSubscription {
         loop {
             match self.inner.next().await {
                 None => return Ok(None),
-                Some(Err(_api_err)) => {
-                    // Stream-level error from iroh-gossip mid-flight.
-                    // Surfacing as Lagged(0) is a pragmatic mapping —
-                    // we lose error specifics but the runtime's
-                    // Lagged path (HeadsSummary backfill) is the
-                    // closest match for "I may have missed messages."
-                    // TRADE-OFF: if the gossip task has actually died,
-                    // we'll spin re-calling recv and getting ApiError
-                    // forever. Halt detection is B-4.3's scope.
-                    return Err(SubError::Lagged(0));
+                Some(Err(api_err)) => {
+                    // Stream-level error from iroh-gossip mid-flight. Surface as
+                    // TransportError (distinct from Lagged); the runtime counts
+                    // consecutive TransportErrors and halts after a configurable
+                    // threshold. Per B-4.3 spec §3.0 + §3.1.
+                    //
+                    // NOTE: iroh-gossip's `Event::Lagged` (the API event variant)
+                    // is structurally different from this `ApiError` path — Lagged
+                    // means "broadcast channel overrun, missed N messages"
+                    // (recoverable via backfill); ApiError means "the gossip actor
+                    // reported an error" (may be terminal). The Event::Lagged arm
+                    // below stays mapped to SubError::Lagged(0).
+                    return Err(SubError::TransportError(format!(
+                        "iroh-gossip api error: {api_err}"
+                    )));
                 }
                 Some(Ok(Event::Received(msg))) => {
                     // Capture the last-hop neighbor for attribution
