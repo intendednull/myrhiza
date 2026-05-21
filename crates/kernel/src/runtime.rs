@@ -1135,6 +1135,14 @@ impl Runtime {
         if requests.is_empty() {
             return;
         }
+        // B-4.6: prefer direct-stream when the peer-authority index has a
+        // candidate. Falls back to gossip-routed broadcast when the index is
+        // empty (legacy path; B-4.7 retires this fallback).
+        if let Some(target_peer) = self.lookup_peer_for_author(&author) {
+            self.issue_direct_backfill(target_peer, requests).await;
+            return;
+        }
+        // Fallback: gossip-routed broadcast (legacy path; B-4.7 retires).
         let Ok(req) = self.build_signed_heads_request(requests) else {
             return;
         };
@@ -1466,10 +1474,6 @@ impl Runtime {
     /// Look up the most-recently-observed peer with authority over
     /// `author`. Returns `None` if we have never seen a `HeadsSummary`
     /// advertising this author. Per B-4.6 spec §3.2.
-    #[allow(
-        dead_code,
-        reason = "wired in Task 2 (handle_heads_summary) and Task 3 (request_author_chain_gap)"
-    )]
     fn lookup_peer_for_author(&self, author: &AuthorPubkey) -> Option<PeerPubkey> {
         self.peer_authority_index
             .get(author)
