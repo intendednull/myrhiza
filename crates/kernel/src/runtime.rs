@@ -1223,20 +1223,34 @@ impl Runtime {
             }
         }
 
+        // ORDERING NOTE: push_authors_remote_lacks must run BEFORE the
+        // loopback-early-return + backfill block below. The loopback
+        // branch returns early; if it ever moves above this push, our
+        // own self-diff would skip pushing authors the remote lacks.
+        // Currently safe because the verify-side filter (below) makes
+        // the loopback branch unreachable in production.
         self.push_authors_remote_lacks(&local_map, &remote_authors)
             .await;
 
         if !requests.is_empty() {
-            // Loopback guard: never issue a direct-stream backfill to
-            // ourselves. The handler runs on this very task; awaiting
-            // the request would deadlock. The HeadsSummary signed by
-            // our own pubkey arrives via MemNetwork's broadcast — we
-            // receive our own emit. The verify-side filter at
-            // `verify_heads_summary` already uses the same
-            // `self.peer_key.public` comparison; we mirror it here
-            // for backfill emission.
+            // Loopback guard — defense in depth.
             //
-            // Per B-4.5 spec §6 (edge cases — loopback).
+            // In production, this branch is currently unreachable:
+            // `handle_heads_summary` is only called by `handle_message`
+            // when `verify_heads_summary` returns true, and that
+            // function (runtime.rs verify_heads_summary loopback
+            // filter) already returns false when
+            // `h.signed_by_peer == self.peer_key.public`. So the
+            // verify-side filter is the primary gate.
+            //
+            // The guard remains here as defense in depth because (a)
+            // future code paths might call handle_heads_summary
+            // directly, bypassing the verify gate; (b) issuing a
+            // self-targeted direct-stream `request_heads` would
+            // deadlock — the handler runs on this very task, awaiting
+            // the request would block forever. The cost is one
+            // pubkey comparison + a possible early return. Per B-4.5
+            // spec §6 (edge cases — loopback).
             if remote.signed_by_peer == self.peer_key.public {
                 return Ok(());
             }
