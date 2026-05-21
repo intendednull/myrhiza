@@ -695,8 +695,13 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
                         if send_stream.write_all(&frame).await.is_err() {
                             // Requester dropped mid-stream — abort the
                             // handler and return Ok (from our side the
-                            // stream is done).
+                            // stream is done). Wait for the connection
+                            // to close so the responder doesn't drop
+                            // its Connection handle while the requester
+                            // is still finalizing — same FIN-vs-CLOSE
+                            // race the other return paths guard against.
                             handler_task.abort();
+                            connection.closed().await;
                             return Ok(());
                         }
                     }

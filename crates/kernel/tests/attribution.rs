@@ -626,15 +626,15 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
     assert_ne!(pub_a, pub_b);
 
     // Spawn peer A (author-capable — we want it to emit HeadsSummary).
-    let peer_kp_a_t9 = PeerKeypair::deterministic(15);
-    let net_a = MemNetwork::new(bus.clone(), peer_kp_a_t9.public);
+    let kp_a_for_runtime = PeerKeypair::deterministic(15);
+    let net_a = MemNetwork::new(bus.clone(), kp_a_for_runtime.public);
     let runtime_a = Runtime::start(
         net_a,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        peer_kp_a_t9,
+        kp_a_for_runtime,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(15)),
         cfg_a,
     )
@@ -642,15 +642,15 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
     .expect("runtime_a start");
 
     // Spawn peer B (read-only) with the default (long) tick.
-    let peer_kp_b_t9 = PeerKeypair::deterministic(16);
-    let net_b = MemNetwork::new(bus.clone(), peer_kp_b_t9.public);
+    let kp_for_b_runtime = PeerKeypair::deterministic(16);
+    let net_b = MemNetwork::new(bus.clone(), kp_for_b_runtime.public);
     let runtime_b = Runtime::start(
         net_b,
         topic,
         app_bundle_hash,
         topic_name.clone(),
         helpers::counter_handle(),
-        peer_kp_b_t9,
+        kp_for_b_runtime,
         None,
         fast_cfg(),
     )
@@ -819,7 +819,7 @@ async fn unsubscribe_returns_ok() {
 ///   neighbor's subscription drop.
 ///
 /// What this test does NOT prove (gap acknowledged):
-/// - The actor on B's side actually signaled NeighborDown to A
+/// - The actor on B's side actually signaled `NeighborDown` to A
 /// - A's swarm-membership state reflects B's leave
 ///
 /// Per B-4.2 spec §3.3 + §10 (real-cross-process tests deferred).
@@ -828,6 +828,7 @@ async fn unsubscribe_returns_ok() {
 async fn iroh_publish_after_subscription_drop_does_not_error() {
     use iroh::address_lookup::MemoryLookup;
     use myrhiza_network::IrohNetwork;
+    use myrhiza_types::PeerPubkey;
 
     let lookup = MemoryLookup::new();
 
@@ -883,7 +884,6 @@ async fn iroh_publish_after_subscription_drop_does_not_error() {
     // neighbor's drop. This is a regression check for "drop +
     // publish-after-drop doesn't crash the gossip actor"; it does NOT
     // prove B actually left the swarm at the actor level.
-    use myrhiza_types::PeerPubkey;
     let summary = HeadsSummary {
         authors: vec![],
         kernel_fuel_table_version: 1,

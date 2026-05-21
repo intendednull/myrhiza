@@ -21,10 +21,17 @@ pub(crate) const HEADS_STREAM_CHANNEL_CAPACITY: usize = 32;
 /// Maximum size of a single framed message (request or event). Bounds
 /// memory pressure on the read side. 4 MiB is generous for events;
 /// `DirectHeadsRequest` payloads are tiny in practice.
-#[allow(
-    dead_code,
-    reason = "lib-side wiring lands in Task 5 (IrohNetwork); already referenced by in-module tests via build_frame_at_max_bytes"
-)]
+///
+/// **Enforcement asymmetry**: the cap is load-bearing on the READ
+/// side ([`crate::iroh_transport`] frame readers reject frames whose
+/// length prefix exceeds this value before allocating). The encoder
+/// ([`build_length_prefixed_frame`]) carries a `debug_assert!` only —
+/// release builds trust internal callers (we control every encoder
+/// site). A buggy caller that produces an oversized frame in release
+/// would have the frame rejected by the requester's reader as
+/// `HeadsStreamError::Transport("frame too large: …")`, which is the
+/// designed failure mode — not a memory-exhaustion vulnerability.
+#[cfg(any(test, feature = "network-iroh"))]
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 /// Errors surfaced through [`HeadsStream::next`].
@@ -40,6 +47,17 @@ pub enum HeadsStreamError {
     Decode(String),
     /// The handler reported an internal error before the stream
     /// completed.
+    ///
+    /// **Not constructed in B-4.4.** Reserved for the B-4.5 kernel-
+    /// side `RequestHandler` impl, which will surface DAG-query or
+    /// topic-validation failures through this variant. The
+    /// `HeadsStreamError` is part of the channel item type so handlers
+    /// have a way to push errors back via [`HeadsResponder`] once
+    /// `responder.send_err()` lands.
+    #[allow(
+        dead_code,
+        reason = "reserved for B-4.5 kernel-side handler errors per docstring"
+    )]
     #[error("handler error: {0}")]
     Handler(String),
 }
@@ -133,10 +151,7 @@ pub type ArcRequestHandler = Arc<dyn RequestHandler>;
 /// dev/test builds. Release builds rely on the read-side cap in
 /// [`super::iroh_transport`] / [`super::memory`] callers to surface
 /// oversized frames as transport errors.
-#[allow(
-    dead_code,
-    reason = "lib-side call sites land in Task 5 (IrohNetwork) + Task 6 (HeadsRequestProtocol); already exercised by in-module tests"
-)]
+#[cfg(any(test, feature = "network-iroh"))]
 #[allow(
     clippy::expect_used,
     reason = "MAX_FRAME_BYTES (4 MiB) always fits in u32"

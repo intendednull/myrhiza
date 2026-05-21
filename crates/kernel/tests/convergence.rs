@@ -534,6 +534,10 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
 /// the expected (author, range). This proves the protocol shape rather
 /// than just the eventual-convergence outcome.
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear scenario test; splitting into helpers would obscure the protocol-shape assertion this test makes"
+)]
 async fn pending_event_triggers_heads_request_not_heads_summary() {
     use myrhiza_kernel::identity::AuthorKeypair;
     use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};

@@ -694,9 +694,9 @@ Gated on `#[cfg(feature = "network-iroh")]`. Reuses the `spawn_iroh_peer` helper
 
 **Test 3: `iroh_request_heads_no_handler_installed_clean_eof`** — Peer B registers the ALPN but doesn't call `install_request_handler`. Peer A's request connects, sends the request, reads zero events, sees clean EOF (`next()` returns `None`).
 
-**Test 4: `iroh_request_heads_handler_topic_validation`** — Handler explicitly rejects requests for an unknown topic by returning early without pushing events. Verified by passing a wrong-topic request from peer A and seeing zero events arrive.
+**Test 4: `iroh_request_heads_handler_sees_requester_pubkey`** — TLS-handshake-confirmed requester attribution propagates to the installed handler. (B-4.4 implementation revision, 2026-05-21: original spec called for a `_handler_topic_validation` test; substituted with an attribution test because the topic-validation invariant is structurally identical between MemNetwork and IrohNetwork at this layer — only the attribution path differs, so the iroh-tier coverage focuses on what's genuinely iroh-specific. Topic validation is covered by the handler trait contract documented in §3.1.)
 
-**Test 5: `iroh_protocol_handler_clone_does_not_break`** — `IrohNetwork::protocol_handler()` is called twice; both returned protocol handlers share state via the internal `Arc<Mutex<Option<...>>>`. Installing the handler after the first `protocol_handler()` clone is captured by both clones.
+**Test 5: `iroh_install_request_handler_last_call_wins`** — Idempotent contract: a second `install_request_handler` call replaces the first; subsequent `request_heads` invokes the latest. (B-4.4 implementation revision, 2026-05-21: original spec called for `_protocol_handler_clone_does_not_break`; the shared-state-via-Arc invariant is structurally guaranteed by the type system — `Arc::clone` does not break sharing. The replacement test covers the trait's stated last-call-wins contract directly, which is the user-visible behavior.)
 
 ### 4.3 Round-trip + wire-freeze tests — `crates/types/tests/wire_freeze.rs`
 
