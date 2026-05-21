@@ -1196,6 +1196,19 @@ impl Runtime {
     async fn handle_heads_summary(&mut self, remote: HeadsSummary) -> Result<(), RuntimeError> {
         self.check_fuel_table_version(&remote);
 
+        // B-4.6: populate the peer-authority index from the signed
+        // HeadsSummary. The signer attests to having events for every
+        // author in `remote.authors` (else it could not advertise
+        // valid tip hashes). Future Pending/InvalidChain recoveries
+        // on these authors will target `remote.signed_by_peer` via
+        // direct-stream. The verify-side filter at
+        // `verify_heads_summary` (line 1836) ensures
+        // `remote.signed_by_peer != self.peer_key.public` here, so
+        // we never record ourselves. Per B-4.6 spec §3.3.
+        for head in &remote.authors {
+            self.record_peer_authority(remote.signed_by_peer, head.author);
+        }
+
         let local_map: BTreeMap<AuthorPubkey, (u64, EventHash)> = self
             .dag
             .author_heads()
@@ -1439,10 +1452,6 @@ impl Runtime {
     /// — we just received a signed `HeadsSummary` from `peer` advertising
     /// it. Move `peer` to the front of the per-author Vec (MRU); on
     /// overflow, drop the tail. Per B-4.6 spec §3.2.
-    #[allow(
-        dead_code,
-        reason = "wired in Task 2 (handle_heads_summary) and Task 3 (request_author_chain_gap)"
-    )]
     fn record_peer_authority(&mut self, peer: PeerPubkey, author: AuthorPubkey) {
         let entry = self.peer_authority_index.entry(author).or_default();
         // Remove existing occurrence (if any) so the move-to-front is
