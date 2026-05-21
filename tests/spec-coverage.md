@@ -39,13 +39,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:424
 
 ## convergence.md §4.2 — InvalidChain recovery via direct-stream when index populated (B-4.6 §4.1 test 6)
-- crates/kernel/tests/peer_authority_index.rs:727
-
-## convergence.md §4.2 — Pending recovery via direct-stream when index is populated (B-4.6 §4.1 test 4)
-- crates/kernel/tests/peer_authority_index.rs:529
+- crates/kernel/tests/peer_authority_index.rs:758
 
 ## convergence.md §4.2 — Pending/InvalidChain fallback to gossip when index is empty (B-4.6 §4.1 test 5)
-- crates/kernel/tests/peer_authority_index.rs:634
+- crates/kernel/tests/peer_authority_index.rs:662
 
 ## convergence.md §4.2 — `MemBus::inject_lag(topic)` test affordance for
 - crates/network/tests/memory_basic.rs:89
@@ -59,14 +56,17 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.2 — direct-stream backfill failure (B-4.5 §4.1 test 2)
 - crates/kernel/tests/direct_backfill.rs:236
 
+## convergence.md §4.2 — end-to-end convergence via direct-stream with a populated index (B-4.6 §4.1 test 4)
+- crates/kernel/tests/peer_authority_index.rs:541
+
 ## convergence.md §4.2 — legacy gossip-routed backfill still serviced (B-4.5 §4.1 test 4; spec note "`handle_heads_request` stays
 - crates/kernel/tests/direct_backfill.rs:375
 
 ## convergence.md §4.2 — peer-authority index MRU move-to-front (B-4.6 §4.1 test 2)
-- crates/kernel/tests/peer_authority_index.rs:251
+- crates/kernel/tests/peer_authority_index.rs:254
 
 ## convergence.md §4.2 — peer-authority index capped at 8 per author (B-4.6 §4.1 test 3)
-- crates/kernel/tests/peer_authority_index.rs:415
+- crates/kernel/tests/peer_authority_index.rs:424
 
 ## convergence.md §4.2 — peer-authority index populated by HeadsSummary receipt (B-4.6 §4.1 test 1)
 - crates/kernel/tests/peer_authority_index.rs:125
