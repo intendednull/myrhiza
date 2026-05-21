@@ -16,8 +16,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bincode::Options;
+#[allow(
+    unused_imports,
+    reason = "HeadsStreamError used in drain_heads_response (Task 3)"
+)]
 use myrhiza_network::{
-    ArcRequestHandler, GossipMessage, HeadsStream, NetError, Network, SubError, Subscription,
+    ArcRequestHandler, GossipMessage, HeadsResponder, HeadsStream, HeadsStreamError, NetError,
+    Network, RequestHandler, SubError, Subscription,
 };
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
@@ -256,6 +261,19 @@ pub enum PeerWarning {
         /// pushed (1, 2, 3, ... up to `transport_error_halt_threshold`).
         consecutive: usize,
     },
+
+    /// A direct-stream `request_heads` call to a peer failed before any
+    /// events were streamed back — typically because the peer is
+    /// unreachable, hasn't registered the heads-request ALPN, or has no
+    /// handler installed. The runtime continues; the next periodic
+    /// `HeadsSummary` tick or fresh inbound `HeadsSummary` will trigger a
+    /// retry. Per B-4.5 spec §3.2.
+    DirectRequestFailed {
+        /// The target peer the request was directed at.
+        peer: PeerPubkey,
+        /// Human-readable diagnostic from `NetError::RequestFailed`.
+        reason: String,
+    },
 }
 
 /// Command sent into the runtime task via [`RuntimeHandle::author_tx`].
@@ -273,6 +291,74 @@ pub enum AuthorCommand {
 
     /// Cooperative shutdown — runtime task exits its select loop.
     Shutdown,
+}
+
+/// Command sent to the runtime task by [`KernelRequestHandler`] when
+/// an inbound direct-stream `HeadsRequest` arrives.
+///
+/// Drained by the select loop's `heads_req_rx.recv()` arm and processed
+/// via [`Runtime::serve_direct_heads_request`].
+///
+/// Per B-4.5 spec §3.1.
+#[allow(dead_code, reason = "wired in Tasks 2-5")]
+pub(crate) struct HeadsRequestCommand {
+    /// QUIC-TLS-confirmed pubkey of the peer that issued the request.
+    pub(crate) requester: PeerPubkey,
+    /// The decoded request payload (already topic-validated by the
+    /// handler shim).
+    pub(crate) request: DirectHeadsRequest,
+    /// Sender half of the response stream; the runtime pushes events
+    /// through `responder.send(event)`; dropping the responder signals
+    /// clean EOF to the requester.
+    pub(crate) responder: HeadsResponder,
+}
+
+/// [`RequestHandler`] impl installed by [`Runtime::start`] on the
+/// underlying [`Network`]. Forwards inbound direct-stream requests to
+/// the runtime task via mpsc; does topic validation (defense in depth)
+/// to prevent the same handler being misregistered on a different
+/// topic.
+///
+/// Per B-4.5 spec §3.1.
+#[allow(dead_code, reason = "wired in Tasks 2-5")]
+pub(crate) struct KernelRequestHandler {
+    /// Sender half of the runtime's inbound-direct-request mailbox.
+    tx: mpsc::Sender<HeadsRequestCommand>,
+    /// The topic this handler services. Inbound requests for any other
+    /// topic are silently dropped (clean EOF).
+    topic: Topic,
+}
+
+#[async_trait::async_trait]
+impl RequestHandler for KernelRequestHandler {
+    #[allow(dead_code, reason = "wired in Tasks 2-5")]
+    async fn handle(
+        &self,
+        requester: PeerPubkey,
+        request: DirectHeadsRequest,
+        responder: HeadsResponder,
+    ) {
+        // Defense in depth — confirm the request targets the topic
+        // this runtime services. The IrohNetwork routes by peer+ALPN;
+        // this guards against an embedder that registers the same
+        // handler against multiple per-topic networks by mistake.
+        if request.topic != self.topic {
+            // Drop responder — requester sees clean EOF.
+            return;
+        }
+        // Forward to runtime. If the runtime task has exited, the
+        // send fails; dropping the responder yields EOF to the
+        // requester. No diagnostic surfaced — the runtime has already
+        // shut down, there is nothing to log into.
+        let _ = self
+            .tx
+            .send(HeadsRequestCommand {
+                requester,
+                request,
+                responder,
+            })
+            .await;
+    }
 }
 
 /// Owner-side handle to a spawned per-topic runtime task.
