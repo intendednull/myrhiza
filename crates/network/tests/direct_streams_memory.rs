@@ -11,7 +11,6 @@ use myrhiza_types::{
 };
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 const PEER_A: [u8; 32] = [0xA1; 32];
 const PEER_B: [u8; 32] = [0xB2; 32];
@@ -201,22 +200,13 @@ async fn mem_request_handler_sees_requester_pubkey() {
         .request_heads(pk(PEER_B), sample_request())
         .await
         .expect("request_heads");
+    // Drain the stream — `stream.next().await` returns `None` only
+    // after the spawned handler task's `HeadsResponder` is dropped,
+    // which happens when `CapturingHandler::handle` returns. The
+    // function body writes `seen_requester` BEFORE returning, so the
+    // mutex value is guaranteed observable by the time EOF fires.
+    // No polling needed.
     while stream.next().await.is_some() {}
-
-    // Give the spawned handler task a moment to write to `captured`.
-    // The stream-EOF observation alone doesn't guarantee the handler
-    // has returned (responder drops before final tx flush).
-    let deadline = tokio::time::sleep(Duration::from_millis(100));
-    tokio::pin!(deadline);
-    loop {
-        if captured.lock().unwrap().is_some() {
-            break;
-        }
-        tokio::select! {
-            () = &mut deadline => panic!("handler never recorded requester pubkey"),
-            () = tokio::time::sleep(Duration::from_millis(5)) => {},
-        }
-    }
     assert_eq!(*captured.lock().unwrap(), Some(pk(PEER_A)));
 }
 
