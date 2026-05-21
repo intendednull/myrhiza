@@ -412,9 +412,12 @@ pub struct Runtime {
     tip_fast_path_hits: Arc<Mutex<usize>>,
 
     /// Count of consecutive `SubError::TransportError` returns from
-    /// the active subscription. Resets to 0 on `Ok(Some(_))`. When
-    /// this reaches `cfg.transport_error_halt_threshold`, the runtime
-    /// signals halt and exits the task. Per B-4.3 spec §3.3.
+    /// the active subscription. Resets to 0 on `Ok(Some(_))`.
+    /// `Ok(None)` exits the task immediately (clean close path)
+    /// without touching this counter. `Lagged` and `DecodeFailed`
+    /// leave it unchanged (neutral). When this reaches
+    /// `cfg.transport_error_halt_threshold`, the runtime signals
+    /// halt and exits the task. Per B-4.3 spec §3.3.
     consecutive_transport_errors: usize,
 }
 
