@@ -620,22 +620,24 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
 
             // Read the request frame using the shared helper so there
             // is no duplicated length-prefix logic.
-            let req_bytes =
-                match read_length_prefixed_frame_from_iroh_recv(&mut recv_stream).await {
-                    Ok(Some(b)) => b,
-                    Ok(None) => {
-                        // Clean EOF before any request bytes — no-op.
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        return Err(std::io::Error::other(format!("read request: {e}")).into());
-                    }
-                };
+            let req_bytes = match read_length_prefixed_frame_from_iroh_recv(&mut recv_stream).await
+            {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    // Clean EOF before any request bytes — close
+                    // our send side with FIN (not RESET_STREAM)
+                    // for symmetry with the no-handler path.
+                    let _ = send_stream.finish();
+                    return Ok(());
+                }
+                Err(e) => {
+                    return Err(std::io::Error::other(format!("read request: {e}")).into());
+                }
+            };
 
-            let request: DirectHeadsRequest =
-                canonical_bincode()
-                    .deserialize(&req_bytes)
-                    .map_err(|e| std::io::Error::other(format!("decode request: {e}")))?;
+            let request: DirectHeadsRequest = canonical_bincode()
+                .deserialize(&req_bytes)
+                .map_err(|e| std::io::Error::other(format!("decode request: {e}")))?;
 
             // Snapshot the Arc so the Mutex is not held across the
             // handler invocation.
@@ -674,10 +676,9 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
                             Ok(b) => b,
                             Err(e) => {
                                 handler_task.abort();
-                                return Err(std::io::Error::other(format!(
-                                    "encode event: {e}"
-                                ))
-                                .into());
+                                return Err(
+                                    std::io::Error::other(format!("encode event: {e}")).into()
+                                );
                             }
                         };
                         let frame = build_length_prefixed_frame(&bytes);
@@ -691,9 +692,12 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
                     }
                     Err(_handler_err) => {
                         // Handler signalled an error via the channel.
-                        // Stop forwarding; the partial response is what
-                        // the requester sees.  Handler task will exit
-                        // on its own (or has already).
+                        // Abort the spawned task explicitly — a buggy
+                        // handler that sends Err but keeps running
+                        // would otherwise block the `handler_task.await`
+                        // below indefinitely. Mirrors the abort sites
+                        // on the encode-error and write-error paths.
+                        handler_task.abort();
                         break;
                     }
                 }

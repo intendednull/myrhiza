@@ -466,15 +466,22 @@ impl IrohNetwork {
     pub fn protocol_handler(&self) -> HeadsRequestProtocol {
         HeadsRequestProtocol {
             handler: self.request_handler.clone(),
-            local_peer: self.peer_pubkey,
         }
     }
 }
 
+// **B-4.4 implementation revision (2026-05-21)**: the spec draft
+// included a `local_peer: PeerPubkey` field carrying the responder's
+// own pubkey. After implementing the accept path it became clear no
+// site reads it — handlers receive `requester` (the remote peer), and
+// each `HeadsRequestProtocol` is bound to one `IrohNetwork` so the
+// "local" identity is implicit at the type level. The field was
+// removed to avoid dead state. If a future handler needs the local
+// peer, expose `IrohNetwork::peer_pubkey()` (already public) or wire
+// it into `RequestHandler::handle` at the trait level.
 #[derive(Clone)]
 pub struct HeadsRequestProtocol {
     handler: Arc<Mutex<Option<ArcRequestHandler>>>,
-    local_peer: PeerPubkey,
 }
 
 impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
