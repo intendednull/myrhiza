@@ -1,5 +1,7 @@
-//! B-4.2 acceptance tests for sender attribution on `HeadsSummary` +
-//! `HeadsRequest` plus drop-as-unsubscribe semantics.
+//! B-4.2 acceptance tests for sender attribution on `HeadsSummary`
+//! plus drop-as-unsubscribe semantics. The companion `HeadsRequest`
+//! attribution tests were retired in B-4.7 (§3.7) along with the
+//! gossip-routed HeadsRequest surface.
 //!
 //! Per docs/specs/2026-05-20-plan-b-4-2-attribution-design.md §5.
 

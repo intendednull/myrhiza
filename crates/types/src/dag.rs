@@ -195,7 +195,9 @@ pub struct DriftSignedPayload {
 /// `HeadsSummary` per convergence.md §4.2 + B-4.2 Q-4 attribution.
 ///
 /// Periodic per-author DAG-tip snapshot used by peers to detect when
-/// they are behind on some authors and need to issue [`HeadsRequest`].
+/// they are behind on some authors and need to issue a backfill
+/// request (via direct-stream `request_heads`; see
+/// [`DirectHeadsRequest`]).
 ///
 /// **B-4.2 wire shape**: `signed_by_peer` + `signature` carry
 /// peer-level attribution (mirroring [`DriftMessage`]'s pattern at
@@ -257,15 +259,16 @@ pub struct EventRequest {
     pub to_seq: u64,
 }
 
-/// Direct-stream variant of [`HeadsRequest`] sent over a dedicated
+/// Direct-stream backfill request sent over a dedicated
 /// ALPN-multiplexed QUIC bidi stream (per B-4.4 spec §1).
 ///
-/// **Distinguishing from [`HeadsRequest`]:** the gossip-routed
-/// `HeadsRequest` carries `signed_by_peer` + `signature` because
-/// Plumtree forwarding hides the original publisher (B-4.2 §3.0).
-/// Direct-stream has no such issue — mutual QUIC TLS authenticates the
-/// requester; the topic is carried in the request payload and bound to
-/// one stream on one ALPN, so cross-topic replay has no vector.
+/// **No in-band signature**: mutual QUIC TLS authenticates the
+/// requester at the transport layer; the topic is carried in the
+/// request payload and bound to one stream on one ALPN, so cross-topic
+/// replay has no vector. (Historical note: a gossip-routed `HeadsRequest`
+/// variant existed pre-B-4.7 and carried `signed_by_peer` + `signature`
+/// because Plumtree forwarding obscured the publisher; the gossip-routed
+/// path was retired in B-4.7 in favor of direct-streams only.)
 ///
 /// **Wire layout (canonical bincode v1, normative)**:
 ///   1. `topic`: `Topic` (`serde_bytes_32_pub`, 40 bytes)
@@ -278,8 +281,9 @@ pub struct DirectHeadsRequest {
     /// Topic this request applies to. The responder MUST verify it
     /// services this topic before serving events.
     pub topic: Topic,
-    /// Range requests included in this request. Same bounded-by-256
-    /// semantics as [`HeadsRequest::requests`].
+    /// Range requests included in this request. A single request may
+    /// cover at most 256 events (`to_seq - from_seq <= 255`); the
+    /// responder silently drops over-sized entries.
     pub requests: Vec<EventRequest>,
 }
 
