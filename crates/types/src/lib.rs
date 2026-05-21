@@ -29,8 +29,9 @@ pub use event::Event;
 
 pub mod dag;
 pub use dag::{
-    AuthorHead, AuthorSeq, DriftAnchor, DriftMessage, DriftSignedPayload, EventRequest, GenesisV1,
-    HeadsRequest, HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload,
+    AuthorHead, AuthorSeq, DirectHeadsRequest, DriftAnchor, DriftMessage, DriftSignedPayload,
+    EventRequest, GenesisV1, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary,
+    HeadsSummarySignedPayload,
 };
 
 pub mod limits;

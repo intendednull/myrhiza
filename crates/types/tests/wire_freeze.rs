@@ -9,9 +9,10 @@
 
 use bincode::Options;
 use myrhiza_types::{
-    AuthorHead, AuthorPubkey, AuthorSeq, DriftAnchor, DriftMessage, DriftSignedPayload, EventHash,
-    EventRequest, GenesisV1, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary,
-    HeadsSummarySignedPayload, PeerPubkey, canonical_bincode,
+    AuthorHead, AuthorPubkey, AuthorSeq, DirectHeadsRequest, DriftAnchor, DriftMessage,
+    DriftSignedPayload, EventHash, EventRequest, GenesisV1, HeadsRequest,
+    HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload, PeerPubkey,
+    canonical_bincode,
 };
 
 fn hex_dump(bytes: &[u8]) -> String {
@@ -396,4 +397,29 @@ fn heads_request_first_n_bytes_match_signed_payload_leading_fields() {
         &signed_bytes[..common_prefix_len],
         "HeadsRequest canonical bytes must prefix-match HeadsRequestSignedPayload's leading fields (spec §3.0)"
     );
+}
+
+#[test]
+fn direct_heads_request_wire_freeze() {
+    let r = DirectHeadsRequest {
+        topic: myrhiza_types::Topic::from_bytes([0xAB; 32]),
+        requests: vec![EventRequest {
+            author: AuthorPubkey::from_bytes([8; 32]),
+            from_seq: 1,
+            to_seq: 10,
+        }],
+    };
+    let bytes = canonical_bincode().serialize(&r).expect("encode");
+    // Layout:
+    //   topic: 8-byte u64-BE len-prefix (32) + 32 raw [0xAB; 32] = 40 bytes
+    //   requests: 8-byte u64-BE vec-len (1) + EventRequest:
+    //     author: 8-byte len-prefix (32) + 32 raw [0x08; 32] = 40 bytes
+    //     from_seq: 8-byte u64-BE = 1
+    //     to_seq:   8-byte u64-BE = 10
+    //   = 8 + 40 + 8 + 8 = 64 bytes
+    // Total: 40 + 64 = 104 bytes
+    assert_eq!(bytes.len(), 104, "DirectHeadsRequest wire size");
+    let hex_repr = hex_dump(&bytes);
+    let expected: &str = "0000000000000020abababababababababababababababababababababababababababababababab0000000000000001000000000000002008080808080808080808080808080808080808080808080808080808080808080000000000000001000000000000000a";
+    assert_eq!(hex_repr, expected, "DirectHeadsRequest wire-freeze drift");
 }

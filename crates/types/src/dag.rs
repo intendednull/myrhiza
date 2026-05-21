@@ -291,6 +291,32 @@ pub struct HeadsRequestSignedPayload {
     pub topic: Topic,
 }
 
+/// Direct-stream variant of [`HeadsRequest`] sent over a dedicated
+/// ALPN-multiplexed QUIC bidi stream (per B-4.4 spec §1).
+///
+/// **Distinguishing from [`HeadsRequest`]:** the gossip-routed
+/// `HeadsRequest` carries `signed_by_peer` + `signature` because
+/// Plumtree forwarding hides the original publisher (B-4.2 §3.0).
+/// Direct-stream has no such issue — mutual QUIC TLS authenticates the
+/// requester; the topic is carried in the request payload and bound to
+/// one stream on one ALPN, so cross-topic replay has no vector.
+///
+/// **Wire layout (canonical bincode v1, normative)**:
+///   1. `topic`: `Topic` (serde_bytes_32_pub, 40 bytes)
+///   2. `requests`: `Vec<EventRequest>` (length-prefixed sequence)
+///
+/// Field order is normative — emitter and verifier MUST encode fields
+/// in declaration order.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DirectHeadsRequest {
+    /// Topic this request applies to. The responder MUST verify it
+    /// services this topic before serving events.
+    pub topic: Topic,
+    /// Range requests included in this request. Same bounded-by-256
+    /// semantics as [`HeadsRequest::requests`].
+    pub requests: Vec<EventRequest>,
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests_drift_heads {
@@ -405,5 +431,24 @@ mod tests_drift_heads {
         assert_eq!(decoded.requests[0].from_seq, p.requests[0].from_seq);
         assert_eq!(decoded.requests[0].to_seq, p.requests[0].to_seq);
         assert_eq!(p.topic, decoded.topic);
+    }
+
+    #[test]
+    fn direct_heads_request_round_trips() {
+        let r = DirectHeadsRequest {
+            topic: crate::Topic::from_bytes([0xAB; 32]),
+            requests: vec![EventRequest {
+                author: AuthorPubkey::from_bytes([8; 32]),
+                from_seq: 1,
+                to_seq: 10,
+            }],
+        };
+        let bytes = canonical_bincode().serialize(&r).expect("encode");
+        let decoded: DirectHeadsRequest = canonical_bincode().deserialize(&bytes).expect("decode");
+        assert_eq!(r.topic, decoded.topic);
+        assert_eq!(decoded.requests.len(), 1);
+        assert_eq!(decoded.requests[0].author, r.requests[0].author);
+        assert_eq!(decoded.requests[0].from_seq, r.requests[0].from_seq);
+        assert_eq!(decoded.requests[0].to_seq, r.requests[0].to_seq);
     }
 }
