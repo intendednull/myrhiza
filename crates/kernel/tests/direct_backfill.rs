@@ -6,16 +6,12 @@
 //! `multi_thread, worker_threads = 2` so the runtime task, drainer
 //! task, and handler task can run concurrently.
 //!
-//! ## Test 5 — deferred (existing coverage cited)
+//! ## Test 4 — removed (B-4.7)
 //!
-//! `direct_backfill_pending_path_still_emits_gossip_routed_heads_request`
-//! is NOT implemented here. `convergence.rs::
-//! pending_event_triggers_heads_request_not_heads_summary` (line 541)
-//! already proves that the `Pending` / `InvalidChain` path in
-//! `request_author_chain_gap` still emits
-//! `GossipMessage::HeadsRequest` on the gossip topic — and that code
-//! path was deliberately NOT changed by B-4.5. Duplicating the
-//! assertion here would add noise without additional coverage.
+//! `direct_backfill_legacy_gossip_routed_request_still_serviced` was
+//! removed by B-4.7 when the gossip-routed `HeadsRequest` surface
+//! (`GossipMessage::HeadsRequest` + `handle_heads_request`) was retired.
+//! The surface it tested no longer exists in the kernel.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -25,11 +21,10 @@ use std::time::Duration;
 use bincode::Options;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
 use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime, RuntimeCfg};
-use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
+use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network};
 use myrhiza_types::{
     AuthorHead, AuthorPubkey, BundleHash, DirectHeadsRequest, EventHash, EventRequest, GenesisV1,
-    HeadsRequest, HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload, Topic,
-    canonical_bincode,
+    HeadsSummary, HeadsSummarySignedPayload, Topic, canonical_bincode,
 };
 use tokio::time::timeout;
 
@@ -81,33 +76,6 @@ fn build_signed_heads_summary(kp: &PeerKeypair, t: Topic, seq: u64) -> HeadsSumm
     HeadsSummary {
         authors,
         kernel_fuel_table_version: 1,
-        signed_by_peer: kp.public,
-        signature,
-    }
-}
-
-/// Build a correctly-signed gossip-routed `HeadsRequest`. Used by
-/// `direct_backfill_legacy_gossip_routed_request_still_serviced`.
-fn build_signed_heads_request(
-    kp: &PeerKeypair,
-    t: Topic,
-    author: AuthorPubkey,
-    from_seq: u64,
-    to_seq: u64,
-) -> HeadsRequest {
-    let requests = vec![EventRequest {
-        author,
-        from_seq,
-        to_seq,
-    }];
-    let payload = HeadsRequestSignedPayload {
-        requests: requests.clone(),
-        topic: t,
-    };
-    let bytes = canonical_bincode().serialize(&payload).expect("encode");
-    let signature = kp.sign(&bytes);
-    HeadsRequest {
-        requests,
         signed_by_peer: kp.public,
         signature,
     }
@@ -366,101 +334,6 @@ async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
         Ok(Some(Err(e))) => panic!("expected clean EOF, got stream error: {e:?}"),
         Err(e) => panic!("timeout waiting for EOF on wrong-topic request: {e}"),
     }
-}
-
-// ===========================================================================
-// Test 4: legacy gossip-routed HeadsRequest is still serviced
-// ===========================================================================
-
-/// Covers: convergence.md §4.2 — legacy gossip-routed backfill still serviced (B-4.5 §4.1 test 4; spec note "`handle_heads_request` stays
-/// active for gossip-routed inbound requests".
-///
-/// Peer A has authored 3 events. A tap peer publishes a gossip-routed
-/// `GossipMessage::HeadsRequest` covering A's author chain. A's runtime
-/// must respond by publishing the matching events on the gossip topic
-/// (via `handle_heads_request` — unchanged by B-4.5). The tap observes
-/// at least one `GossipMessage::Event` in response.
-///
-/// This confirms the backwards-compatible path stays live after the
-/// `handle_heads_summary` switchover.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn direct_backfill_legacy_gossip_routed_request_still_serviced() {
-    let bus = MemBus::new(256);
-    let t = topic();
-
-    // Peer A — author-capable.
-    let kp_a = PeerKeypair::deterministic(401);
-    let author_kp_a = AuthorKeypair::deterministic(401);
-    let net_a = MemNetwork::new(bus.clone(), kp_a.public);
-    let runtime_a = Runtime::start(
-        net_a,
-        t,
-        APP_BUNDLE,
-        "main".into(),
-        helpers::counter_handle(),
-        kp_a,
-        Some(AuthorKeypair::deterministic(401)),
-        fast_cfg(),
-    )
-    .await
-    .expect("runtime_a start");
-
-    // Author genesis + 2 increments = 3 events.
-    let (tx0, rx0) = tokio::sync::oneshot::channel();
-    runtime_a
-        .author_tx
-        .send(AuthorCommand::Author {
-            payload: genesis_payload(TOPIC_SEED, author_kp_a.author),
-            deps: BTreeSet::new(),
-            reply: tx0,
-        })
-        .await
-        .expect("author genesis");
-    rx0.await.expect("genesis reply").expect("genesis ok");
-
-    for delta in [1_i64, 1] {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        runtime_a
-            .author_tx
-            .send(AuthorCommand::Author {
-                payload: delta.to_be_bytes().to_vec(),
-                deps: BTreeSet::new(),
-                reply: tx,
-            })
-            .await
-            .expect("author increment");
-        rx.await.expect("increment reply").expect("ok");
-    }
-
-    // Tap — subscribes to the topic to observe A's gossip response.
-    let kp_tap = PeerKeypair::deterministic(402);
-    let net_tap = MemNetwork::new(bus.clone(), kp_tap.public);
-    let mut tap = net_tap.subscribe(t, vec![]).await.expect("tap subscribe");
-
-    // Publish a gossip-routed HeadsRequest for A's author chain.
-    let real_author = author_kp_a.author;
-    let req = build_signed_heads_request(&kp_tap, t, real_author, 1, 3);
-    net_tap
-        .publish(t, GossipMessage::HeadsRequest(req))
-        .await
-        .expect("publish HeadsRequest");
-
-    // Drain the tap until we see at least one GossipMessage::Event from A.
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    let mut saw_event = false;
-    while std::time::Instant::now() < deadline {
-        let r = timeout(Duration::from_millis(50), tap.recv()).await;
-        if let Ok(Ok(Some(GossipMessage::Event(_)))) = r {
-            saw_event = true;
-            break;
-        }
-    }
-
-    assert!(
-        saw_event,
-        "tap must see at least one gossip-routed Event from A's handle_heads_request \
-         (backwards-compat path must remain active after B-4.5 switchover)"
-    );
 }
 
 // ===========================================================================

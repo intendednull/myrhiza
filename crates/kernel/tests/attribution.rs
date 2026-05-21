@@ -10,10 +10,10 @@ use std::time::Duration;
 use bincode::Options;
 use myrhiza_kernel::identity::PeerKeypair;
 use myrhiza_kernel::runtime::{PeerWarning, Runtime, RuntimeCfg};
-use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
+use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network};
 use myrhiza_types::{
-    AuthorHead, AuthorPubkey, BundleHash, EventHash, EventRequest, HeadsRequest,
-    HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload, Topic, canonical_bincode,
+    AuthorHead, AuthorPubkey, BundleHash, EventHash, HeadsSummary, HeadsSummarySignedPayload,
+    Topic, canonical_bincode,
 };
 
 mod helpers;
@@ -92,51 +92,6 @@ fn heads_summary_sign_then_verify_roundtrips() {
     .expect("HeadsSummary signature must verify");
 }
 
-/// Covers: convergence.md §4.2
-///
-/// Same round-trip as test 1, for `HeadsRequest` / `HeadsRequestSignedPayload`.
-#[test]
-fn heads_request_sign_then_verify_roundtrips() {
-    let kp = PeerKeypair::deterministic(2);
-    let topic = Topic::from_bytes([0xBB; 32]);
-    let requests = vec![EventRequest {
-        author: AuthorPubkey::from_bytes([2; 32]),
-        from_seq: 1,
-        to_seq: 10,
-    }];
-
-    // --- sign side ---
-    let signed_payload = HeadsRequestSignedPayload {
-        requests: requests.clone(),
-        topic,
-    };
-    let sign_bytes = canonical_bincode()
-        .serialize(&signed_payload)
-        .expect("encode signed payload");
-    let signature = kp.sign(&sign_bytes);
-
-    let msg = HeadsRequest {
-        requests: requests.clone(),
-        signed_by_peer: kp.public,
-        signature,
-    };
-
-    // --- verify side ---
-    let verify_payload = HeadsRequestSignedPayload {
-        requests: msg.requests.clone(),
-        topic,
-    };
-    let verify_bytes = canonical_bincode()
-        .serialize(&verify_payload)
-        .expect("encode verify payload");
-    myrhiza_manifest::verify_signature(
-        msg.signed_by_peer.as_bytes(),
-        &verify_bytes,
-        &msg.signature,
-    )
-    .expect("HeadsRequest signature must verify");
-}
-
 // ============================================================================
 // Tests 3-4: bad-signature rejection (pure-types, default flavor)
 // ============================================================================
@@ -189,52 +144,6 @@ fn verify_rejects_bad_signature_heads_summary() {
     assert!(
         result.is_err(),
         "verify_signature must return Err on bit-flipped HeadsSummary signature"
-    );
-}
-
-/// Covers: convergence.md §4.6
-///
-/// Flip a single bit in a valid `HeadsRequest` signature and assert
-/// `verify_signature` returns `Err(_)`.
-#[test]
-fn verify_rejects_bad_signature_heads_request() {
-    let kp = PeerKeypair::deterministic(4);
-    let topic = Topic::from_bytes([0xDD; 32]);
-    let requests = vec![EventRequest {
-        author: AuthorPubkey::from_bytes([4; 32]),
-        from_seq: 5,
-        to_seq: 15,
-    }];
-
-    let payload = HeadsRequestSignedPayload {
-        requests: requests.clone(),
-        topic,
-    };
-    let bytes = canonical_bincode().serialize(&payload).expect("encode");
-    let mut signature = kp.sign(&bytes);
-    signature[0] ^= 0xFF;
-
-    let msg = HeadsRequest {
-        requests,
-        signed_by_peer: kp.public,
-        signature,
-    };
-
-    let verify_payload = HeadsRequestSignedPayload {
-        requests: msg.requests.clone(),
-        topic,
-    };
-    let verify_bytes = canonical_bincode()
-        .serialize(&verify_payload)
-        .expect("encode");
-    let result = myrhiza_manifest::verify_signature(
-        msg.signed_by_peer.as_bytes(),
-        &verify_bytes,
-        &msg.signature,
-    );
-    assert!(
-        result.is_err(),
-        "verify_signature must return Err on bit-flipped HeadsRequest signature"
     );
 }
 
@@ -302,53 +211,6 @@ fn verify_rejects_cross_topic_replay_heads_summary() {
     );
 }
 
-/// Covers: convergence.md §4.6
-///
-/// Same cross-topic replay defense test for `HeadsRequest`.
-#[test]
-fn verify_rejects_cross_topic_replay_heads_request() {
-    let kp = PeerKeypair::deterministic(6);
-    let topic_x = Topic::from_bytes([0x33; 32]);
-    let topic_y = Topic::from_bytes([0x44; 32]);
-    assert_ne!(topic_x, topic_y);
-
-    let requests = vec![EventRequest {
-        author: AuthorPubkey::from_bytes([6; 32]),
-        from_seq: 1,
-        to_seq: 5,
-    }];
-
-    // Sign under topic X.
-    let payload_x = HeadsRequestSignedPayload {
-        requests: requests.clone(),
-        topic: topic_x,
-    };
-    let sign_bytes = canonical_bincode().serialize(&payload_x).expect("encode");
-    let signature = kp.sign(&sign_bytes);
-
-    let msg = HeadsRequest {
-        requests: requests.clone(),
-        signed_by_peer: kp.public,
-        signature,
-    };
-
-    // Verify under topic Y — must fail.
-    let payload_y = HeadsRequestSignedPayload {
-        requests: msg.requests.clone(),
-        topic: topic_y,
-    };
-    let verify_bytes = canonical_bincode().serialize(&payload_y).expect("encode");
-    let result = myrhiza_manifest::verify_signature(
-        msg.signed_by_peer.as_bytes(),
-        &verify_bytes,
-        &msg.signature,
-    );
-    assert!(
-        result.is_err(),
-        "cross-topic replay of HeadsRequest must fail verification"
-    );
-}
-
 // ============================================================================
 // Tests 7-10: runtime-level dispatch (multi_thread, worker_threads = 2)
 // ============================================================================
@@ -360,10 +222,9 @@ fn verify_rejects_cross_topic_replay_heads_request() {
 /// directly (bypassing `Runtime::publish_heads_summary`, which signs
 /// correctly). Peer B's runtime receives the message.
 ///
-/// Assertions:
-///   (a) `peer_warnings` on B accumulates `PeerWarning::SignatureInvalid`.
-///   (b) The body-consuming handler did NOT run — B did not publish a
-///       backfill `HeadsRequest` in response (captured via a 3rd tap).
+/// Assertion: `peer_warnings` on B accumulates `PeerWarning::SignatureInvalid`.
+/// (The B-4.2 assertion that B does not issue a gossip-routed `HeadsRequest`
+/// was removed by B-4.7 — that surface no longer exists.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_drops_heads_summary_with_bad_signature() {
     let bus = MemBus::new(256);
@@ -396,21 +257,6 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
     // Give B's startup HeadsSummary a chance to flush.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Open the tap AFTER B's startup emit, so we only capture
-    // B's reaction to A's bad-sig message.
-    //
-    // Synthetic bus-injection MemNetwork — no Runtime attached, no
-    // install_request_handler call from this MemNetwork. Pubkey choice
-    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
-    let net_tap = MemNetwork::new(
-        bus.clone(),
-        myrhiza_types::PeerPubkey::from_bytes([0xE1; 32]),
-    );
-    let mut tap = net_tap
-        .subscribe(topic, vec![])
-        .await
-        .expect("tap subscribe");
-
     // Hand-forge a bad-sig HeadsSummary: signed_by_peer = A's pubkey
     // but signature = [0xFF; 64] (definitely wrong).
     let bad_sig_summary = HeadsSummary {
@@ -436,25 +282,10 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
         .await
         .expect("A publish bad-sig HeadsSummary");
 
-    // Drain the tap for ~300ms. B must NOT publish a HeadsRequest.
-    let deadline = std::time::Instant::now() + Duration::from_millis(300);
-    let mut saw_heads_request = false;
-    while std::time::Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let r = tokio::time::timeout(remaining.min(Duration::from_millis(30)), tap.recv()).await;
-        match r {
-            Ok(Ok(Some(GossipMessage::HeadsRequest(_)))) => {
-                saw_heads_request = true;
-                break;
-            }
-            // Other decoded messages (e.g. the bad-sig HeadsSummary itself)
-            // and poll timeouts are both ignored — keep draining.
-            Ok(Ok(Some(_))) | Err(_) => {}
-            Ok(Ok(None) | Err(_)) => break, // subscription closed / lagged
-        }
-    }
+    // Give B time to receive and process the message.
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // (a) B must have accumulated a SignatureInvalid warning.
+    // B must have accumulated a SignatureInvalid warning.
     let warnings = runtime_b
         .peer_warnings
         .lock()
@@ -467,132 +298,6 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
     assert_eq!(
         sig_invalid_count, 1,
         "B must record exactly one SignatureInvalid warning; saw warnings={warnings:?}"
-    );
-
-    // (b) B must NOT have published a HeadsRequest (handler didn't run).
-    assert!(
-        !saw_heads_request,
-        "B must NOT publish a HeadsRequest in response to a bad-sig HeadsSummary \
-         (handler is skipped at the verify-then-dispatch site)"
-    );
-
-    // Cleanup.
-    let _ = runtime_b
-        .author_tx
-        .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
-        .await;
-}
-
-/// Covers: convergence.md §4.4
-///
-/// Same shape as test 7 for `HeadsRequest`. Peer A hand-forges a
-/// `HeadsRequest` with a wrong signature. Peer B's runtime must
-/// surface `PeerWarning::SignatureInvalid` and NOT run the handler
-/// (i.e., NOT publish events in response).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn runtime_drops_heads_request_with_bad_signature() {
-    let bus = MemBus::new(256);
-    let app_bundle_hash = BundleHash::from_bytes([0xA2; 32]);
-    let topic_name = "main".to_string();
-    let seed = [0x02u8; 32];
-    let topic = Topic::derive(&app_bundle_hash, &seed, &topic_name);
-
-    let pub_a = PeerKeypair::deterministic(13).public;
-    let pub_b = PeerKeypair::deterministic(14).public;
-    assert_ne!(pub_a, pub_b);
-
-    // Spawn peer B (read-only).
-    let peer_kp_b_t8 = PeerKeypair::deterministic(14);
-    let net_b = MemNetwork::new(bus.clone(), peer_kp_b_t8.public);
-    let runtime_b = Runtime::start(
-        net_b,
-        topic,
-        app_bundle_hash,
-        topic_name.clone(),
-        helpers::counter_handle(),
-        peer_kp_b_t8,
-        None,
-        fast_cfg(),
-    )
-    .await
-    .expect("runtime_b start");
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Synthetic bus-injection MemNetwork — no Runtime attached, no
-    // install_request_handler call from this MemNetwork. Pubkey choice
-    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
-    let net_tap = MemNetwork::new(
-        bus.clone(),
-        myrhiza_types::PeerPubkey::from_bytes([0xE3; 32]),
-    );
-    let mut tap = net_tap
-        .subscribe(topic, vec![])
-        .await
-        .expect("tap subscribe");
-
-    // Hand-forge a bad-sig HeadsRequest.
-    let bad_sig_request = HeadsRequest {
-        requests: vec![EventRequest {
-            author: AuthorPubkey::from_bytes([0xBB; 32]),
-            from_seq: 1,
-            to_seq: 5,
-        }],
-        signed_by_peer: pub_a,
-        signature: [0xFF; 64],
-    };
-
-    // Synthetic bus-injection MemNetwork — no Runtime attached, no
-    // install_request_handler call from this MemNetwork. Pubkey choice
-    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
-    let net_a = MemNetwork::new(
-        bus.clone(),
-        myrhiza_types::PeerPubkey::from_bytes([0xE4; 32]),
-    );
-    net_a
-        .publish(topic, GossipMessage::HeadsRequest(bad_sig_request))
-        .await
-        .expect("A publish bad-sig HeadsRequest");
-
-    // Drain the tap for ~300ms. B must NOT publish Event messages in response
-    // (handle_heads_request sends events if requests match DAG entries).
-    let deadline = std::time::Instant::now() + Duration::from_millis(300);
-    let mut saw_event_response = false;
-    while std::time::Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let r = tokio::time::timeout(remaining.min(Duration::from_millis(30)), tap.recv()).await;
-        match r {
-            Ok(Ok(Some(GossipMessage::Event(_)))) => {
-                saw_event_response = true;
-                break;
-            }
-            // Other decoded messages and poll timeouts — keep draining.
-            Ok(Ok(Some(_))) | Err(_) => {}
-            Ok(Ok(None) | Err(_)) => break,
-        }
-    }
-
-    // (a) B must have accumulated a SignatureInvalid warning.
-    let warnings = runtime_b
-        .peer_warnings
-        .lock()
-        .expect("peer_warnings mutex")
-        .clone();
-    let sig_invalid_count = warnings
-        .iter()
-        .filter(|w| matches!(w, PeerWarning::SignatureInvalid { .. }))
-        .count();
-    assert_eq!(
-        sig_invalid_count, 1,
-        "B must record exactly one SignatureInvalid warning for bad-sig HeadsRequest; \
-         saw warnings={warnings:?}"
-    );
-
-    // (b) B must NOT have published any Event in response.
-    assert!(
-        !saw_event_response,
-        "B must NOT publish events in response to a bad-sig HeadsRequest \
-         (handler is skipped at the verify-then-dispatch site)"
     );
 
     // Cleanup.
