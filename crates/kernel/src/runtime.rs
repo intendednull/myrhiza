@@ -537,7 +537,10 @@ pub struct Runtime {
     /// than passing the receiver) means multiple in-flight backfill
     /// responses can all feed events into the same channel.
     /// Per B-4.5 spec §3.3.
-    #[allow(dead_code, reason = "consumed by select loop in Task 4")]
+    #[allow(
+        dead_code,
+        reason = "cloned into drainer tasks in Task 3 (issue_direct_backfill)"
+    )]
     internal_event_tx: mpsc::Sender<Event>,
 }
 
