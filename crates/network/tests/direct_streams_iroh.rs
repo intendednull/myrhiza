@@ -177,15 +177,12 @@ async fn iroh_request_heads_handler_sees_requester_pubkey() {
         .request_heads(net_b.peer_pubkey(), sample_request())
         .await
         .expect("request_heads");
+    // Drain. Drop order in HeadsRequestProtocol::accept guarantees the
+    // handler task completes (and its `seen` write commits) BEFORE
+    // send_stream.finish() sends FIN; FIN is what unblocks the
+    // requester's stream.next() to return None. So observing EOF
+    // implies the write is committed. No polling needed.
     while stream.next().await.is_some() {}
-
-    // Give handler task time to record the pubkey.
-    for _ in 0..20 {
-        if captured.lock().unwrap().is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
     assert_eq!(*captured.lock().unwrap(), Some(net_a.peer_pubkey()));
 }
 
