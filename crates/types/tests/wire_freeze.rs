@@ -10,9 +10,8 @@
 use bincode::Options;
 use myrhiza_types::{
     AuthorHead, AuthorPubkey, AuthorSeq, DirectHeadsRequest, DriftAnchor, DriftMessage,
-    DriftSignedPayload, EventHash, EventRequest, GenesisV1, HeadsRequest,
-    HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload, PeerPubkey,
-    canonical_bincode,
+    DriftSignedPayload, EventHash, EventRequest, GenesisV1, HeadsSummary,
+    HeadsSummarySignedPayload, PeerPubkey, canonical_bincode,
 };
 
 fn hex_dump(bytes: &[u8]) -> String {
@@ -163,21 +162,6 @@ fn event_request_wire_layout() {
     assert_eq!(bytes.len(), 56);
 }
 
-#[test]
-fn heads_request_wire_layout() {
-    let r = HeadsRequest {
-        requests: vec![],
-        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
-        signature: [0; 64],
-    };
-    let bytes = canonical_bincode().serialize(&r).expect("encode");
-    // requests: 8 (vec len = 0)
-    // signed_by_peer: 40
-    // signature: 72
-    // = 8 + 40 + 72 = 120
-    assert_eq!(bytes.len(), 120);
-}
-
 // ---------------------------------------------------------------------------
 // GossipMessage outer-variant wire-freeze (spec §6.2; review I-3 / M-11).
 //
@@ -187,8 +171,12 @@ fn heads_request_wire_layout() {
 //
 //   GossipMessage::Event         = 0
 //   GossipMessage::HeadsSummary  = 1
-//   GossipMessage::HeadsRequest  = 2
-//   GossipMessage::Drift         = 3
+//   GossipMessage::Drift         = 2
+//
+// Note: HeadsRequest (formerly variant 2) was removed in B-4.7 when
+// the gossip-routed HeadsRequest surface was retired in favor of
+// direct-stream backfill (peer-authority index in B-4.6 + direct-
+// stream plumbing in B-4.4 / 4.5).
 //
 // These tests pin the byte string for each variant tag so a future reorder
 // fails CI loudly — variant reordering is a wire-incompatible change.
@@ -213,14 +201,6 @@ fn sample_heads_summary() -> HeadsSummary {
     HeadsSummary {
         authors: vec![],
         kernel_fuel_table_version: 0,
-        signed_by_peer: PeerPubkey::from_bytes([0; 32]),
-        signature: [0; 64],
-    }
-}
-
-fn sample_heads_request() -> HeadsRequest {
-    HeadsRequest {
-        requests: vec![],
         signed_by_peer: PeerPubkey::from_bytes([0; 32]),
         signature: [0; 64],
     }
@@ -266,37 +246,24 @@ fn gossip_message_heads_summary_variant_tag_is_one_u32_be() {
 }
 
 #[test]
-fn gossip_message_heads_request_variant_tag_is_two_u32_be() {
-    use myrhiza_network::GossipMessage;
-
-    let msg = GossipMessage::HeadsRequest(sample_heads_request());
-    let bytes = canonical_bincode().serialize(&msg).expect("encode");
-    assert_eq!(
-        &bytes[..4],
-        &[0x00, 0x00, 0x00, 0x02],
-        "variant tag for GossipMessage::HeadsRequest must be 2 (u32 BE)"
-    );
-}
-
-#[test]
-fn gossip_message_drift_variant_tag_is_three_u32_be() {
+fn gossip_message_drift_variant_tag_is_two_u32_be() {
     use myrhiza_network::GossipMessage;
 
     let msg = GossipMessage::Drift(sample_drift_message());
     let bytes = canonical_bincode().serialize(&msg).expect("encode");
     assert_eq!(
         &bytes[..4],
-        &[0x00, 0x00, 0x00, 0x03],
-        "variant tag for GossipMessage::Drift must be 3 (u32 BE)"
+        &[0x00, 0x00, 0x00, 0x02],
+        "variant tag for GossipMessage::Drift must be 2 (u32 BE)"
     );
 }
 
 // ---------------------------------------------------------------------------
 // B-4.2 Signed-payload wire-freeze tests.
 //
-// Pin the canonical-bincode byte layout of HeadsSummarySignedPayload +
-// HeadsRequestSignedPayload, and pin the prefix-bytes property between
-// each message and its signed-payload counterpart (mirrors the existing
+// Pin the canonical-bincode byte layout of HeadsSummarySignedPayload and
+// pin the prefix-bytes property between each message and its signed-payload
+// counterpart (mirrors the existing
 // drift_message_first_three_fields_match_signed_payload_bytes test at
 // line 91 above).
 // ---------------------------------------------------------------------------
@@ -317,21 +284,6 @@ fn heads_summary_signed_payload_field_order_is_authors_fuel_topic() {
     assert_eq!(bytes.len(), 52);
     // Topic's 32 raw bytes follow its 8-byte length prefix: [20..52].
     assert_eq!(&bytes[20..52], &[0xAB; 32]);
-}
-
-#[test]
-fn heads_request_signed_payload_field_order_is_requests_topic() {
-    use myrhiza_types::Topic;
-    let p = HeadsRequestSignedPayload {
-        requests: vec![],
-        topic: Topic::from_bytes([0xCD; 32]),
-    };
-    let bytes = canonical_bincode().serialize(&p).expect("encode");
-    // requests: 8 (vec len = 0)
-    // topic: 40
-    // total: 48
-    assert_eq!(bytes.len(), 48);
-    assert_eq!(&bytes[16..48], &[0xCD; 32]);
 }
 
 #[test]
@@ -366,36 +318,6 @@ fn heads_summary_first_n_bytes_match_signed_payload_leading_fields() {
         &msg_bytes[..common_prefix_len],
         &signed_bytes[..common_prefix_len],
         "HeadsSummary canonical bytes must prefix-match HeadsSummarySignedPayload's leading fields (spec §3.0)"
-    );
-}
-
-#[test]
-fn heads_request_first_n_bytes_match_signed_payload_leading_fields() {
-    use myrhiza_types::Topic;
-    let requests = vec![EventRequest {
-        author: AuthorPubkey::from_bytes([8; 32]),
-        from_seq: 1,
-        to_seq: 10,
-    }];
-
-    let signed = HeadsRequestSignedPayload {
-        requests: requests.clone(),
-        topic: Topic::from_bytes([0xAA; 32]),
-    };
-    let signed_bytes = canonical_bincode().serialize(&signed).expect("encode");
-
-    let msg = HeadsRequest {
-        requests,
-        signed_by_peer: PeerPubkey::from_bytes([0xFF; 32]),
-        signature: [0x11; 64],
-    };
-    let msg_bytes = canonical_bincode().serialize(&msg).expect("encode");
-
-    let common_prefix_len = signed_bytes.len() - 40;
-    assert_eq!(
-        &msg_bytes[..common_prefix_len],
-        &signed_bytes[..common_prefix_len],
-        "HeadsRequest canonical bytes must prefix-match HeadsRequestSignedPayload's leading fields (spec §3.0)"
     );
 }
 
