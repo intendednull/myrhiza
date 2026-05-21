@@ -22,8 +22,8 @@ use myrhiza_network::{
 };
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
-    DriftSignedPayload, Event, EventHash, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary,
-    HeadsSummarySignedPayload, Hlc, PeerPubkey, Topic, canonical_bincode,
+    DriftSignedPayload, Event, EventHash, HeadsSummary, HeadsSummarySignedPayload, Hlc, PeerPubkey,
+    Topic, canonical_bincode,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -791,31 +791,6 @@ impl Runtime {
             .await?;
         Ok(())
     }
-
-    /// Build a signed [`HeadsRequest`] from a list of [`EventRequest`]s.
-    ///
-    /// Constructs [`HeadsRequestSignedPayload`] with `topic` bound in the
-    /// signed payload (NOT on the wire — prevents cross-topic replay per
-    /// B-4.2 spec §3.0 + §3.1). Pattern mirrors `publish_heads_summary`
-    /// and `maybe_emit_drift` (`runtime.rs:1414-1432`).
-    fn build_signed_heads_request(
-        &self,
-        requests: Vec<myrhiza_types::EventRequest>,
-    ) -> Result<HeadsRequest, RuntimeError> {
-        let signed_payload = HeadsRequestSignedPayload {
-            requests: requests.clone(),
-            topic: self.topic,
-        };
-        let signed_bytes = canonical_bincode()
-            .serialize(&signed_payload)
-            .map_err(|e| RuntimeError::Canonical(format!("HeadsRequestSignedPayload: {e}")))?;
-        let signature = self.peer_key.sign(&signed_bytes);
-        Ok(HeadsRequest {
-            requests,
-            signed_by_peer: self.peer_key.public,
-            signature,
-        })
-    }
 }
 
 /// Type-erasing [`Network`] wrapper.
@@ -882,8 +857,8 @@ impl<N: Network> Network for NetworkErased<N> {
 
 impl Runtime {
     /// Dispatch an inbound gossip message to the variant-specific
-    /// handler. See plan-B-1 spec §11.5 (Event), §7.1
-    /// (`HeadsSummary` + `HeadsRequest`), §8.4 (Drift).
+    /// handler. See plan-B-1 spec §11.5 (Event), §7.1 (`HeadsSummary`),
+    /// §8.4 (Drift).
     async fn handle_message(&mut self, msg: GossipMessage) -> Result<(), RuntimeError> {
         match msg {
             GossipMessage::Event(e) => self.handle_event(e).await?,
@@ -892,11 +867,6 @@ impl Runtime {
                     self.handle_heads_summary(h).await?;
                 }
                 // Else: SignatureInvalid was pushed (or loopback) — drop.
-            }
-            GossipMessage::HeadsRequest(r) => {
-                if self.verify_heads_request(&r) {
-                    self.handle_heads_request(r).await?;
-                }
             }
             GossipMessage::Drift(d) => self.process_drift_message(d).await,
         }
@@ -1119,8 +1089,8 @@ impl Runtime {
         }
     }
 
-    /// Publish a [`HeadsRequest`] asking `author` for the inclusive
-    /// `from_seq..=to_seq` range of their chain.
+    /// Issue a direct-stream backfill for `author`'s inclusive
+    /// `from_seq..=to_seq` range, or soft-nudge when no peer is known.
     ///
     /// Used by [`Self::request_missing_for`] (Pending path) and the
     /// `InvalidChain` arm of [`Self::handle_event`] (same-author
@@ -1130,26 +1100,24 @@ impl Runtime {
         if to_seq < from_seq || to_seq == 0 {
             return;
         }
+        let Some(target_peer) = self.lookup_peer_for_author(&author) else {
+            // Empty index — no peer known to have authority over this author.
+            // Soft-nudge: publish our HeadsSummary so peers can diff and
+            // either push their HeadsSummaries back (which will populate
+            // our index for a future recovery attempt) or, if they're
+            // also behind on this author, propagate the gap further.
+            // Matches the cross-author Pending recovery in
+            // `request_missing_for` (`runtime.rs:1101`).
+            // Per B-4.7 spec §3.1.
+            let _ = self.publish_heads_summary().await;
+            return;
+        };
         let mut requests = Vec::new();
         Self::paginate_into(author, from_seq, to_seq, &mut requests);
         if requests.is_empty() {
             return;
         }
-        // B-4.6: prefer direct-stream when the peer-authority index has a
-        // candidate. Falls back to gossip-routed broadcast when the index is
-        // empty (legacy path; B-4.7 retires this fallback).
-        if let Some(target_peer) = self.lookup_peer_for_author(&author) {
-            self.issue_direct_backfill(target_peer, requests).await;
-            return;
-        }
-        // Fallback: gossip-routed broadcast (legacy path; B-4.7 retires).
-        let Ok(req) = self.build_signed_heads_request(requests) else {
-            return;
-        };
-        let _ = self
-            .network
-            .publish(self.topic, GossipMessage::HeadsRequest(req))
-            .await;
+        self.issue_direct_backfill(target_peer, requests).await;
     }
 
     /// Issue a direct-stream backfill request to `target_peer` for the
@@ -1480,48 +1448,13 @@ impl Runtime {
             .and_then(|peers| peers.first().copied())
     }
 
-    /// Service inbound range requests by publishing the requested
-    /// events back to the topic.
-    ///
-    /// Bound: a single request may cover at most 256 events
-    /// (`to_seq - from_seq <= 255`); over-sized requests are silently
-    /// dropped (plan-review off-by-one fix).
-    async fn handle_heads_request(&mut self, req: HeadsRequest) -> Result<(), RuntimeError> {
-        for r in req.requests {
-            if r.to_seq < r.from_seq {
-                continue;
-            }
-            if r.to_seq.saturating_sub(r.from_seq) > 255 {
-                continue;
-            }
-            let Some(chain) = self.dag.author_chain(&r.author) else {
-                continue;
-            };
-            // Snapshot the (seq, hash) pairs before any await so we don't
-            // hold an immutable borrow of `self.dag` across .await.
-            let pairs: Vec<(u64, EventHash)> = (r.from_seq..=r.to_seq)
-                .filter_map(|seq| chain.seq_to_hash.get(&seq).copied().map(|h| (seq, h)))
-                .collect();
-            for (_, hash) in pairs {
-                if let Some(e) = self.dag.get(&hash).cloned() {
-                    let _ = self
-                        .network
-                        .publish(self.topic, GossipMessage::Event(e))
-                        .await;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Service an inbound direct-stream `HeadsRequest`. Mirrors the
-    /// per-EventRequest loop from [`Self::handle_heads_request`] but
-    /// streams events to `cmd.responder` instead of broadcasting them
-    /// on the gossip topic.
+    /// Service an inbound direct-stream `HeadsRequest`. Streams events
+    /// to `cmd.responder` instead of broadcasting them on the gossip
+    /// topic.
     ///
     /// Bound: a single `EventRequest` may cover at most 256 events
     /// (`to_seq - from_seq <= 255`); over-sized requests are silently
-    /// dropped — same rule as `handle_heads_request`.
+    /// dropped.
     ///
     /// If `cmd.responder.send(event).await` returns `Err`, the
     /// requester dropped the stream — stop processing further events.
@@ -1918,34 +1851,6 @@ impl Runtime {
                 .expect("peer_warnings mutex poisoned")
                 .push(PeerWarning::SignatureInvalid {
                     peer: Some(h.signed_by_peer),
-                });
-            return false;
-        }
-        true
-    }
-
-    /// Verify a `HeadsRequest`'s peer signature. See
-    /// [`Self::verify_heads_summary`] for the design rationale.
-    fn verify_heads_request(&self, r: &HeadsRequest) -> bool {
-        if r.signed_by_peer == self.peer_key.public {
-            return false;
-        }
-        let signed_payload = HeadsRequestSignedPayload {
-            requests: r.requests.clone(),
-            topic: self.topic,
-        };
-        let Ok(bytes) = canonical_bincode().serialize(&signed_payload) else {
-            return false;
-        };
-        if myrhiza_manifest::verify_signature(r.signed_by_peer.as_bytes(), &bytes, &r.signature)
-            .is_err()
-        {
-            #[allow(clippy::expect_used)]
-            self.peer_warnings
-                .lock()
-                .expect("peer_warnings mutex poisoned")
-                .push(PeerWarning::SignatureInvalid {
-                    peer: Some(r.signed_by_peer),
                 });
             return false;
         }
