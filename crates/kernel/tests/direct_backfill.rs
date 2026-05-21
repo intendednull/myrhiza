@@ -509,39 +509,29 @@ async fn author_chain(
     }
 }
 
-/// Poll `watcher` until its value equals `target`, timing out after
-/// `deadline`.
-async fn await_converge(
-    watcher: &mut tokio::sync::watch::Receiver<Vec<u8>>,
-    target: &[u8],
-    deadline: std::time::Instant,
-) {
-    loop {
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "convergence timeout — current={:?}, want={target:?}",
-            watcher.borrow().as_slice(),
-        );
-        if watcher.borrow().as_slice() == target {
-            break;
-        }
-        let _ = timeout(Duration::from_millis(50), watcher.changed()).await;
-    }
-}
-
 /// Covers: B-4.5 §4.1 test 6.
 ///
-/// Three peers on a shared bus. A and B both author chains. C starts
-/// empty and receives `HeadsSummary` from A and B in rapid succession,
-/// triggering two concurrent `issue_direct_backfill` calls. Both
-/// drainer tasks feed into C's single `internal_event_rx`. C converges
-/// to A's digest (A is the canonical genesis founder via `TOPIC_SEED`).
+/// Three peers on a shared bus. A and B both author chains anchored
+/// to the canonical `TOPIC_SEED` (so both chains' events are valid
+/// for C's DAG topic). C starts empty and receives `HeadsSummary`
+/// from A and B; both summaries trigger `issue_direct_backfill`
+/// calls. Both drainer tasks feed into C's single `internal_event_rx`.
+///
+/// **What this test proves**: the two drainers do not collide when
+/// pushing events into the same `internal_event_rx`. C reaches B's
+/// digest (B's events are authored later and end up canonical, since
+/// the counter `state-apply` reduces both chains' increments into a
+/// single integer). The convergence of C to a non-zero digest that
+/// equals the digest produced after applying BOTH chains' events
+/// proves both backfill paths landed events.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_backfill_multiple_concurrent_backfills_converge() {
     let bus = MemBus::new(256);
     let t = topic();
 
-    // Peer A — canonical genesis founder (seed = TOPIC_SEED).
+    // Peer A — author one of the two parallel chains (both share
+    // TOPIC_SEED so DAG-genesis validation accepts both as topic
+    // members).
     let kp_a = PeerKeypair::deterministic(601);
     let author_kp_a = AuthorKeypair::deterministic(601);
     let runtime_a = Runtime::start(
@@ -558,7 +548,9 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
     .expect("runtime_a start");
     author_chain(&runtime_a, TOPIC_SEED, author_kp_a.author, &[1, 1], true).await;
 
-    // Peer B — separate author, separate chain (non-canonical genesis).
+    // Peer B — different author on the SAME canonical topic seed.
+    // Both chains are valid for C's DAG; both contribute to C's
+    // final state under the counter state-apply.
     let kp_b = PeerKeypair::deterministic(602);
     let author_kp_b = AuthorKeypair::deterministic(602);
     let runtime_b = Runtime::start(
@@ -573,7 +565,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
     )
     .await
     .expect("runtime_b start");
-    author_chain(&runtime_b, [0xBB; 32], author_kp_b.author, &[2, 2], false).await;
+    author_chain(&runtime_b, TOPIC_SEED, author_kp_b.author, &[2, 2], true).await;
 
     // Peer C — empty, read-only. Receives HeadsSummary from A and B.
     let kp_c = PeerKeypair::deterministic(603);
@@ -590,33 +582,63 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
     .await
     .expect("runtime_c start");
 
-    // Wait until A's digest is non-empty (A's own state-apply has run).
+    // Wait until both A's and B's digests are non-empty. They may
+    // not converge to identical values — each peer's digest reflects
+    // only events its own state-apply has observed — but each
+    // individually proves its chain was authored.
     let mut watch_a = runtime_a.digest_watch.clone();
-    let deadline_a = std::time::Instant::now() + Duration::from_secs(3);
+    let mut watch_b = runtime_b.digest_watch.clone();
+    let deadline_pre = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         assert!(
-            std::time::Instant::now() <= deadline_a,
-            "A's digest never became non-empty"
+            std::time::Instant::now() <= deadline_pre,
+            "A or B digest never became non-empty"
         );
-        if !watch_a.borrow().is_empty() {
+        if !watch_a.borrow().is_empty() && !watch_b.borrow().is_empty() {
             break;
         }
         let _ = timeout(Duration::from_millis(50), watch_a.changed()).await;
+        let _ = timeout(Duration::from_millis(50), watch_b.changed()).await;
     }
-    let target = watch_a.borrow().clone();
 
-    // C converges to A's digest via concurrent direct-stream backfills.
+    // C converges to a non-empty digest that equals both A's and B's
+    // (all three peers have applied A's + B's chains via gossip
+    // dissemination + direct-stream backfill). The equality assertion
+    // is load-bearing: under the counter state-apply, the digest is a
+    // function of every applied event, so C's digest matching A's
+    // (= B's) requires that BOTH chains' events landed in C.
     let mut watch_c = runtime_c.digest_watch.clone();
     let deadline_c = std::time::Instant::now() + Duration::from_secs(6);
-    await_converge(&mut watch_c, &target, deadline_c).await;
+    loop {
+        assert!(
+            std::time::Instant::now() <= deadline_c,
+            "C never converged: A={:?} B={:?} C={:?}",
+            watch_a.borrow().as_slice(),
+            watch_b.borrow().as_slice(),
+            watch_c.borrow().as_slice(),
+        );
+        let a = watch_a.borrow().clone();
+        let b = watch_b.borrow().clone();
+        let c = watch_c.borrow().clone();
+        if !c.is_empty() && c == a && c == b {
+            break;
+        }
+        let _ = timeout(Duration::from_millis(50), watch_c.changed()).await;
+    }
 
-    let final_c = runtime_c.digest_watch.borrow().clone();
+    let final_a = watch_a.borrow().clone();
+    let final_b = watch_b.borrow().clone();
+    let final_c = watch_c.borrow().clone();
     assert!(
         !final_c.is_empty(),
         "C's digest must be non-empty after concurrent direct-stream backfills"
     );
     assert_eq!(
-        target, final_c,
-        "C must converge to A's digest (A is the canonical genesis founder)"
+        final_a, final_c,
+        "C must converge to A's digest (A's chain landed via direct-stream backfill)"
+    );
+    assert_eq!(
+        final_b, final_c,
+        "C must converge to B's digest (B's chain landed via direct-stream backfill — proves the second drainer's events reached C, not just the first)"
     );
 }
