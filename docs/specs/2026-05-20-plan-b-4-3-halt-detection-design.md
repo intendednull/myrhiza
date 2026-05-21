@@ -33,12 +33,12 @@ B-4.3 fixes the spinning bug. Concrete shape:
 | Decision | Chosen | Runner-up | Why |
 |---|---|---|---|
 | **Distinct `SubError::TransportError` variant** | New variant; `IrohSubscription::recv` returns this for iroh-gossip mid-stream `ApiError`s; `MemSubscription::recv` returns it when `force_transport_error` is set. Carries a `String` description (e.g. `"iroh-gossip api error: {orig}"`). | (a) Re-use `SubError::Lagged` and gate on consecutive count; (b) Generic `SubError::Fatal(String)` distinguishing recoverable from fatal at the variant level | The Lagged path's "publish HeadsSummary + push BroadcastLagged warning" is structurally wrong for transport errors — publishing more HeadsSummaries doesn't help a dead actor. Re-using Lagged forces every consumer to know about a hidden count-based meaning shift. (a) rejected. (b) is half-right (the semantic IS "fatal vs recoverable") but conflates structural error variants with policy decisions. The runtime's policy is "halt after N consecutive TransportErrors"; that's a runtime concern, not a SubError concern. Variant-level split (`TransportError` distinct from `Lagged`/`DecodeFailed`) leaves variant semantics clean and runtime policy explicit. |
-| **Loose-vs-strict consecutive counter** | **Strict consecutive** — counter resets on any successful `recv` returning `Ok(Some(_))` OR `Ok(None)`. `Err(Lagged)` and `Err(DecodeFailed)` do NOT reset the counter, but they ALSO don't increment it. Only `Err(TransportError)` increments. | (a) Reset on any non-TransportError outcome (treat Lagged/DecodeFailed as "evidence the transport is alive"); (b) Time-windowed counter (decay) | A peer flooding `DecodeFailed` and intermittent `TransportError` shouldn't reset to zero (option (a)) — the underlying transport may genuinely be flaky. Option (b) (time-windowed) adds runtime state without observable benefit at this scope. Strict consecutive is the cleanest "definitely the transport, not the publisher": only `TransportError` is transport-attributable, so only `TransportError` counts. |
+| **Loose-vs-strict consecutive counter** | **Strict consecutive** — counter resets on `Ok(Some(_))` (an actual decoded message arrived). `Ok(None)` exits the recv loop before counter matters (clean stream close). `Err(Lagged)` and `Err(DecodeFailed)` do NOT reset the counter, but they ALSO don't increment it. Only `Err(TransportError)` increments. | (a) Reset on any non-TransportError outcome (treat Lagged/DecodeFailed as "evidence the transport is alive"); (b) Time-windowed counter (decay) | A peer flooding `DecodeFailed` and intermittent `TransportError` shouldn't reset to zero (option (a)) — the underlying transport may genuinely be flaky. Option (b) (time-windowed) adds runtime state without observable benefit at this scope. Strict consecutive is the cleanest "definitely the transport, not the publisher": only `TransportError` is transport-attributable, so only `TransportError` counts. |
 | **Threshold default** | `RuntimeCfg::transport_error_halt_threshold: usize = 5`. Configurable per `RuntimeCfg`; tests can use a tight value (e.g. 2) for fast failure. | (a) Hardcoded 5; (b) 3 default | Five gives a small safety margin against transient flakes without long-spinning. Configurable so tests can validate the halt path at threshold=2 without waiting for 5 errors. 3 is too tight for production (one transient hiccup => halt); 10 is too loose (10 seconds × N retries before halt). |
 | **Halt signal mechanism** | Reuse the existing `halt_watch_tx: watch::Sender<Option<String>>` at `runtime.rs:381`. On threshold, set `Some(format!("transport halted: {N} consecutive errors"))` and `return Ok(())` from the recv loop (exits the task cleanly). | (a) New halt-signal channel specifically for transport; (b) Panic from the task and let tokio propagate | The existing `halt_watch_tx` is exactly the right shape — `Option<String>` already carries a reason; runtime task already exits cleanly on `return Ok(())`; `RuntimeHandle::halt_watch: watch::Receiver<Option<String>>` already exposed at `runtime.rs:291`. Reusing it preserves the convention. Panic-based halt loses the reason string and may corrupt other tasks. |
 | **`MemBus::inject_transport_error` shape** | Sibling to `MemBus::inject_lag`. Per-subscription `force_transport_error: Arc<AtomicBool>` flag in `TopicState::force_transport_error_flags: Vec<Weak<AtomicBool>>`. `MemSubscription::recv` checks the flag first (before checking `force_lag`); if set, swaps to `false` and returns `Err(SubError::TransportError("injected by MemBus::inject_transport_error".into()))`. | (a) Use the existing `inject_lag` and rely on counter behavior; (b) New `MemSubscription` type variant | (a) doesn't actually test TransportError — Lagged is a different error variant. The inject-test-affordance pattern is well-established (see `crates/network/src/memory.rs:91-127` for `inject_lag`); mirroring it for transport errors is one structurally-isomorphic addition. (b) adds a new test type for one method; unnecessary. |
 | **`SubError::TransportError` propagation through `NetworkErased`** | Falls out automatically — `NetworkErased<N>::recv` delegates to `inner.recv()` which returns `SubError`. New variant transparently propagates. | Custom mapping | No mapping needed; `SubError` is the unified error type. |
-| **Per-iteration check vs per-recv check** | Counter check happens AFTER each `recv` returns. Specifically: after `Err(SubError::TransportError(_))` handler increments the counter; if counter >= threshold, set halt signal and return. After `Ok(Some(_))` or `Ok(None)`, reset counter to 0. After `Err(SubError::Lagged(_))` or `Err(SubError::DecodeFailed { .. })`, leave counter unchanged. | Hold the counter elsewhere (e.g. `RuntimeHandle`) | Counter is per-runtime-task state; lives in `Runtime` struct. Tested via observable halt signal, not direct counter access. |
+| **Per-iteration check vs per-recv check** | Counter check happens AFTER each `recv` returns. Specifically: after `Err(SubError::TransportError(_))` handler increments the counter; if counter >= threshold, set halt signal and return. After `Ok(Some(_))`, reset counter to 0. `Ok(None)` exits via `return Ok(())` before the counter is touched (clean stream close, no halt). After `Err(SubError::Lagged(_))` or `Err(SubError::DecodeFailed { .. })`, leave counter unchanged. | Hold the counter elsewhere (e.g. `RuntimeHandle`) | Counter is per-runtime-task state; lives in `Runtime` struct. Tested via observable halt signal, not direct counter access. |
 | **Lagged vs TransportError on real iroh-gossip** | Iroh-gossip's `Event::Lagged` (the underlying `tokio::sync::broadcast::RecvError::Lagged`-equivalent) stays mapped to `SubError::Lagged(0)` — semantically correct, recoverable via backfill. Iroh-gossip's mid-stream `ApiError` (the `Some(Err(_api_err))` arm of `IrohSubscription::recv`) becomes `SubError::TransportError(format!("iroh-gossip api error: {orig}"))`. | Conflate both into TransportError | The two are semantically distinct: `Event::Lagged` means "broadcast channel overrun, missed N messages" (recoverable); `ApiError` means "the gossip actor reported an error" (may be terminal). Preserving the distinction at the recv layer keeps the runtime's policy clean. |
 | **Halt does not abort in-flight publish** | The halt signal is set and the recv loop exits; any in-flight `author` reply or `publish_heads_summary` completes naturally. `Runtime::start` returns `Ok(())` cleanly. | Force-abort in-flight | Forcing abort risks dropping responses to in-flight requests; clean shutdown is more predictable. Halt is observed by `RuntimeHandle::halt_watch.changed().await`. |
 | **No re-bind / auto-recovery** | After halt, the runtime task is gone. The embedder must construct a new `Runtime` if recovery is desired. | Auto-restart loop | Auto-recovery hides the transport problem from the embedder. Halt + explicit re-construction matches the existing `RuntimeError::Network` -> halt pattern at `runtime.rs:475-478`. |
@@ -274,15 +274,36 @@ struct TopicState {
 }
 ```
 
+**`MemBus::sender_for` (modify `memory.rs:73-86`):** the existing `or_insert_with` literal also initializes `TopicState` and MUST be updated:
+
+```rust
+fn sender_for(&self, topic: Topic) -> tokio::sync::broadcast::Sender<GossipMessage> {
+    let mut topics = self.topics.lock().unwrap_or_else(/* ... */);
+    topics
+        .entry(topic)
+        .or_insert_with(|| TopicState {
+            sender: tokio::sync::broadcast::channel(self.capacity_per_topic).0,
+            force_lag_flags: Vec::new(),
+            force_transport_error_flags: Vec::new(),  // NEW
+        })
+        .sender
+        .clone()
+}
+```
+
 **`MemSubscription` (modify `crates/network/src/subscription.rs` — locate via grep):**
 
 ```rust
 pub struct MemSubscription {
-    rx: tokio::sync::broadcast::Receiver<GossipMessage>,
-    force_lag: Arc<AtomicBool>,
+    pub(crate) rx: tokio::sync::broadcast::Receiver<GossipMessage>,
+    pub(crate) force_lag: Arc<AtomicBool>,
     /// Per-subscription one-shot transport-error flag. Set via
     /// [`MemBus::inject_transport_error`]. Per B-4.3 spec §3.4.
-    force_transport_error: Arc<AtomicBool>,
+    ///
+    /// **Visibility**: `pub(crate)` so `MemBus::make_subscription`
+    /// in `memory.rs` can initialize it directly (same pattern as
+    /// the existing `rx` + `force_lag` fields).
+    pub(crate) force_transport_error: Arc<AtomicBool>,
 }
 ```
 
@@ -373,7 +394,9 @@ This slice is variant-addition + runtime-policy. No new workspace dependencies. 
 | 4 | `runtime_halts_at_threshold_transport_errors` | `multi_thread, worker_threads = 2` | Same setup as #3, `transport_error_halt_threshold = 2`. Inject twice. Assert `halt_watch` resolves to `Some(reason)` where reason contains `"transport halted"` and `"consecutive"`. Verify runtime task exited (`Shutdown` reply on author channel returns Err). |
 | 5 | `successful_recv_resets_consecutive_counter` | `multi_thread, worker_threads = 2` | `transport_error_halt_threshold = 3`. Inject transport error; pump a recv. Inject again; pump. Publish a real message (peer B as a 3rd MemNetwork handle); peer A's runtime receives it — counter resets to 0. Inject 3 more transport errors; assert halt at the 3rd (because counter restarted). Confirms the reset semantic. |
 | 6 | `lagged_does_not_increment_transport_error_counter` | `multi_thread, worker_threads = 2` | `transport_error_halt_threshold = 2`. Inject lag 5 times (interleave with polls); assert no halt. Then inject 2 transport errors; assert halt. Confirms Lagged is structurally distinct from TransportError per spec §2 "Loose-vs-strict consecutive counter" row. |
-| 7 | `decode_failed_does_not_increment_transport_error_counter` | `multi_thread, worker_threads = 2` | Analogous to #6 with DecodeFailed via the existing test infrastructure (publish malformed bytes via MemBus, verify counter doesn't increment via 2 such bad publishes then 2 transport errors causes halt). |
+~~| 7 | `decode_failed_does_not_increment_transport_error_counter` | ... |~~
+
+**Test 7 dropped** — `MemSubscription::recv` never produces `SubError::DecodeFailed` (the broadcast receiver yields typed `GossipMessage`, no bincode decode step). Testing the DecodeFailed-doesn't-increment branch would require either an `inject_decode_failed` affordance on `MemBus` (scope expansion) or a mock `Subscription` impl. The runtime code path for `DecodeFailed` is structurally symmetric with the `Lagged` path (both push a warning, neither touches `consecutive_transport_errors`); test 6 covers the load-bearing "non-incrementing" invariant. The DecodeFailed-specific test adds little signal for substantial harness cost.
 
 **Spec-coverage annotations**:
 - Tests 1, 2 → `convergence.md §4.2` (sync protocol — lag-recovery is part of it; TransportError is the parallel for non-recoverable transport failure)
@@ -394,6 +417,7 @@ None. Existing `just ci` recipe covers the new tests automatically.
 - **Multiple subscriptions on same topic, inject_transport_error fires once per call**: each subscription has its own `force_transport_error` flag; all are armed. Each consumes once.
 - **Iroh-gossip's `ApiError` may have non-displayable variants**: the `format!("{api_err}")` call uses iroh-gossip's `Display` impl, which is `n0_error`-shaped. The string is opaque; no consumer parses it.
 - **`PeerWarning::TransportError` is per-call (per-error-event), not aggregated**: each error increments the warning list. The `consecutive` field lets observability see the trajectory toward halt.
+- **Threat model — DoS-to-halt via crafted ApiError traffic**: a sufficiently noisy peer that drives the local `IrohSubscription` to return `ApiError` consistently (e.g. by exploiting iroh-gossip protocol-layer bugs to trigger errors on receive) could increment the counter toward halt at the default threshold of 5. This IS a viable DoS vector against the runtime in adversarial conditions. The counter is intentionally non-attributable (unlike `DecodeFailed` which carries `peer: Option<PeerPubkey>`) — transport errors aren't reliably attributable to a single peer. Mitigations deferred (B-4.4+ scope): per-peer error attribution if iroh-gossip surfaces it, rate-limited error counting, or threshold auto-tuning based on observed traffic patterns. Documenting the gap honestly per CLAUDE.md "surface tradeoffs explicit".
 
 ## 7. Surface change summary
 
