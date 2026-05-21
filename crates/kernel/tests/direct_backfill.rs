@@ -128,7 +128,7 @@ fn genesis_payload(seed: [u8; 32], founder: AuthorPubkey) -> Vec<u8> {
 // Test 1: end-to-end two-peer convergence over direct-streams
 // ===========================================================================
 
-/// Covers: B-4.5 §4.1 test 1.
+/// Covers: convergence.md §4.2 — direct-stream HeadsSummary-driven backfill (B-4.5 §4.1 test 1).
 ///
 /// A authors a genesis event + 4 increments (5 events total). B starts
 /// empty. A's periodic `HeadsSummary` tick fires (50ms), B receives it,
@@ -233,7 +233,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
 // Test 2: unreachable target peer logs DirectRequestFailed
 // ===========================================================================
 
-/// Covers: B-4.5 §4.1 test 2.
+/// Covers: convergence.md §4.2 — direct-stream backfill failure (B-4.5 §4.1 test 2).
 ///
 /// Forge a correctly-signed `HeadsSummary` from peer A (a real
 /// `PeerKeypair` so the signature verifies) and publish it onto the bus.
@@ -307,7 +307,7 @@ async fn direct_backfill_target_peer_unreachable_logs_warning() {
 // Test 3: handler topic-validation drops wrong-topic requests (clean EOF)
 // ===========================================================================
 
-/// Covers: B-4.5 §4.1 test 3.
+/// Covers: convergence.md §4.6 — topic-binding on direct-stream requests (B-4.5 §4.1 test 3).
 ///
 /// Peer A's `KernelRequestHandler` is bound to `topic_a`. A requester
 /// sends a `DirectHeadsRequest` carrying `topic_b` (mismatched). The
@@ -372,7 +372,7 @@ async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
 // Test 4: legacy gossip-routed HeadsRequest is still serviced
 // ===========================================================================
 
-/// Covers: B-4.5 §4.1 test 4 + spec note "`handle_heads_request` stays
+/// Covers: convergence.md §4.2 — legacy gossip-routed backfill still serviced (B-4.5 §4.1 test 4; spec note "`handle_heads_request` stays
 /// active for gossip-routed inbound requests".
 ///
 /// Peer A has authored 3 events. A tap peer publishes a gossip-routed
@@ -509,7 +509,7 @@ async fn author_chain(
     }
 }
 
-/// Covers: B-4.5 §4.1 test 6.
+/// Covers: convergence.md §4.2 — concurrent direct-stream backfills (B-4.5 §4.1 test 6).
 ///
 /// Three peers on a shared bus. A and B both author chains anchored
 /// to the canonical `TOPIC_SEED` (so both chains' events are valid
