@@ -529,10 +529,6 @@ pub struct Runtime {
     /// than passing the receiver) means multiple in-flight backfill
     /// responses can all feed events into the same channel.
     /// Per B-4.5 spec §3.3.
-    #[allow(
-        dead_code,
-        reason = "cloned into drainer tasks in Task 3 (issue_direct_backfill)"
-    )]
     internal_event_tx: mpsc::Sender<Event>,
 }
 
@@ -1142,7 +1138,6 @@ impl Runtime {
     /// triggers a retry.
     ///
     /// Per B-4.5 spec §3.6.
-    #[allow(dead_code, reason = "wired in Task 5")]
     async fn issue_direct_backfill(
         &mut self,
         target_peer: PeerPubkey,
@@ -1232,10 +1227,20 @@ impl Runtime {
             .await;
 
         if !requests.is_empty() {
-            let req = self.build_signed_heads_request(requests)?;
-            let _ = self
-                .network
-                .publish(self.topic, GossipMessage::HeadsRequest(req))
+            // Loopback guard: never issue a direct-stream backfill to
+            // ourselves. The handler runs on this very task; awaiting
+            // the request would deadlock. The HeadsSummary signed by
+            // our own pubkey arrives via MemNetwork's broadcast — we
+            // receive our own emit. The verify-side filter at
+            // `verify_heads_summary` already uses the same
+            // `self.peer_key.public` comparison; we mirror it here
+            // for backfill emission.
+            //
+            // Per B-4.5 spec §6 (edge cases — loopback).
+            if remote.signed_by_peer == self.peer_key.public {
+                return Ok(());
+            }
+            self.issue_direct_backfill(remote.signed_by_peer, requests)
                 .await;
         }
         Ok(())
@@ -2116,7 +2121,6 @@ pub fn compute_subset_digest(handle: &mut StateApplyHandle, subset: &[Event]) ->
 /// on the next `HeadsSummary` cycle.
 ///
 /// Per B-4.5 spec §3.7.
-#[allow(dead_code, reason = "wired in Task 5")]
 async fn drain_heads_response(mut stream: HeadsStream, tx: mpsc::Sender<Event>) {
     while let Some(item) = stream.next().await {
         match item {
