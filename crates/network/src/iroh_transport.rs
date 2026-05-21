@@ -47,8 +47,8 @@ use myrhiza_types::canonical_bincode;
 use std::sync::{Arc, Mutex};
 
 use crate::request::{
-    ArcRequestHandler, HEADS_REQUEST_ALPN, HEADS_STREAM_CHANNEL_CAPACITY, HeadsStream,
-    build_length_prefixed_frame,
+    ArcRequestHandler, HEADS_REQUEST_ALPN, HEADS_STREAM_CHANNEL_CAPACITY, HeadsResponder,
+    HeadsStream, HeadsStreamError, build_length_prefixed_frame,
 };
 use crate::{GossipMessage, NetError, Network, SubError, Subscription};
 use myrhiza_types::{DirectHeadsRequest, PeerPubkey, Topic};
@@ -403,87 +403,98 @@ pub fn iroh_topic_id_from_topic(topic: Topic) -> iroh_gossip::TopicId {
     iroh_gossip::TopicId::from_bytes(*topic.as_bytes())
 }
 
+/// Read a single length-prefixed frame from an iroh [`RecvStream`].
+///
+/// Returns `Ok(Some(payload))` on a complete frame, `Ok(None)` on a
+/// clean EOF before any bytes of the frame were read (i.e. at a
+/// frame boundary), or `Err(HeadsStreamError::Transport(...))` on a
+/// truncated read, oversized frame, or transport failure.
+///
+/// **Impl-time verification (spec §9 gap #3)**: iroh-1.0.0-rc.0
+/// `RecvStream` exposes a native `read_exact(&mut [u8]) -> Result<(),
+/// ReadExactError>` (`recv_stream.rs:89`) where
+/// `ReadExactError::FinishedEarly(n)` signals partial EOF — `n == 0`
+/// at the 4-byte length-prefix position means clean stream end;
+/// `n > 0` means a truncated frame. The plan's code used
+/// `tokio::io::AsyncReadExt::read_exact` which produces
+/// `std::io::ErrorKind::UnexpectedEof`; the native API is used
+/// instead to get the correct EOF variant directly and avoid the
+/// `AsyncRead` trait-impl layering.
+///
+/// This helper is shared by both the outbound reader task
+/// ([`read_event_frames`]) and the accept-side handler
+/// ([`HeadsRequestProtocol::accept`]), eliminating the duplication
+/// flagged in the Task-5 spec review.
+///
+/// Per B-4.4 spec §3.4.1 + §3.4.2.
+pub(crate) async fn read_length_prefixed_frame_from_iroh_recv(
+    stream: &mut iroh::endpoint::RecvStream,
+) -> Result<Option<Vec<u8>>, HeadsStreamError> {
+    use crate::request::MAX_FRAME_BYTES;
+    use iroh::endpoint::ReadExactError;
+
+    let mut len_buf = [0u8; 4];
+    match stream.read_exact(&mut len_buf).await {
+        Ok(()) => {}
+        // FinishedEarly(0) at the length prefix = clean EOF at a frame
+        // boundary. FinishedEarly(n>0) = truncated prefix = error.
+        Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
+        Err(ReadExactError::FinishedEarly(n)) => {
+            return Err(HeadsStreamError::Transport(format!(
+                "truncated length prefix: got {n} of 4 bytes"
+            )));
+        }
+        Err(e) => {
+            return Err(HeadsStreamError::Transport(format!("read length: {e}")));
+        }
+    }
+
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > MAX_FRAME_BYTES {
+        return Err(HeadsStreamError::Transport(format!(
+            "frame too large: {len} bytes (max {MAX_FRAME_BYTES})"
+        )));
+    }
+
+    let mut payload = vec![0u8; len];
+    match stream.read_exact(&mut payload).await {
+        Ok(()) => {}
+        Err(ReadExactError::FinishedEarly(n)) => {
+            // Truncated payload — a clean EOF can only occur at a
+            // length-prefix boundary, never mid-payload.
+            return Err(HeadsStreamError::Transport(format!(
+                "truncated payload: got {n} of {len} bytes"
+            )));
+        }
+        Err(e) => {
+            return Err(HeadsStreamError::Transport(format!("read payload: {e}")));
+        }
+    }
+
+    Ok(Some(payload))
+}
+
 /// Reader task spawned by [`IrohNetwork::request_heads`]. Decodes
 /// length-prefixed canonical-bincode [`myrhiza_types::Event`] frames
 /// from the recv side of a bidi stream until EOF or error.
 ///
-/// Per B-4.4 spec §3.4.1.
+/// Uses [`read_length_prefixed_frame_from_iroh_recv`] for all frame
+/// reads — no duplicated length-prefix logic here.
 ///
-/// **Impl-time verification (spec §9 gap #3)**: iroh-1.0.0-rc.0
-/// `RecvStream` exposes a native `read_exact(&mut [u8]) -> Result<(),
-/// ReadExactError>` (`recv_stream.rs:89`) where `ReadExactError::FinishedEarly`
-/// signals clean EOF (stream finished before all bytes — used here
-/// when `buf.len()` == 4 and 0 bytes were read). The plan's code used
-/// `tokio::io::AsyncReadExt::read_exact` which produces
-/// `std::io::ErrorKind::UnexpectedEof`; the native API is used
-/// instead to avoid the trait-impl layering and get the correct EOF
-/// variant directly. `ReadExactError` lives in `iroh::endpoint`.
+/// Per B-4.4 spec §3.4.1.
 async fn read_event_frames(
     mut recv_stream: iroh::endpoint::RecvStream,
-    tx: tokio::sync::mpsc::Sender<Result<myrhiza_types::Event, crate::request::HeadsStreamError>>,
+    tx: tokio::sync::mpsc::Sender<Result<myrhiza_types::Event, HeadsStreamError>>,
 ) {
-    use crate::request::{HeadsStreamError, MAX_FRAME_BYTES};
-    use iroh::endpoint::ReadExactError;
-
     loop {
-        let mut len_buf = [0u8; 4];
-        match recv_stream.read_exact(&mut len_buf).await {
-            Ok(()) => {}
-            // FinishedEarly with 0 bytes read = clean EOF (responder
-            // sent FIN after last event frame). FinishedEarly with
-            // >0 bytes = truncated frame = transport error.
-            Err(ReadExactError::FinishedEarly(0)) => return,
-            Err(ReadExactError::FinishedEarly(n)) => {
-                let _ = tx
-                    .send(Err(HeadsStreamError::Transport(format!(
-                        "truncated length prefix: got {n} of 4 bytes"
-                    ))))
-                    .await;
-                return;
-            }
+        let payload = match read_length_prefixed_frame_from_iroh_recv(&mut recv_stream).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return, // clean EOF
             Err(e) => {
-                let _ = tx
-                    .send(Err(HeadsStreamError::Transport(format!(
-                        "read length: {e}"
-                    ))))
-                    .await;
+                let _ = tx.send(Err(e)).await;
                 return;
             }
-        }
-
-        let len = u32::from_be_bytes(len_buf) as usize;
-        if len > MAX_FRAME_BYTES {
-            let _ = tx
-                .send(Err(HeadsStreamError::Transport(format!(
-                    "frame too large: {len} bytes (max {MAX_FRAME_BYTES})"
-                ))))
-                .await;
-            return;
-        }
-
-        let mut payload = vec![0u8; len];
-        match recv_stream.read_exact(&mut payload).await {
-            Ok(()) => {}
-            Err(ReadExactError::FinishedEarly(n)) => {
-                // Truncated payload — distinguished from a clean
-                // frame-boundary EOF (which only happens at the length
-                // prefix, never mid-payload).
-                let _ = tx
-                    .send(Err(HeadsStreamError::Transport(format!(
-                        "truncated payload: got {n} of {len} bytes"
-                    ))))
-                    .await;
-                return;
-            }
-            Err(e) => {
-                let _ = tx
-                    .send(Err(HeadsStreamError::Transport(format!(
-                        "read payload: {e}"
-                    ))))
-                    .await;
-                return;
-            }
-        }
+        };
 
         let event: myrhiza_types::Event = match canonical_bincode().deserialize(&payload) {
             Ok(e) => e,
@@ -498,6 +509,201 @@ async fn read_event_frames(
         if tx.send(Ok(event)).await.is_err() {
             // Requester dropped the stream — stop reading.
             return;
+        }
+    }
+}
+
+// ---- Accept-side: HeadsRequestProtocol ProtocolHandler ----
+
+impl IrohNetwork {
+    /// Return an [`iroh::protocol::ProtocolHandler`] impl for the
+    /// direct-stream `HeadsRequest` ALPN. Embedders register this on
+    /// their [`iroh::protocol::Router`] at startup:
+    ///
+    /// ```ignore
+    /// let router = iroh::protocol::Router::builder(endpoint)
+    ///     .accept(iroh_gossip::ALPN, gossip.clone())
+    ///     .accept(myrhiza_network::HEADS_REQUEST_ALPN,
+    ///             network.protocol_handler())
+    ///     .spawn();
+    /// ```
+    ///
+    /// The returned handler shares the installed [`crate::request::RequestHandler`]
+    /// with this `IrohNetwork` instance via an internal
+    /// `Arc<Mutex<Option<_>>>`. Re-installing a handler via
+    /// [`crate::Network::install_request_handler`] is immediately
+    /// visible to the returned protocol handler (last-call-wins).
+    ///
+    /// Per B-4.4 spec §3.4.2 + §3.4.3.
+    #[must_use]
+    pub fn protocol_handler(&self) -> HeadsRequestProtocol {
+        HeadsRequestProtocol {
+            handler_slot: Arc::clone(&self.request_handler),
+        }
+    }
+}
+
+/// [`iroh::protocol::ProtocolHandler`] impl for [`HEADS_REQUEST_ALPN`].
+///
+/// Accepts an inbound bidi stream, reads the length-prefixed
+/// [`DirectHeadsRequest`] frame, looks up the installed
+/// [`crate::request::RequestHandler`], and writes response
+/// [`myrhiza_types::Event`] frames back over the send side.
+///
+/// If no handler is installed, the send stream is closed cleanly
+/// (requester sees zero events + EOF).
+///
+/// **Impl-time verification (spec §9 gate #1)**:
+/// `iroh::endpoint::Connection::remote_id()` returns `EndpointId`
+/// **directly** (infallible, not `Result<EndpointId, _>`), confirmed
+/// against `iroh-1.0.0-rc.0/src/endpoint/connection.rs:1101`. The
+/// plan's draft used `.map_err(...)` on the call site; that is
+/// incorrect and has been removed.
+///
+/// **Impl-time verification (spec §9 gate #4)**:
+/// `iroh::protocol::ProtocolHandler` requires `std::fmt::Debug`
+/// (trait bound: `Send + Sync + std::fmt::Debug + 'static`); `Debug`
+/// is derived here. The `accept` signature is:
+/// `fn accept(&self, connection: Connection) -> impl Future<Output =
+/// Result<(), AcceptError>> + Send` — matches the plan exactly.
+///
+/// **`AcceptError::from_err` constructor**: takes
+/// `T: std::error::Error + Send + Sync + 'static`. `String` does not
+/// implement `std::error::Error`; error messages are wrapped via
+/// `std::io::Error::other(msg)` (available since Rust 1.74) which
+/// converts to `AcceptError` through the `From<std::io::Error>`
+/// blanket impl on `AcceptError`.
+///
+/// Per B-4.4 spec §3.4.2.
+/// **Debug note**: `ArcRequestHandler` is a `dyn RequestHandler` trait
+/// object which does not require `Debug`. The `Debug` impl is written
+/// manually to satisfy `iroh::protocol::ProtocolHandler`'s
+/// `std::fmt::Debug` bound without adding `Debug` to the
+/// `RequestHandler` trait (which would be an unnecessary constraint on
+/// embedder implementations).
+#[derive(Clone)]
+pub struct HeadsRequestProtocol {
+    handler_slot: Arc<Mutex<Option<ArcRequestHandler>>>,
+}
+
+impl std::fmt::Debug for HeadsRequestProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_handler = self
+            .handler_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        f.debug_struct("HeadsRequestProtocol")
+            .field("has_handler", &has_handler)
+            .finish()
+    }
+}
+
+impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
+    fn accept(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> impl std::future::Future<Output = Result<(), iroh::protocol::AcceptError>> + Send {
+        let handler_slot = Arc::clone(&self.handler_slot);
+        async move {
+            // **Impl-time verification (spec §9 gate #1)**:
+            // `Connection::remote_id()` is infallible in iroh-1.0.0-rc.0
+            // (returns `EndpointId` directly, not `Result<_, _>`).
+            // Confirmed at iroh-1.0.0-rc.0 endpoint/connection.rs:1101.
+            let requester_id = connection.remote_id();
+            let requester = peer_pubkey_from_iroh(requester_id);
+
+            let (mut send_stream, mut recv_stream) = connection
+                .accept_bi()
+                .await
+                .map_err(|e| std::io::Error::other(format!("accept_bi: {e}")))?;
+
+            // Read the request frame using the shared helper so there
+            // is no duplicated length-prefix logic.
+            let req_bytes =
+                match read_length_prefixed_frame_from_iroh_recv(&mut recv_stream).await {
+                    Ok(Some(b)) => b,
+                    Ok(None) => {
+                        // Clean EOF before any request bytes — no-op.
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(std::io::Error::other(format!("read request: {e}")).into());
+                    }
+                };
+
+            let request: DirectHeadsRequest =
+                canonical_bincode()
+                    .deserialize(&req_bytes)
+                    .map_err(|e| std::io::Error::other(format!("decode request: {e}")))?;
+
+            // Snapshot the Arc so the Mutex is not held across the
+            // handler invocation.
+            let installed = {
+                let lock = handler_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                lock.clone()
+            };
+
+            let Some(handler) = installed else {
+                // No handler installed — close stream cleanly.
+                // Requester sees zero events + EOF.
+                let _ = send_stream.finish();
+                return Ok(());
+            };
+
+            // Spawn the handler task with a fresh channel.  The
+            // forward loop below reads from the channel and writes
+            // each event as a length-prefixed frame to the QUIC send
+            // stream.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<
+                Result<myrhiza_types::Event, HeadsStreamError>,
+            >(HEADS_STREAM_CHANNEL_CAPACITY);
+            let responder = HeadsResponder::new(tx);
+            let handler_task = tokio::spawn(async move {
+                handler.handle(requester, request, responder).await;
+                // Responder drops here -> channel closes -> rx.recv()
+                // returns None -> forward loop below exits cleanly.
+            });
+
+            while let Some(item) = rx.recv().await {
+                match item {
+                    Ok(event) => {
+                        let bytes = match canonical_bincode().serialize(&event) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                handler_task.abort();
+                                return Err(std::io::Error::other(format!(
+                                    "encode event: {e}"
+                                ))
+                                .into());
+                            }
+                        };
+                        let frame = build_length_prefixed_frame(&bytes);
+                        if send_stream.write_all(&frame).await.is_err() {
+                            // Requester dropped mid-stream — abort the
+                            // handler and return Ok (from our side the
+                            // stream is done).
+                            handler_task.abort();
+                            return Ok(());
+                        }
+                    }
+                    Err(_handler_err) => {
+                        // Handler signalled an error via the channel.
+                        // Stop forwarding; the partial response is what
+                        // the requester sees.  Handler task will exit
+                        // on its own (or has already).
+                        break;
+                    }
+                }
+            }
+
+            // Wait for the handler task to drain (or confirm it was
+            // aborted), then close the send side cleanly.
+            let _ = handler_task.await;
+            let _ = send_stream.finish();
+            Ok(())
         }
     }
 }
