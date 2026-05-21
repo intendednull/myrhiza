@@ -234,7 +234,10 @@ async fn replay_fallback_when_topo_reorders() {
     // genesis_author = X, Y != X → genesis validation is SKIPPED. Y1's
     // explicit deps are empty, so step 5 passes; step 6 commits with
     // implicit Genesis (X1) dep.
-    let net_pub = MemNetwork::new(harness.bus.clone());
+    let net_pub = MemNetwork::new(
+        harness.bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xF2; 32]),
+    );
     net_pub
         .publish(harness.topic, GossipMessage::Event(y1.clone()))
         .await
@@ -396,7 +399,10 @@ async fn replay_fallback_when_drain_loop_inserts_multiple() {
         Event { signature, ..body }
     };
 
-    let net_pub = MemNetwork::new(harness.bus.clone());
+    let net_pub = MemNetwork::new(
+        harness.bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xF1; 32]),
+    );
 
     // Publish X1 first — genesis arrives, A's runtime spawns processing
     // and the fast-path may or may not engage (single insert + drain=0).
@@ -516,7 +522,10 @@ async fn incremental_apply_reject_records_drop() {
     );
     let genesis_hash = genesis.wire_hash();
 
-    let net_pub = MemNetwork::new(harness.bus.clone());
+    let net_pub = MemNetwork::new(
+        harness.bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xF3; 32]),
+    );
     net_pub
         .publish(harness.topic, GossipMessage::Event(genesis.clone()))
         .await
@@ -747,7 +756,10 @@ async fn compute_anchor_digest_off_loop_does_not_block_membus_publish() {
         signature,
     };
 
-    let net_pub = MemNetwork::new(harness.bus.clone());
+    let net_pub = MemNetwork::new(
+        harness.bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xF4; 32]),
+    );
     net_pub
         .publish(harness.topic, GossipMessage::Drift(drift_msg))
         .await

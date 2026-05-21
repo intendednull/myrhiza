@@ -1,7 +1,9 @@
 //! [`MemBus`] + [`MemNetwork`] — in-process [`Network`] impl for tests.
 
+use crate::request::ArcRequestHandler;
+use crate::request::{HEADS_STREAM_CHANNEL_CAPACITY, HeadsResponder, HeadsStream};
 use crate::{GossipMessage, NetError, Network, subscription::MemSubscription};
-use myrhiza_types::{PeerPubkey, Topic};
+use myrhiza_types::{DirectHeadsRequest, PeerPubkey, Topic};
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 // `Ordering` is only referenced inside `MemBus::inject_lag`, which is
@@ -34,6 +36,7 @@ struct TopicState {
 /// on a topic receive every publish.
 pub struct MemBus {
     topics: Mutex<BTreeMap<Topic, TopicState>>,
+    request_handlers: Mutex<BTreeMap<PeerPubkey, ArcRequestHandler>>,
     capacity_per_topic: usize,
 }
 
@@ -45,6 +48,7 @@ impl MemBus {
     pub fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
             topics: Mutex::new(BTreeMap::new()),
+            request_handlers: Mutex::new(BTreeMap::new()),
             capacity_per_topic: capacity,
         })
     }
@@ -178,13 +182,26 @@ impl MemBus {
 #[derive(Clone)]
 pub struct MemNetwork {
     bus: Arc<MemBus>,
+    peer_pubkey: PeerPubkey,
 }
 
 impl MemNetwork {
-    /// Construct a new handle on the given shared [`MemBus`].
+    /// Construct a new handle on the given shared [`MemBus`] with the
+    /// specified `peer_pubkey`. The pubkey identifies this peer for
+    /// direct-stream request routing (per B-4.4 spec §3.3).
+    ///
+    /// **SemVer-breaking from B-4.3:** this constructor gained a
+    /// `peer_pubkey` parameter in B-4.4. 28 in-tree call sites swept
+    /// in the same PR.
     #[must_use]
-    pub fn new(bus: Arc<MemBus>) -> Self {
-        Self { bus }
+    pub fn new(bus: Arc<MemBus>, peer_pubkey: PeerPubkey) -> Self {
+        Self { bus, peer_pubkey }
+    }
+
+    /// Return the peer pubkey this `MemNetwork` was constructed with.
+    #[must_use]
+    pub fn peer_pubkey(&self) -> PeerPubkey {
+        self.peer_pubkey
     }
 }
 
@@ -214,5 +231,44 @@ impl Network for MemNetwork {
         // the Weak<AtomicBool> in TopicState::force_lag_flags is
         // collected on the next make_subscription / inject_lag sweep.
         Ok(())
+    }
+
+    async fn request_heads(
+        &self,
+        peer: PeerPubkey,
+        request: DirectHeadsRequest,
+    ) -> Result<HeadsStream, NetError> {
+        let handler = {
+            let handlers = self
+                .bus
+                .request_handlers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            handlers.get(&peer).cloned()
+        };
+        let Some(handler) = handler else {
+            return Err(NetError::RequestFailed {
+                peer,
+                reason: "no handler registered for target peer".to_string(),
+            });
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(HEADS_STREAM_CHANNEL_CAPACITY);
+        let responder = HeadsResponder::new(tx);
+        let requester = self.peer_pubkey;
+        tokio::spawn(async move {
+            handler.handle(requester, request, responder).await;
+            // Responder drops here — closes the channel, yielding `None`
+            // from the next `HeadsStream::next` call on the requester side.
+        });
+        Ok(HeadsStream::new(rx))
+    }
+
+    fn install_request_handler(&self, handler: ArcRequestHandler) {
+        let mut handlers = self
+            .bus
+            .request_handlers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        handlers.insert(self.peer_pubkey, handler);
     }
 }

@@ -187,7 +187,7 @@ pub trait Network: Send + Sync + 'static {
     /// Returns [`NetError::SubscribeClosed`] only if the transport is shut down.
     async fn unsubscribe(&self, topic: Topic) -> Result<(), NetError>;
 
-    /// Issue a direct-stream HeadsRequest to a specific peer.
+    /// Issue a direct-stream `HeadsRequest` to a specific peer.
     ///
     /// Returns a [`HeadsStream`] that yields response events as they
     /// arrive. Stream terminates with `None` when the responder closes

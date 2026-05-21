@@ -2,9 +2,6 @@
 //!
 //! Per B-4.4 spec §3.1.
 
-// NetError is imported for Task 3 (Network trait extension); unused until then.
-#[allow(unused_imports)]
-use crate::NetError;
 use myrhiza_types::{DirectHeadsRequest, Event, PeerPubkey};
 use std::sync::Arc;
 use thiserror::Error;
@@ -19,10 +16,6 @@ pub const HEADS_REQUEST_ALPN: &[u8] = b"myrhiza/heads-request/1";
 /// while still allowing burst-write throughput. 32 is sufficient for
 /// the bounded-by-256 batches that [`DirectHeadsRequest::requests`]
 /// targets in practice.
-#[expect(
-    dead_code,
-    reason = "used by MemNetwork/IrohNetwork impls landing in Tasks 4-5"
-)]
 pub(crate) const HEADS_STREAM_CHANNEL_CAPACITY: usize = 32;
 
 /// Maximum size of a single framed message (request or event). Bounds
@@ -63,10 +56,6 @@ pub struct HeadsStream {
 impl HeadsStream {
     /// Construct from an mpsc receiver. Crate-private — callers reach
     /// this via [`crate::Network::request_heads`].
-    #[expect(
-        dead_code,
-        reason = "called by Network::request_heads impls landing in Tasks 4-5"
-    )]
     pub(crate) fn new(rx: mpsc::Receiver<Result<Event, HeadsStreamError>>) -> Self {
         Self { rx }
     }
@@ -94,10 +83,6 @@ pub struct HeadsResponder {
 impl HeadsResponder {
     /// Construct from an mpsc sender. Crate-private — callers reach
     /// this via [`RequestHandler::handle`].
-    #[expect(
-        dead_code,
-        reason = "called by RequestHandler dispatch impl landing in Tasks 4-5"
-    )]
     pub(crate) fn new(tx: mpsc::Sender<Result<Event, HeadsStreamError>>) -> Self {
         Self { tx }
     }

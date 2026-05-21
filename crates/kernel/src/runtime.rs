@@ -16,11 +16,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bincode::Options;
-use myrhiza_network::{GossipMessage, NetError, Network, SubError, Subscription};
+use myrhiza_network::{
+    ArcRequestHandler, GossipMessage, HeadsStream, NetError, Network, SubError, Subscription,
+};
 use myrhiza_types::{
-    AuthorPubkey, AuthorSeq, BundleHash, DriftAnchor, DriftMessage, DriftSignedPayload, Event,
-    EventHash, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary, HeadsSummarySignedPayload,
-    Hlc, PeerPubkey, Topic, canonical_bincode,
+    AuthorPubkey, AuthorSeq, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
+    DriftSignedPayload, Event, EventHash, HeadsRequest, HeadsRequestSignedPayload, HeadsSummary,
+    HeadsSummarySignedPayload, Hlc, PeerPubkey, Topic, canonical_bincode,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -702,6 +704,18 @@ impl<N: Network> Network for NetworkErased<N> {
 
     async fn unsubscribe(&self, topic: Topic) -> Result<(), NetError> {
         self.inner.unsubscribe(topic).await
+    }
+
+    async fn request_heads(
+        &self,
+        peer: PeerPubkey,
+        request: DirectHeadsRequest,
+    ) -> Result<HeadsStream, NetError> {
+        self.inner.request_heads(peer, request).await
+    }
+
+    fn install_request_handler(&self, handler: ArcRequestHandler) {
+        self.inner.install_request_handler(handler);
     }
 }
 

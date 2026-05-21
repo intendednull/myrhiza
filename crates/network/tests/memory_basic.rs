@@ -4,6 +4,10 @@
 use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network, Subscription};
 use myrhiza_types::{AuthorHead, AuthorPubkey, EventHash, HeadsSummary, PeerPubkey, Topic};
 
+fn pk(seed: u8) -> PeerPubkey {
+    PeerPubkey::from_bytes([seed; 32])
+}
+
 fn topic(seed: u8) -> Topic {
     Topic::from_bytes([seed; 32])
 }
@@ -24,8 +28,8 @@ fn sample_heads_summary() -> HeadsSummary {
 #[tokio::test]
 async fn mem_network_delivers_to_subscriber() {
     let bus = MemBus::new(16);
-    let net_a = MemNetwork::new(bus.clone());
-    let net_b = MemNetwork::new(bus);
+    let net_a = MemNetwork::new(bus.clone(), pk(0xA1));
+    let net_b = MemNetwork::new(bus, pk(0xA2));
 
     let t = topic(1);
     let mut sub_b = net_b.subscribe(t, vec![]).await.expect("subscribe");
@@ -43,7 +47,7 @@ async fn mem_network_delivers_to_subscriber() {
 #[tokio::test]
 async fn mem_network_topic_isolation() {
     let bus = MemBus::new(16);
-    let net = MemNetwork::new(bus);
+    let net = MemNetwork::new(bus, pk(0xB1));
 
     let t1 = topic(1);
     let t2 = topic(2);
@@ -63,7 +67,7 @@ async fn mem_network_topic_isolation() {
 async fn mem_network_lag_surfaces_as_sub_error() {
     use myrhiza_network::SubError;
     let bus = MemBus::new(2); // capacity 2 — tiny on purpose
-    let net = MemNetwork::new(bus);
+    let net = MemNetwork::new(bus, pk(0xC1));
     let t = topic(3);
     let mut sub = net.subscribe(t, vec![]).await.expect("subscribe");
 
@@ -101,7 +105,7 @@ async fn mem_network_lag_surfaces_as_sub_error() {
 async fn inject_lag_forces_next_recv_to_return_lagged() {
     use myrhiza_network::SubError;
     let bus = MemBus::new(8);
-    let net = MemNetwork::new(bus.clone());
+    let net = MemNetwork::new(bus.clone(), pk(0xD1));
     let t = topic(4);
     let mut sub = net.subscribe(t, vec![]).await.expect("subscribe");
 

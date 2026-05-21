@@ -345,8 +345,8 @@ impl InProcessHarness {
         handle: StateApplyHandle,
         cfg: RuntimeCfg,
     ) -> PeerHandle {
-        let net = MemNetwork::new(self.bus.clone());
         let peer_key = PeerKeypair::deterministic(peer_seed);
+        let net = MemNetwork::new(self.bus.clone(), peer_key.public);
         let author_key = author_seed.map(AuthorKeypair::deterministic);
         let runtime = Runtime::start(
             net,
