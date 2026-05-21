@@ -16,13 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bincode::Options;
-#[allow(
-    unused_imports,
-    reason = "HeadsStreamError used in drain_heads_response (Task 3)"
-)]
 use myrhiza_network::{
-    ArcRequestHandler, GossipMessage, HeadsResponder, HeadsStream, HeadsStreamError, NetError,
-    Network, RequestHandler, SubError, Subscription,
+    ArcRequestHandler, GossipMessage, HeadsResponder, HeadsStream, NetError, Network,
+    RequestHandler, SubError, Subscription,
 };
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
@@ -300,7 +296,6 @@ pub enum AuthorCommand {
 /// via [`Runtime::serve_direct_heads_request`].
 ///
 /// Per B-4.5 spec §3.1.
-#[allow(dead_code, reason = "wired in Tasks 2-5")]
 pub(crate) struct HeadsRequestCommand {
     /// QUIC-TLS-confirmed pubkey of the peer that issued the request.
     pub(crate) requester: PeerPubkey,
@@ -320,7 +315,6 @@ pub(crate) struct HeadsRequestCommand {
 /// topic.
 ///
 /// Per B-4.5 spec §3.1.
-#[allow(dead_code, reason = "wired in Tasks 2-5")]
 pub(crate) struct KernelRequestHandler {
     /// Sender half of the runtime's inbound-direct-request mailbox.
     tx: mpsc::Sender<HeadsRequestCommand>,
