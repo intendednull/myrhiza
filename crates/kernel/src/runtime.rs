@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_network::{
-    ArcRequestHandler, GossipMessage, HeadsStream, NetError, Network, SubError, Subscription,
+    ArcRequestHandler, GossipMessage, HeadsResponder, HeadsStream, NetError, Network,
+    RequestHandler, SubError, Subscription,
 };
 use myrhiza_types::{
     AuthorPubkey, AuthorSeq, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
@@ -256,6 +257,19 @@ pub enum PeerWarning {
         /// pushed (1, 2, 3, ... up to `transport_error_halt_threshold`).
         consecutive: usize,
     },
+
+    /// A direct-stream `request_heads` call to a peer failed before any
+    /// events were streamed back — typically because the peer is
+    /// unreachable, hasn't registered the heads-request ALPN, or has no
+    /// handler installed. The runtime continues; the next periodic
+    /// `HeadsSummary` tick or fresh inbound `HeadsSummary` will trigger a
+    /// retry. Per B-4.5 spec §3.2.
+    DirectRequestFailed {
+        /// The target peer the request was directed at.
+        peer: PeerPubkey,
+        /// Human-readable diagnostic from `NetError::RequestFailed`.
+        reason: String,
+    },
 }
 
 /// Command sent into the runtime task via [`RuntimeHandle::author_tx`].
@@ -273,6 +287,79 @@ pub enum AuthorCommand {
 
     /// Cooperative shutdown — runtime task exits its select loop.
     Shutdown,
+}
+
+/// Command sent to the runtime task by [`KernelRequestHandler`] when
+/// an inbound direct-stream `HeadsRequest` arrives.
+///
+/// Drained by the select loop's `heads_req_rx.recv()` arm and processed
+/// via [`Runtime::serve_direct_heads_request`].
+///
+/// Per B-4.5 spec §3.1.
+pub(crate) struct HeadsRequestCommand {
+    /// QUIC-TLS-confirmed pubkey of the peer that issued the request.
+    pub(crate) requester: PeerPubkey,
+    /// The decoded request payload (already topic-validated by the
+    /// handler shim).
+    pub(crate) request: DirectHeadsRequest,
+    /// Sender half of the response stream; the runtime pushes events
+    /// through `responder.send(event)`; dropping the responder signals
+    /// clean EOF to the requester.
+    pub(crate) responder: HeadsResponder,
+}
+
+/// [`RequestHandler`] impl installed by [`Runtime::start`] on the
+/// underlying [`Network`]. Forwards inbound direct-stream requests to
+/// the runtime task via mpsc; does topic validation (defense in depth)
+/// to prevent the same handler being misregistered on a different
+/// topic.
+///
+/// Per B-4.5 spec §3.1.
+pub(crate) struct KernelRequestHandler {
+    /// Sender half of the runtime's inbound-direct-request mailbox.
+    tx: mpsc::Sender<HeadsRequestCommand>,
+    /// The topic this handler services. Inbound requests for any other
+    /// topic are silently dropped (clean EOF).
+    topic: Topic,
+}
+
+#[async_trait::async_trait]
+impl RequestHandler for KernelRequestHandler {
+    /// Topic-validate then forward the request into the runtime task's
+    /// mailbox. Returns immediately (drops the responder, yielding
+    /// clean EOF to the requester) when the request targets a topic
+    /// this handler does not service. Otherwise moves the responder
+    /// into the [`HeadsRequestCommand`] and sends; if the runtime task
+    /// has already exited, the send fails silently — dropping the
+    /// responder yields clean EOF on the requester side too. Per B-4.5
+    /// spec §3.1.
+    async fn handle(
+        &self,
+        requester: PeerPubkey,
+        request: DirectHeadsRequest,
+        responder: HeadsResponder,
+    ) {
+        // Defense in depth — confirm the request targets the topic
+        // this runtime services. The IrohNetwork routes by peer+ALPN;
+        // this guards against an embedder that registers the same
+        // handler against multiple per-topic networks by mistake.
+        if request.topic != self.topic {
+            // Drop responder — requester sees clean EOF.
+            return;
+        }
+        // Forward to runtime. If the runtime task has exited, the
+        // send fails; dropping the responder yields EOF to the
+        // requester. No diagnostic surfaced — the runtime has already
+        // shut down, there is nothing to log into.
+        let _ = self
+            .tx
+            .send(HeadsRequestCommand {
+                requester,
+                request,
+                responder,
+            })
+            .await;
+    }
 }
 
 /// Owner-side handle to a spawned per-topic runtime task.
@@ -421,6 +508,28 @@ pub struct Runtime {
     /// `cfg.transport_error_halt_threshold`, the runtime signals
     /// halt and exits the task. Per B-4.3 spec §3.3.
     consecutive_transport_errors: usize,
+
+    /// Mailbox for inbound direct-stream `HeadsRequest` commands. The
+    /// [`KernelRequestHandler`] installed on `network` at startup is the
+    /// only sender. Drained by the select loop's `heads_req_rx.recv()`
+    /// arm and processed by [`Self::serve_direct_heads_request`].
+    /// Per B-4.5 spec §3.3.
+    heads_req_rx: mpsc::Receiver<HeadsRequestCommand>,
+
+    /// Mailbox for events arriving on direct-stream backfill responses.
+    /// The drainer task spawned by [`Self::issue_direct_backfill`] is
+    /// the only sender (cloned from `internal_event_tx`). Drained by
+    /// the select loop's `internal_event_rx.recv()` arm and processed
+    /// via [`Self::handle_event`] — identical path to gossip.
+    /// Per B-4.5 spec §3.3.
+    internal_event_rx: mpsc::Receiver<Event>,
+
+    /// Sender half of `internal_event_rx`, retained so it can be
+    /// cloned into drainer tasks. Cloning into the drainer (rather
+    /// than passing the receiver) means multiple in-flight backfill
+    /// responses can all feed events into the same channel.
+    /// Per B-4.5 spec §3.3.
+    internal_event_tx: mpsc::Sender<Event>,
 }
 
 impl Runtime {
@@ -458,6 +567,25 @@ impl Runtime {
         let sub = erased.subscribe(topic, vec![]).await?;
 
         let (author_tx, author_rx) = mpsc::channel(64);
+
+        // NEW (B-4.5): create the direct-stream channels BEFORE building
+        // the handler. Capacities are sized to match HEADS_STREAM_CHANNEL_
+        // CAPACITY (responder mailbox) and the 256-events-per-EventRequest
+        // bound from B-4.2 (response mailbox provides 128 deep buffer for
+        // backpressure).
+        let (heads_req_tx, heads_req_rx) = mpsc::channel::<HeadsRequestCommand>(32);
+        let (internal_event_tx, internal_event_rx) = mpsc::channel::<Event>(128);
+
+        // NEW (B-4.5): construct + install the handler on the erased
+        // network. The trait method takes `&self`; NetworkErased delegates
+        // to the inner N. Must run BEFORE the `Arc::new(erased)` below
+        // (the Arc consumes `erased` into the Runtime field).
+        let handler = KernelRequestHandler {
+            tx: heads_req_tx,
+            topic,
+        };
+        erased.install_request_handler(Arc::new(handler));
+
         let drift_log = Arc::new(Mutex::new(Vec::new()));
         let equivocation_log = Arc::new(Mutex::new(Vec::new()));
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
@@ -499,6 +627,10 @@ impl Runtime {
             hlc_logical_counter: 0,
             tip_fast_path_hits: tip_fast_path_hits.clone(),
             consecutive_transport_errors: 0,
+            // NEW (B-4.5):
+            heads_req_rx,
+            internal_event_rx,
+            internal_event_tx,
         };
 
         tokio::spawn(async move {
@@ -547,6 +679,12 @@ impl Runtime {
                     }
                     Some(AuthorCommand::Shutdown) | None => return Ok(()),
                 },
+                Some(cmd) = self.heads_req_rx.recv() => {
+                    self.serve_direct_heads_request(cmd).await;
+                }
+                Some(event) = self.internal_event_rx.recv() => {
+                    let _ = self.handle_event(event).await;
+                }
                 recv_result = sub.recv() => match recv_result {
                     Ok(Some(m)) => {
                         self.consecutive_transport_errors = 0;
@@ -988,6 +1126,48 @@ impl Runtime {
             .await;
     }
 
+    /// Issue a direct-stream backfill request to `target_peer` for the
+    /// given `requests`. Spawns a drainer task that forwards response
+    /// events into the runtime's `internal_event_rx` mailbox; the
+    /// runtime select loop picks them up and processes them via
+    /// `handle_event` exactly as if they had arrived through gossip.
+    ///
+    /// On `NetError::RequestFailed`, pushes a
+    /// [`PeerWarning::DirectRequestFailed`] and returns. The next
+    /// periodic `HeadsSummary` tick or fresh inbound `HeadsSummary`
+    /// triggers a retry.
+    ///
+    /// Per B-4.5 spec §3.6.
+    async fn issue_direct_backfill(
+        &mut self,
+        target_peer: PeerPubkey,
+        requests: Vec<myrhiza_types::EventRequest>,
+    ) {
+        let direct_req = DirectHeadsRequest {
+            topic: self.topic,
+            requests,
+        };
+        let stream = match self.network.request_heads(target_peer, direct_req).await {
+            Ok(s) => s,
+            Err(e) => {
+                #[allow(clippy::expect_used)]
+                self.peer_warnings
+                    .lock()
+                    .expect("peer_warnings mutex poisoned")
+                    .push(PeerWarning::DirectRequestFailed {
+                        peer: target_peer,
+                        reason: format!("{e}"),
+                    });
+                return;
+            }
+        };
+        // Spawn a drainer task that forwards each Event from the
+        // stream into the runtime's internal_event_rx mailbox. The
+        // select loop picks them up and calls handle_event.
+        let tx = self.internal_event_tx.clone();
+        tokio::spawn(drain_heads_response(stream, tx));
+    }
+
     /// Process an inbound `HeadsSummary` from a remote peer. Compares
     /// authors and, per `AuthorDiff` classification, requests backfill,
     /// pushes our events, or flags equivocation.
@@ -1043,14 +1223,38 @@ impl Runtime {
             }
         }
 
+        // ORDERING NOTE: push_authors_remote_lacks must run BEFORE the
+        // loopback-early-return + backfill block below. The loopback
+        // branch returns early; if it ever moves above this push, our
+        // own self-diff would skip pushing authors the remote lacks.
+        // Currently safe because the verify-side filter (below) makes
+        // the loopback branch unreachable in production.
         self.push_authors_remote_lacks(&local_map, &remote_authors)
             .await;
 
         if !requests.is_empty() {
-            let req = self.build_signed_heads_request(requests)?;
-            let _ = self
-                .network
-                .publish(self.topic, GossipMessage::HeadsRequest(req))
+            // Loopback guard — defense in depth.
+            //
+            // In production, this branch is currently unreachable:
+            // `handle_heads_summary` is only called by `handle_message`
+            // when `verify_heads_summary` returns true, and that
+            // function (runtime.rs verify_heads_summary loopback
+            // filter) already returns false when
+            // `h.signed_by_peer == self.peer_key.public`. So the
+            // verify-side filter is the primary gate.
+            //
+            // The guard remains here as defense in depth because (a)
+            // future code paths might call handle_heads_summary
+            // directly, bypassing the verify gate; (b) issuing a
+            // self-targeted direct-stream `request_heads` would
+            // deadlock — the handler runs on this very task, awaiting
+            // the request would block forever. The cost is one
+            // pubkey comparison + a possible early return. Per B-4.5
+            // spec §6 (edge cases — loopback).
+            if remote.signed_by_peer == self.peer_key.public {
+                return Ok(());
+            }
+            self.issue_direct_backfill(remote.signed_by_peer, requests)
                 .await;
         }
         Ok(())
@@ -1245,6 +1449,53 @@ impl Runtime {
             }
         }
         Ok(())
+    }
+
+    /// Service an inbound direct-stream `HeadsRequest`. Mirrors the
+    /// per-EventRequest loop from [`Self::handle_heads_request`] but
+    /// streams events to `cmd.responder` instead of broadcasting them
+    /// on the gossip topic.
+    ///
+    /// Bound: a single `EventRequest` may cover at most 256 events
+    /// (`to_seq - from_seq <= 255`); over-sized requests are silently
+    /// dropped — same rule as `handle_heads_request`.
+    ///
+    /// If `cmd.responder.send(event).await` returns `Err`, the
+    /// requester dropped the stream — stop processing further events.
+    ///
+    /// Per B-4.5 spec §3.5.
+    async fn serve_direct_heads_request(&mut self, cmd: HeadsRequestCommand) {
+        // `requester` is captured for future per-peer rate-limit hooks
+        // (B-4.6+); currently unused but documented intent.
+        let _requester = cmd.requester;
+        let responder = cmd.responder;
+
+        for r in cmd.request.requests {
+            if r.to_seq < r.from_seq {
+                continue;
+            }
+            if r.to_seq.saturating_sub(r.from_seq) > 255 {
+                continue;
+            }
+            let Some(chain) = self.dag.author_chain(&r.author) else {
+                continue;
+            };
+            // Snapshot the (seq, hash) pairs before any await so we
+            // don't hold an immutable borrow of `self.dag` across
+            // responder.send.
+            let pairs: Vec<(u64, EventHash)> = (r.from_seq..=r.to_seq)
+                .filter_map(|seq| chain.seq_to_hash.get(&seq).copied().map(|h| (seq, h)))
+                .collect();
+            for (_, hash) in pairs {
+                if let Some(e) = self.dag.get(&hash).cloned()
+                    && responder.send(e).await.is_err()
+                {
+                    // Requester dropped the stream — stop early.
+                    return;
+                }
+            }
+        }
+        // Responder drops at end of function -> requester sees clean EOF.
     }
 
     /// Author + sign + pre-check + self-insert + replay + maybe-emit-drift
@@ -1871,4 +2122,34 @@ pub fn compute_subset_digest(handle: &mut StateApplyHandle, subset: &[Event]) ->
     }
     let digest_bytes = handle.state_digest(&state).ok()?;
     Some(blake3::hash(&digest_bytes).into())
+}
+
+/// Drainer task that consumes a [`HeadsStream`] from a direct-stream
+/// backfill response and forwards Events into the runtime's
+/// `internal_event_rx` mailbox. The runtime processes them via
+/// [`Runtime::handle_event`].
+///
+/// Errors from the stream
+/// ([`HeadsStreamError::Transport`] / `::Decode` / `::Handler`)
+/// terminate the drainer silently; the missing events surface as gaps
+/// on the next `HeadsSummary` cycle.
+///
+/// Per B-4.5 spec §3.7.
+async fn drain_heads_response(mut stream: HeadsStream, tx: mpsc::Sender<Event>) {
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(event) => {
+                if tx.send(event).await.is_err() {
+                    // Runtime task gone; stop draining.
+                    return;
+                }
+            }
+            Err(_e) => {
+                // Stream-level error — terminate. The next
+                // HeadsSummary cycle will surface the same gap and
+                // retry.
+                return;
+            }
+        }
+    }
 }

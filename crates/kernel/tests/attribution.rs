@@ -398,6 +398,10 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
 
     // Open the tap AFTER B's startup emit, so we only capture
     // B's reaction to A's bad-sig message.
+    //
+    // Synthetic bus-injection MemNetwork — no Runtime attached, no
+    // install_request_handler call from this MemNetwork. Pubkey choice
+    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
     let net_tap = MemNetwork::new(
         bus.clone(),
         myrhiza_types::PeerPubkey::from_bytes([0xE1; 32]),
@@ -420,6 +424,9 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
         signature: [0xFF; 64],
     };
 
+    // Synthetic bus-injection MemNetwork — no Runtime attached, no
+    // install_request_handler call from this MemNetwork. Pubkey choice
+    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
     let net_a = MemNetwork::new(
         bus.clone(),
         myrhiza_types::PeerPubkey::from_bytes([0xE2; 32]),
@@ -512,7 +519,9 @@ async fn runtime_drops_heads_request_with_bad_signature() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Open the tap.
+    // Synthetic bus-injection MemNetwork — no Runtime attached, no
+    // install_request_handler call from this MemNetwork. Pubkey choice
+    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
     let net_tap = MemNetwork::new(
         bus.clone(),
         myrhiza_types::PeerPubkey::from_bytes([0xE3; 32]),
@@ -533,6 +542,9 @@ async fn runtime_drops_heads_request_with_bad_signature() {
         signature: [0xFF; 64],
     };
 
+    // Synthetic bus-injection MemNetwork — no Runtime attached, no
+    // install_request_handler call from this MemNetwork. Pubkey choice
+    // is arbitrary. Cited: B-4.5 spec §4.2 carryover audit.
     let net_a = MemNetwork::new(
         bus.clone(),
         myrhiza_types::PeerPubkey::from_bytes([0xE4; 32]),
