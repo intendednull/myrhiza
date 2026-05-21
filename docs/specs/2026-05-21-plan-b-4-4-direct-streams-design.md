@@ -48,7 +48,7 @@ B-4.4 fixes the plumbing only:
 | **Wire shape: `DirectHeadsRequest { topic, requests }` — no signature, no `signed_by_peer`** | Length-prefixed canonical bincode frame. Topic carried in the payload; the responder validates topic membership before serving. No peer signature: mutual QUIC auth replaces it on `IrohNetwork`; in-process trust replaces it on `MemNetwork`. | Reuse existing `HeadsRequest { signed_by_peer, signature, requests }`. | The B-4.2 signature exists because Plumtree forwarding hides the publisher — a *forwarded* gossip message has no inherent attribution. Direct-stream attribution comes from the QUIC TLS handshake: the responder reads the connection's `remote_id()` and knows exactly who's asking. Carrying a redundant signature is dead bytes; verifying it would be redundant work. The signed-only `topic` field on `HeadsRequestSignedPayload` exists for cross-topic replay defense; in direct-streams the topic is bound to the request payload, which is bound to one stream, on one ALPN — no cross-topic replay vector. |
 | **Response shape: framed `Event` items, terminator = stream close** | Responder writes `(u32 BE length, canonical-bincode Event bytes)` frames until it has served the request, then closes the SendStream half. Requester reads frames until EOF. No explicit `Done` marker. | (a) Explicit `HeadsStreamItem { Event(Event), Done }` enum; (b) Newline-delimited JSON | QUIC streams have native EOF semantics (`finish()` on the SendStream signals "no more data"). Adding an explicit `Done` variant duplicates QUIC's signal at the application layer for no gain. Length-prefix framing is the canonical pattern for binary streams; reading until EOF terminates cleanly. The error path — responder hits an internal error mid-stream — is "close the stream early"; requester sees premature EOF and surfaces the partial data + a "stream ended early" warning. |
 | **`HeadsStream` shape: typed struct wrapping `mpsc::Receiver<Result<Event, _>>`** | `pub struct HeadsStream { rx: mpsc::Receiver<Result<Event, HeadsStreamError>> }` with `async fn next(&mut self) -> Option<Result<Event, HeadsStreamError>>` mirroring `Subscription::recv` shape. Sender lives in a spawned reader task that decodes frames from the QUIC SendStream. | `impl Stream` from futures-util. | Concrete type avoids `impl Stream` constraints on the trait surface (which forces `dyn`-unsafe trait or a boxed future per call). Matches the existing `Subscription` pattern in this crate (recv-style polling). `futures-util` is already a workspace dep so the cost is neutral; the gain is consistency with sibling code. |
-| **`MemNetwork` gains `peer_pubkey` field** | `MemNetwork::new(bus, peer_pubkey)` — peer identity required at construction. The bus gains a `request_handlers: Mutex<BTreeMap<PeerPubkey, Arc<dyn RequestHandler>>>` registry keyed by peer. `install_request_handler` registers `(self.peer_pubkey, handler)`. `request_heads(target, req)` looks up `target` in the bus. | (a) Default-zero pubkey + lazy registration; (b) Separate per-peer wire | Adding a peer-identity field reflects what MemNetwork models (one peer's view of the bus); the previous shape was sufficient only because the in-mem bus had no point-to-point semantics. Tests that constructed `MemNetwork::new(bus)` get one extra arg (about 30 call sites; mechanical sweep). Zero-pubkey default is a silent footgun (two peers both default to zero, request routing collides). Separate per-peer wire would split the bus into a peer-direct registry sibling to topic broadcasts — same end state, more code. |
+| **`MemNetwork` gains `peer_pubkey` field** | `MemNetwork::new(bus, peer_pubkey)` — peer identity required at construction. The bus gains a `request_handlers: Mutex<BTreeMap<PeerPubkey, Arc<dyn RequestHandler>>>` registry keyed by peer. `install_request_handler` registers `(self.peer_pubkey, handler)`. `request_heads(target, req)` looks up `target` in the bus. | (a) Default-zero pubkey + lazy registration; (b) Separate per-peer wire | Adding a peer-identity field reflects what MemNetwork models (one peer's view of the bus); the previous shape was sufficient only because the in-mem bus had no point-to-point semantics. Tests that constructed `MemNetwork::new(bus)` get one extra arg (28 call sites verified at audit; mechanical sweep). Zero-pubkey default is a silent footgun (two peers both default to zero, request routing collides). Separate per-peer wire would split the bus into a peer-direct registry sibling to topic broadcasts — same end state, more code. |
 | **`MemNetwork::request_heads` runs the handler in-process synchronously** | The MemNetwork direct-stream impl looks up the target's handler in the bus registry, spawns it on `tokio::spawn`, and connects the handler's output channel to the returned `HeadsStream`. No actual stream over the wire — the bus acts as the transport. | Run handler inline (no spawn) | Spawning preserves the "stream items arrive over time" semantics that `IrohNetwork` exhibits — the requester can call `next()` and yield to the executor between items. Inline execution would cause `request_heads` to block until the handler completes before returning the stream — the test surface diverges from production. The spawned task closes its sender when done, mirroring `IrohNetwork`'s SendStream::finish() signal. |
 | **ALPN bytes: `b"myrhiza/heads-request/1"`** | Versioned per n0 convention (`prior-art/iroh/architecture.md` §"ALPN-based protocol multiplexing"). The `/1` suffix carries the protocol version; bumping it lets B-4.5 or beyond decide whether to accept both versions during a rollout. | (a) Unversioned `b"myrhiza/heads-request"`; (b) `myrhiza-heads-request/1.0` | n0's convention is `<name>/<version>`. Following it preserves the option to register multiple versions on the same Router during a rollout. The dash variant (`myrhiza-heads-request`) is the namespace-style convention; we use `/` to separate version cleanly. Single-digit version is sufficient — semver-style minor bumps don't add value when ALPN matching is exact-string. |
 | **Iroh protocol-handler registration is embedder-driven, not network-driven** | `IrohNetwork::install_request_handler` stores the handler in an `Arc<OnceLock<Arc<dyn RequestHandler>>>` interior field. The embedder separately calls `IrohNetwork::protocol_handler()` to get a `iroh::protocol::ProtocolHandler` impl, then registers it on its `Router`. | Network owns Router registration internally. | The existing IrohNetwork pattern keeps the `Router` caller-owned (per `iroh_transport.rs:73-80` rustdoc); the embedder constructs the Router with all desired ALPNs in one place. Forcing IrohNetwork to register itself would invert ownership and break the existing convention. The `protocol_handler()` method returns a struct that reads from the SendStream/RecvStream pair, decodes the request, looks up the handler in the OnceLock, and invokes it. |
@@ -278,8 +278,8 @@ Re-export `request` module's public items at the crate root:
 ```rust
 pub mod request;
 pub use request::{
-    HeadsRequestHandler, HeadsResponder, HeadsStream, HeadsStreamError,
-    ArcRequestHandler, HEADS_REQUEST_ALPN,
+    ArcRequestHandler, HEADS_REQUEST_ALPN, HeadsResponder, HeadsStream,
+    HeadsStreamError, RequestHandler,
 };
 ```
 
@@ -368,13 +368,14 @@ fn install_request_handler(&self, handler: ArcRequestHandler) {
 }
 ```
 
-**Call-site sweep**: every `MemNetwork::new(bus)` becomes `MemNetwork::new(bus, peer_pubkey)`. Search-and-replace candidates:
+**Call-site sweep**: every `MemNetwork::new(bus)` becomes `MemNetwork::new(bus, peer_pubkey)`. Verified count (audit, 2026-05-21) = **28 sites** across `crates/`:
 
-- `crates/kernel/tests/attribution.rs` (multiple call sites)
-- `crates/kernel/tests/convergence.rs` (multiple)
-- `crates/kernel/tests/halt_detection.rs`
-- `crates/kernel/src/runtime.rs` (any internal construction)
-- `crates/network/tests/memory.rs` (existing MemNetwork tests)
+- `crates/test-utils/src/harness.rs` — 1
+- `crates/network/tests/memory_basic.rs` — 5
+- `crates/kernel/tests/halt_detection.rs` — 3
+- `crates/kernel/tests/perf_carryovers.rs` — 4
+- `crates/kernel/tests/convergence.rs` — 8
+- `crates/kernel/tests/attribution.rs` — 7
 
 Tests that don't care about peer identity pass an arbitrary fixed key like `PeerPubkey::from_bytes([0xA1; 32])` or use a per-peer constant. The plan task that does this sweep enumerates each site.
 
@@ -419,6 +420,13 @@ async fn request_heads(
             peer,
             reason: format!("write request: {e}"),
         })?;
+    // **Impl-time verification**: prior-art does not pin whether
+    // `SendStream::finish()` is sync-fallible (Quinn-style) or async
+    // (some wrappers). Implementer MUST verify against iroh 1.0.0-rc.0
+    // and use the correct call shape — if async, this becomes
+    // `send_stream.finish().await.map_err(...)`; if sync-fallible (as
+    // shown), the `.await` is dropped. Getting this wrong silently
+    // skips the FIN signal and the peer hangs reading.
     send_stream.finish()
         .map_err(|e| NetError::RequestFailed {
             peer,
@@ -431,15 +439,17 @@ async fn request_heads(
 }
 
 fn install_request_handler(&self, handler: ArcRequestHandler) {
-    if self.request_handler.set(handler).is_err() {
-        // Already set — last call wins per trait contract. Replace
-        // by clearing first. OnceLock can't be reset; use Mutex<Option<Arc>>.
-        // (See §3.4.3 — interior field is actually `Mutex<Option<Arc<dyn RequestHandler>>>`.)
-    }
+    // `request_handler` field is `Arc<Mutex<Option<ArcRequestHandler>>>`
+    // (per §3.4.3) — last call wins per the trait contract. Writing
+    // `Some(handler)` covers both first-install and re-install.
+    let mut slot = self.request_handler
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = Some(handler);
 }
 ```
 
-Decision lock: `request_handler` field uses `Mutex<Option<ArcRequestHandler>>`, not `OnceLock`, because the trait contract states "idempotent — last call wins."
+Decision lock: `request_handler` field uses `Arc<Mutex<Option<ArcRequestHandler>>>`, not `OnceLock`, because the trait contract states "idempotent — last call wins" and `OnceLock` cannot be reset.
 
 #### 3.4.2 Accept side: `IrohNetwork::protocol_handler`
 
@@ -473,6 +483,18 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
     {
         let handler = self.handler.clone();
         async move {
+            // **Impl-time verification**: prior-art does not pin the
+            // method that yields the remote peer's `EndpointId` from a
+            // `Connection`. Likely candidates (verify against iroh
+            // 1.0.0-rc.0 `iroh::endpoint::Connection` rustdoc):
+            // `connection.remote_id()`, `connection.remote_endpoint_id()`,
+            // `connection.endpoint_id()`. Pick the one that returns
+            // `Result<iroh::EndpointId, _>` (the TLS-handshake-confirmed
+            // remote key). Iroh-gossip's parallel pattern reads
+            // `Event::Received.delivered_from` (an `EndpointId`) — for
+            // raw Connections we read the equivalent from the
+            // Connection directly. If iroh exposes the remote id only
+            // synchronously and infallibly, drop the `?`.
             let requester_id = connection.remote_id()
                 .map_err(/* convert to AcceptError */ )?;
             let requester = peer_pubkey_from_iroh(requester_id);
@@ -734,10 +756,13 @@ Add a `direct_heads_request_wire_freeze` test that constructs a sample `DirectHe
 - [`docs/specs/2026-05-20-plan-b-4-2-attribution-design.md`](2026-05-20-plan-b-4-2-attribution-design.md) §3.0 — `HeadsRequest` signature rationale (Plumtree-forwarding-hides-publisher) does not apply to direct-streams; QUIC TLS supplies the attribution.
 - [`docs/specs/2026-05-20-plan-b-4-1-iroh-gossip-design.md`](2026-05-20-plan-b-4-1-iroh-gossip-design.md) §3 — the existing `IrohNetwork::new(endpoint, gossip)` constructor convention; B-4.4 preserves it.
 
-**Gaps**:
+**Gaps** (prior-art does not pin; verify at impl time before the corresponding plan task lands):
 
-- iroh-gossip's wire format for `iroh_gossip::ALPN` is opaque to us; we register a sibling ALPN, not extend gossip's. No conflict.
-- iroh 1.0.0-rc.0's `ProtocolHandler` trait signature is not yet pinned in our prior-art docs — must verify against the crate at impl time. Spec assumes the documented `accept(connection) -> Future<Result<(), AcceptError>>` shape.
+1. **`iroh::endpoint::Connection`** — method that yields the remote peer's `EndpointId` from the TLS-handshake handshake. Likely candidates: `connection.remote_id()`, `connection.remote_endpoint_id()`, `connection.endpoint_id()`. Required by §3.4.2 (accept-side requester attribution).
+2. **`iroh::endpoint::SendStream::finish()`** — sync-fallible (Quinn-style) vs async (some wrappers). Required by §3.4.1 (outbound stream close after writing the request) and §3.4.2 (accept-side stream close after the handler completes). Wrong choice silently skips the FIN signal and the peer hangs reading.
+3. **`iroh::endpoint::RecvStream::read_exact`** — exact return type / error shape for `read_exact(&mut [u8])`. The `tokio::io::AsyncReadExt` extension trait is the standard surface but iroh may surface its own wrapper. Required by §3.5 (length-prefix frame reader).
+4. **`iroh::protocol::ProtocolHandler` trait shape** — `accept(connection) -> impl Future<Output = Result<(), AcceptError>> + Send` is the documented shape (prior-art glossary), but the exact `AcceptError` type, the connection-ownership semantics, and whether the handler is `&self` or `&mut self` are not pinned. Verify against iroh 1.0.0-rc.0's `iroh::protocol::ProtocolHandler` rustdoc before writing §3.4.2's impl.
+5. **iroh-gossip's wire format for `iroh_gossip::ALPN`** is opaque to us; we register a sibling ALPN, not extend gossip's. No conflict but worth confirming the ALPN-namespace approach matches iroh-blobs' precedent (`prior-art/iroh/blobs.md` §"Request shape" shows the same "open stream, write request, stream responses" pattern, registered against `iroh_blobs::ALPN`).
 
 ## 10. Future work — explicit deferrals
 
