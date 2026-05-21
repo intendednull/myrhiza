@@ -244,7 +244,7 @@ impl Network for IrohNetwork {
                 reason: format!("write request: {e}"),
             })?;
 
-        // **Impl-time verification (spec §9 gap #2)**: noq-1.0.0-rc.0
+        // **Impl-time verification (spec §9 gap #2)**: iroh-1.0.0-rc.0
         // `SendStream::finish()` is SYNC-fallible — returns
         // `Result<(), ClosedStream>` (not async). The plan's comment
         // said "if async, change to .await". No `.await` needed here.
@@ -409,7 +409,7 @@ pub fn iroh_topic_id_from_topic(topic: Topic) -> iroh_gossip::TopicId {
 ///
 /// Per B-4.4 spec §3.4.1.
 ///
-/// **Impl-time verification (spec §9 gap #3)**: noq-1.0.0-rc.0
+/// **Impl-time verification (spec §9 gap #3)**: iroh-1.0.0-rc.0
 /// `RecvStream` exposes a native `read_exact(&mut [u8]) -> Result<(),
 /// ReadExactError>` (`recv_stream.rs:89`) where `ReadExactError::FinishedEarly`
 /// signals clean EOF (stream finished before all bytes — used here
@@ -462,13 +462,27 @@ async fn read_event_frames(
         }
 
         let mut payload = vec![0u8; len];
-        if let Err(e) = recv_stream.read_exact(&mut payload).await {
-            let _ = tx
-                .send(Err(HeadsStreamError::Transport(format!(
-                    "read payload: {e}"
-                ))))
-                .await;
-            return;
+        match recv_stream.read_exact(&mut payload).await {
+            Ok(()) => {}
+            Err(ReadExactError::FinishedEarly(n)) => {
+                // Truncated payload — distinguished from a clean
+                // frame-boundary EOF (which only happens at the length
+                // prefix, never mid-payload).
+                let _ = tx
+                    .send(Err(HeadsStreamError::Transport(format!(
+                        "truncated payload: got {n} of {len} bytes"
+                    ))))
+                    .await;
+                return;
+            }
+            Err(e) => {
+                let _ = tx
+                    .send(Err(HeadsStreamError::Transport(format!(
+                        "read payload: {e}"
+                    ))))
+                    .await;
+                return;
+            }
         }
 
         let event: myrhiza_types::Event = match canonical_bincode().deserialize(&payload) {
