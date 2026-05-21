@@ -514,6 +514,31 @@ pub struct Runtime {
     /// `cfg.transport_error_halt_threshold`, the runtime signals
     /// halt and exits the task. Per B-4.3 spec §3.3.
     consecutive_transport_errors: usize,
+
+    /// Mailbox for inbound direct-stream `HeadsRequest` commands. The
+    /// [`KernelRequestHandler`] installed on `network` at startup is the
+    /// only sender. Drained by the select loop's `heads_req_rx.recv()`
+    /// arm and processed by [`Self::serve_direct_heads_request`].
+    /// Per B-4.5 spec §3.3.
+    #[allow(dead_code, reason = "consumed by select loop in Task 4")]
+    heads_req_rx: mpsc::Receiver<HeadsRequestCommand>,
+
+    /// Mailbox for events arriving on direct-stream backfill responses.
+    /// The drainer task spawned by [`Self::issue_direct_backfill`] is
+    /// the only sender (cloned from `internal_event_tx`). Drained by
+    /// the select loop's `internal_event_rx.recv()` arm and processed
+    /// via [`Self::handle_event`] — identical path to gossip.
+    /// Per B-4.5 spec §3.3.
+    #[allow(dead_code, reason = "consumed by select loop in Task 4")]
+    internal_event_rx: mpsc::Receiver<Event>,
+
+    /// Sender half of `internal_event_rx`, retained so it can be
+    /// cloned into drainer tasks. Cloning into the drainer (rather
+    /// than passing the receiver) means multiple in-flight backfill
+    /// responses can all feed events into the same channel.
+    /// Per B-4.5 spec §3.3.
+    #[allow(dead_code, reason = "consumed by select loop in Task 4")]
+    internal_event_tx: mpsc::Sender<Event>,
 }
 
 impl Runtime {
@@ -551,6 +576,25 @@ impl Runtime {
         let sub = erased.subscribe(topic, vec![]).await?;
 
         let (author_tx, author_rx) = mpsc::channel(64);
+
+        // NEW (B-4.5): create the direct-stream channels BEFORE building
+        // the handler. Capacities are sized to match HEADS_STREAM_CHANNEL_
+        // CAPACITY (responder mailbox) and the 256-events-per-EventRequest
+        // bound from B-4.2 (response mailbox provides 128 deep buffer for
+        // backpressure).
+        let (heads_req_tx, heads_req_rx) = mpsc::channel::<HeadsRequestCommand>(32);
+        let (internal_event_tx, internal_event_rx) = mpsc::channel::<Event>(128);
+
+        // NEW (B-4.5): construct + install the handler on the erased
+        // network. The trait method takes `&self`; NetworkErased delegates
+        // to the inner N. Must run BEFORE the `Arc::new(erased)` below
+        // (the Arc consumes `erased` into the Runtime field).
+        let handler = KernelRequestHandler {
+            tx: heads_req_tx,
+            topic,
+        };
+        erased.install_request_handler(Arc::new(handler));
+
         let drift_log = Arc::new(Mutex::new(Vec::new()));
         let equivocation_log = Arc::new(Mutex::new(Vec::new()));
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
@@ -592,6 +636,10 @@ impl Runtime {
             hlc_logical_counter: 0,
             tip_fast_path_hits: tip_fast_path_hits.clone(),
             consecutive_transport_errors: 0,
+            // NEW (B-4.5):
+            heads_req_rx,
+            internal_event_rx,
+            internal_event_tx,
         };
 
         tokio::spawn(async move {
