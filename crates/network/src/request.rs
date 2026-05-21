@@ -19,13 +19,19 @@ pub const HEADS_REQUEST_ALPN: &[u8] = b"myrhiza/heads-request/1";
 /// while still allowing burst-write throughput. 32 is sufficient for
 /// the bounded-by-256 batches that [`DirectHeadsRequest::requests`]
 /// targets in practice.
-#[expect(dead_code, reason = "used by MemNetwork/IrohNetwork impls landing in Tasks 4-5")]
+#[expect(
+    dead_code,
+    reason = "used by MemNetwork/IrohNetwork impls landing in Tasks 4-5"
+)]
 pub(crate) const HEADS_STREAM_CHANNEL_CAPACITY: usize = 32;
 
 /// Maximum size of a single framed message (request or event). Bounds
 /// memory pressure on the read side. 4 MiB is generous for events;
 /// `DirectHeadsRequest` payloads are tiny in practice.
-#[expect(dead_code, reason = "used by IrohNetwork framing impl landing in Task 5")]
+#[allow(
+    dead_code,
+    reason = "lib-side wiring lands in Task 5 (IrohNetwork); already referenced by in-module tests via build_frame_at_max_bytes"
+)]
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 /// Errors surfaced through [`HeadsStream::next`].
@@ -57,7 +63,10 @@ pub struct HeadsStream {
 impl HeadsStream {
     /// Construct from an mpsc receiver. Crate-private — callers reach
     /// this via [`crate::Network::request_heads`].
-    #[expect(dead_code, reason = "called by Network::request_heads impls landing in Tasks 4-5")]
+    #[expect(
+        dead_code,
+        reason = "called by Network::request_heads impls landing in Tasks 4-5"
+    )]
     pub(crate) fn new(rx: mpsc::Receiver<Result<Event, HeadsStreamError>>) -> Self {
         Self { rx }
     }
@@ -85,7 +94,10 @@ pub struct HeadsResponder {
 impl HeadsResponder {
     /// Construct from an mpsc sender. Crate-private — callers reach
     /// this via [`RequestHandler::handle`].
-    #[expect(dead_code, reason = "called by RequestHandler dispatch impl landing in Tasks 4-5")]
+    #[expect(
+        dead_code,
+        reason = "called by RequestHandler dispatch impl landing in Tasks 4-5"
+    )]
     pub(crate) fn new(tx: mpsc::Sender<Result<Event, HeadsStreamError>>) -> Self {
         Self { tx }
     }
@@ -130,10 +142,27 @@ pub type ArcRequestHandler = Arc<dyn RequestHandler>;
 // ---- Length-prefix framing helpers ----
 
 /// Build a length-prefixed frame: `(u32 BE length, payload bytes)`.
-// Used by tests in this module and by IrohNetwork framing impl landing in Task 5.
-#[allow(dead_code)]
-#[allow(clippy::expect_used)] // Caller is required to enforce MAX_FRAME_BYTES; panic is intentional.
+///
+/// The caller MUST bound `payload.len()` to `MAX_FRAME_BYTES` (4 MiB
+/// fits well within `u32`); a `debug_assert!` catches violations in
+/// dev/test builds. Release builds rely on the read-side cap in
+/// [`super::iroh_transport`] / [`super::memory`] callers to surface
+/// oversized frames as transport errors.
+#[allow(
+    dead_code,
+    reason = "lib-side call sites land in Task 5 (IrohNetwork) + Task 6 (HeadsRequestProtocol); already exercised by in-module tests"
+)]
+#[allow(
+    clippy::expect_used,
+    reason = "MAX_FRAME_BYTES (4 MiB) always fits in u32"
+)]
 pub(crate) fn build_length_prefixed_frame(payload: &[u8]) -> Vec<u8> {
+    debug_assert!(
+        payload.len() <= MAX_FRAME_BYTES,
+        "frame payload {} exceeds MAX_FRAME_BYTES {}",
+        payload.len(),
+        MAX_FRAME_BYTES,
+    );
     let len = u32::try_from(payload.len())
         .expect("frame payload size fits in u32 (caller bounds frames by MAX_FRAME_BYTES)");
     let mut out = Vec::with_capacity(4 + payload.len());
@@ -143,6 +172,7 @@ pub(crate) fn build_length_prefixed_frame(payload: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -158,5 +188,15 @@ mod tests {
         let frame = build_length_prefixed_frame(&[]);
         assert_eq!(&frame[..4], &[0, 0, 0, 0]);
         assert_eq!(frame.len(), 4);
+    }
+
+    #[test]
+    fn build_frame_at_max_bytes() {
+        let payload = vec![0u8; MAX_FRAME_BYTES];
+        let frame = build_length_prefixed_frame(&payload);
+        assert_eq!(frame.len(), 4 + MAX_FRAME_BYTES);
+        // 4 MiB encoded as u32 big-endian = 0x00400000
+        let expected_len = u32::try_from(MAX_FRAME_BYTES).expect("MAX_FRAME_BYTES fits in u32");
+        assert_eq!(&frame[..4], &expected_len.to_be_bytes());
     }
 }
