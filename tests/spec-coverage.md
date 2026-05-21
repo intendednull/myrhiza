@@ -28,7 +28,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:82
 
 ## convergence.md §4.2
-- crates/kernel/tests/attribution.rs:44
+- crates/kernel/tests/attribution.rs:46
 - crates/kernel/tests/convergence.rs:158
 - crates/kernel/tests/convergence.rs:390
 - crates/kernel/tests/halt_detection.rs:137
@@ -79,15 +79,15 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:276
 - crates/kernel/tests/acceptance.rs:71
-- crates/kernel/tests/attribution.rs:218
-- crates/kernel/tests/attribution.rs:310
+- crates/kernel/tests/attribution.rs:220
+- crates/kernel/tests/attribution.rs:312
 - crates/kernel/tests/halt_detection.rs:223
 - crates/kernel/tests/halt_detection.rs:314
 - crates/kernel/tests/halt_detection.rs:364
 - crates/kernel/tests/halt_detection.rs:475
 
 ## convergence.md §4.4 — User-visible contract: a single-peer
-- crates/kernel/tests/attribution.rs:406
+- crates/kernel/tests/attribution.rs:408
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
 - crates/kernel/tests/convergence.rs:861
@@ -114,8 +114,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:669
 
 ## convergence.md §4.6
-- crates/kernel/tests/attribution.rs:154
-- crates/kernel/tests/attribution.rs:99
+- crates/kernel/tests/attribution.rs:101
+- crates/kernel/tests/attribution.rs:156
 - crates/kernel/tests/convergence.rs:204
 
 ## convergence.md §4.6 — topic-binding on direct-stream requests (B-4.5 §4.1 test 3)
@@ -208,10 +208,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:204
 
 ## networking.md §11.1
-- crates/kernel/tests/attribution.rs:492
+- crates/kernel/tests/attribution.rs:494
 
 ## networking.md §11.1 — `IrohNetwork::publish` and the
-- crates/kernel/tests/attribution.rs:522
+- crates/kernel/tests/attribution.rs:524
 
 ## networking.md §11.1 — iroh's `NodeID` pubkey
 - crates/network/tests/iroh_skeleton.rs:15
