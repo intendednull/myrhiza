@@ -331,7 +331,14 @@ pub(crate) struct KernelRequestHandler {
 
 #[async_trait::async_trait]
 impl RequestHandler for KernelRequestHandler {
-    #[allow(dead_code, reason = "wired in Tasks 2-5")]
+    /// Topic-validate then forward the request into the runtime task's
+    /// mailbox. Returns immediately (drops the responder, yielding
+    /// clean EOF to the requester) when the request targets a topic
+    /// this handler does not service. Otherwise moves the responder
+    /// into the [`HeadsRequestCommand`] and sends; if the runtime task
+    /// has already exited, the send fails silently — dropping the
+    /// responder yields clean EOF on the requester side too. Per B-4.5
+    /// spec §3.1.
     async fn handle(
         &self,
         requester: PeerPubkey,
