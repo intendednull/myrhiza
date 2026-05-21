@@ -415,6 +415,11 @@ pub struct RuntimeHandle {
     pub tip_fast_path_hits: Arc<Mutex<usize>>,
 }
 
+/// Bounded count of peers tracked per author in the
+/// peer-authority index. Older entries are evicted on overflow.
+/// Per B-4.6 spec §2 (decision table).
+pub(crate) const PEER_AUTHORITY_PER_AUTHOR_CAP: usize = 8;
+
 /// Per-topic runtime — owns the event DAG, pending buffer, and
 /// state-apply handle for a single `(topic, app_bundle_hash)` binding.
 ///
@@ -530,6 +535,17 @@ pub struct Runtime {
     /// responses can all feed events into the same channel.
     /// Per B-4.5 spec §3.3.
     internal_event_tx: mpsc::Sender<Event>,
+
+    /// Peer-authority index: for each author, the list of peers
+    /// observed to have signed a `HeadsSummary` advertising authority
+    /// over that author. Ordered most-recently-observed first; capped
+    /// at [`PEER_AUTHORITY_PER_AUTHOR_CAP`] entries per author
+    /// (least-recently-observed evicted on overflow). Populated by
+    /// [`Self::record_peer_authority`] from `handle_heads_summary`.
+    /// Queried by [`Self::lookup_peer_for_author`] from
+    /// `request_author_chain_gap` to pick a direct-stream target.
+    /// Per B-4.6 spec §3.1.
+    peer_authority_index: BTreeMap<AuthorPubkey, Vec<PeerPubkey>>,
 }
 
 impl Runtime {
@@ -631,6 +647,8 @@ impl Runtime {
             heads_req_rx,
             internal_event_rx,
             internal_event_tx,
+            // NEW (B-4.6):
+            peer_authority_index: BTreeMap::new(),
         };
 
         tokio::spawn(async move {
@@ -1117,6 +1135,14 @@ impl Runtime {
         if requests.is_empty() {
             return;
         }
+        // B-4.6: prefer direct-stream when the peer-authority index has a
+        // candidate. Falls back to gossip-routed broadcast when the index is
+        // empty (legacy path; B-4.7 retires this fallback).
+        if let Some(target_peer) = self.lookup_peer_for_author(&author) {
+            self.issue_direct_backfill(target_peer, requests).await;
+            return;
+        }
+        // Fallback: gossip-routed broadcast (legacy path; B-4.7 retires).
         let Ok(req) = self.build_signed_heads_request(requests) else {
             return;
         };
@@ -1177,6 +1203,19 @@ impl Runtime {
     /// fuel-table versions disagree (§11.7, non-fatal).
     async fn handle_heads_summary(&mut self, remote: HeadsSummary) -> Result<(), RuntimeError> {
         self.check_fuel_table_version(&remote);
+
+        // B-4.6: populate the peer-authority index from the signed
+        // HeadsSummary. The signer attests to having events for every
+        // author in `remote.authors` (else it could not advertise
+        // valid tip hashes). Future Pending/InvalidChain recoveries
+        // on these authors will target `remote.signed_by_peer` via
+        // direct-stream. The verify-side filter at
+        // `verify_heads_summary` (line 1836) ensures
+        // `remote.signed_by_peer != self.peer_key.public` here, so
+        // we never record ourselves. Per B-4.6 spec §3.3.
+        for head in &remote.authors {
+            self.record_peer_authority(remote.signed_by_peer, head.author);
+        }
 
         let local_map: BTreeMap<AuthorPubkey, (u64, EventHash)> = self
             .dag
@@ -1415,6 +1454,30 @@ impl Runtime {
             }
             cur = page_end + 1;
         }
+    }
+
+    /// Record that `peer` is known to have authority over `author`
+    /// — we just received a signed `HeadsSummary` from `peer` advertising
+    /// it. Move `peer` to the front of the per-author Vec (MRU); on
+    /// overflow, drop the tail. Per B-4.6 spec §3.2.
+    fn record_peer_authority(&mut self, peer: PeerPubkey, author: AuthorPubkey) {
+        let entry = self.peer_authority_index.entry(author).or_default();
+        // Remove existing occurrence (if any) so the move-to-front is
+        // a single push at the head.
+        entry.retain(|p| *p != peer);
+        entry.insert(0, peer);
+        if entry.len() > PEER_AUTHORITY_PER_AUTHOR_CAP {
+            entry.truncate(PEER_AUTHORITY_PER_AUTHOR_CAP);
+        }
+    }
+
+    /// Look up the most-recently-observed peer with authority over
+    /// `author`. Returns `None` if we have never seen a `HeadsSummary`
+    /// advertising this author. Per B-4.6 spec §3.2.
+    fn lookup_peer_for_author(&self, author: &AuthorPubkey) -> Option<PeerPubkey> {
+        self.peer_authority_index
+            .get(author)
+            .and_then(|peers| peers.first().copied())
     }
 
     /// Service inbound range requests by publishing the requested
