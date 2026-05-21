@@ -520,7 +520,6 @@ pub struct Runtime {
     /// only sender. Drained by the select loop's `heads_req_rx.recv()`
     /// arm and processed by [`Self::serve_direct_heads_request`].
     /// Per B-4.5 spec §3.3.
-    #[allow(dead_code, reason = "consumed by select loop in Task 4")]
     heads_req_rx: mpsc::Receiver<HeadsRequestCommand>,
 
     /// Mailbox for events arriving on direct-stream backfill responses.
@@ -529,7 +528,6 @@ pub struct Runtime {
     /// the select loop's `internal_event_rx.recv()` arm and processed
     /// via [`Self::handle_event`] — identical path to gossip.
     /// Per B-4.5 spec §3.3.
-    #[allow(dead_code, reason = "consumed by select loop in Task 4")]
     internal_event_rx: mpsc::Receiver<Event>,
 
     /// Sender half of `internal_event_rx`, retained so it can be
@@ -691,6 +689,12 @@ impl Runtime {
                     }
                     Some(AuthorCommand::Shutdown) | None => return Ok(()),
                 },
+                Some(cmd) = self.heads_req_rx.recv() => {
+                    self.serve_direct_heads_request(cmd).await;
+                }
+                Some(event) = self.internal_event_rx.recv() => {
+                    let _ = self.handle_event(event).await;
+                }
                 recv_result = sub.recv() => match recv_result {
                     Ok(Some(m)) => {
                         self.consecutive_transport_errors = 0;
@@ -1447,7 +1451,6 @@ impl Runtime {
     /// requester dropped the stream — stop processing further events.
     ///
     /// Per B-4.5 spec §3.5.
-    #[allow(dead_code, reason = "wired in Task 4")]
     async fn serve_direct_heads_request(&mut self, cmd: HeadsRequestCommand) {
         // `requester` is captured for future per-peer rate-limit hooks
         // (B-4.6+); currently unused but documented intent.
