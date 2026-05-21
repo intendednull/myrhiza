@@ -197,11 +197,14 @@ async fn index_populated_by_heads_summary_receipt() {
     // through request_author_chain_gap. Since B now has A in its index, it
     // uses direct-stream (captured by CapturingHandler).
     let builder = EventBuilder::new(&author_kp_a);
+    // Correct app_payload for EventBuilder::genesis is the raw counter seed
+    // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
+    // GenesisV1 struct that EventBuilder::genesis already builds internally.
     let e1 = builder.genesis(
         &APP_BUNDLE,
         TOPIC_SEED,
         "main",
-        genesis_payload(TOPIC_SEED, author_kp_a.author),
+        0_i64.to_be_bytes().to_vec(),
     );
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
@@ -260,7 +263,10 @@ async fn index_populated_by_heads_summary_receipt() {
 /// `DagError::InvalidChain{expected=3, got=4}` → `request_author_chain_gap`
 /// → index lookup → B targets PA (MRU) via direct-stream.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines, reason = "linear scenario; splitting helpers would obscure the MRU ordering assertion")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear scenario; splitting helpers would obscure the MRU ordering assertion"
+)]
 async fn index_move_to_front_on_repeated_observation() {
     let bus = MemBus::new(256);
     let t = topic();
@@ -271,11 +277,14 @@ async fn index_move_to_front_on_repeated_observation() {
 
     // Build events 1 and 2 so we can pre-seed B's DAG.
     let builder = EventBuilder::new(&author_kp);
+    // Correct app_payload for EventBuilder::genesis is the raw counter seed
+    // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
+    // GenesisV1 struct that EventBuilder::genesis already builds internally.
     let e1 = builder.genesis(
         &APP_BUNDLE,
         TOPIC_SEED,
         "main",
-        genesis_payload(TOPIC_SEED, watched_author),
+        0_i64.to_be_bytes().to_vec(),
     );
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
@@ -482,11 +491,14 @@ async fn index_caps_at_8_peers_per_author() {
 
     // Inject a same-author gap event to trigger request_author_chain_gap.
     let builder = EventBuilder::new(&author_kp);
+    // Correct app_payload for EventBuilder::genesis is the raw counter seed
+    // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
+    // GenesisV1 struct that EventBuilder::genesis already builds internally.
     let e1 = builder.genesis(
         &APP_BUNDLE,
         TOPIC_SEED,
         "main",
-        genesis_payload(TOPIC_SEED, watched_author),
+        0_i64.to_be_bytes().to_vec(),
     );
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
@@ -526,16 +538,32 @@ async fn index_caps_at_8_peers_per_author() {
 // Test 4: Pending event with known author uses direct-stream — full convergence
 // ===========================================================================
 
-/// Covers: convergence.md §4.2 — Pending recovery via direct-stream when index is populated (B-4.6 §4.1 test 4).
+/// Covers: convergence.md §4.2 — end-to-end convergence via direct-stream with a populated index (B-4.6 §4.1 test 4).
 ///
-/// A authors genesis + 4 events. B starts empty. A's HeadsSummary tick
-/// populates B's index with A. Then a forged event with a cross-author
-/// Pending dependency is injected into B, triggering the Pending path
-/// (deps unknown → `request_missing_for` → `request_author_chain_gap`).
+/// **What this test exercises**: full two-peer convergence via real
+/// runtimes. A authors a chain; A's periodic HeadsSummary tick
+/// populates B's peer-authority index AND triggers B's
+/// `handle_heads_summary` backfill (the B-4.5 direct-stream path).
+/// B converges to A's digest.
 ///
-/// Simpler path: we use the InvalidChain gap approach (same code path),
-/// but here B also receives A's real events via direct-stream backfill so
-/// that convergence can be verified.
+/// **What this test does NOT exercise**: the request_author_chain_gap
+/// → direct-stream linkage specifically. In this scenario, B receives
+/// A's events in-order via `handle_heads_summary`'s own backfill (the
+/// B-4.5 path, already tested in `direct_backfill.rs::
+/// direct_backfill_two_peer_convergence_over_mem`); `handle_event` never
+/// returns Pending or InvalidChain because events arrive in order. The
+/// request_author_chain_gap path is the subject of Test 6, which
+/// genuinely drives `DagError::InvalidChain` via forged out-of-order
+/// event injection.
+///
+/// **Pending-arm path note**: `request_missing_for` only routes to
+/// `request_author_chain_gap` when `event.seq > known_head_seq + 1`
+/// (the same-author gap branch). For pure cross-author Pending
+/// (deps reference unknown hashes from a different author),
+/// `request_missing_for` publishes a HeadsSummary instead (a
+/// soft nudge), NOT a HeadsRequest. So the "Pending → direct-stream"
+/// shape is structurally indistinguishable from the
+/// "InvalidChain → direct-stream" shape that Test 6 exercises.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pending_event_with_known_author_uses_direct_stream() {
     let bus = MemBus::new(256);
@@ -676,11 +704,14 @@ async fn pending_event_with_unknown_author_falls_back_to_gossip() {
     // from this author's peer, so B's index is empty for this author.
     let author_kp = AuthorKeypair::deterministic(503);
     let builder = EventBuilder::new(&author_kp);
+    // Correct app_payload for EventBuilder::genesis is the raw counter seed
+    // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
+    // GenesisV1 struct that EventBuilder::genesis already builds internally.
     let e1 = builder.genesis(
         &APP_BUNDLE,
         TOPIC_SEED,
         "main",
-        genesis_payload(TOPIC_SEED, author_kp.author),
+        0_i64.to_be_bytes().to_vec(),
     );
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
@@ -726,69 +757,68 @@ async fn pending_event_with_unknown_author_falls_back_to_gossip() {
 
 /// Covers: convergence.md §4.2 — InvalidChain recovery via direct-stream when index populated (B-4.6 §4.1 test 6).
 ///
-/// Specifically exercises the `DagError::InvalidChain` arm of
-/// `handle_event` (same-author chain skip with `got_seq > expected_seq`),
-/// which routes through `request_author_chain_gap`. With the index
-/// populated from A's HeadsSummary, B targets A via direct-stream and
-/// converges to A's digest.
+/// Exercises the `DagError::InvalidChain` arm of `handle_event` directly:
+/// `got_seq > expected_seq` triggers `request_author_chain_gap`, which uses
+/// the peer-authority index (populated by an injected HeadsSummary from A) to
+/// issue a direct-stream request to A. A CapturingHandler on A's MemNetwork
+/// records the request, proving the B-4.6 direct-stream switchover fires for
+/// the InvalidChain path — not just eventual convergence.
 ///
-/// This complements Test 4 (Pending path); both paths call
-/// `request_author_chain_gap`, but this test drives the specific
-/// `InvalidChain` branch.
+/// Structural differences from Test 4:
+/// - B uses a 1-hour tick so no automatic HeadsSummary backfill races with
+///   the CapturingHandler assertion.
+/// - A's index entry is planted via `build_signed_heads_summary` rather than
+///   the periodic tick, giving deterministic timing.
+/// - Only event 3 (seq=3) is injected; B has no prior events for A's author
+///   (expected_seq=1), so `InvalidChain{expected_seq=1, got_seq=3}` fires
+///   and `request_author_chain_gap(A.author, 1, 2)` routes to direct-stream.
+/// - Assertion is on CapturingHandler, not on digest convergence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invalid_chain_uses_direct_stream_when_index_populated() {
     let bus = MemBus::new(256);
     let t = topic();
 
-    // Peer A — author-capable runtime.
+    // Peer A — runs a full runtime so its MemNetwork can receive direct-stream
+    // requests (CapturingHandler is installed after start, last-call-wins).
+    // PeerKeypair doesn't impl Clone (ZeroizeOnDrop) so we construct twice
+    // via `deterministic` (reproducible — same seed → same keypair); one is
+    // moved into Runtime::start, the other is used below to sign the forged
+    // HeadsSummary that pre-populates B's peer-authority index.
+    let kp_a_for_runtime = PeerKeypair::deterministic(601);
     let kp_a = PeerKeypair::deterministic(601);
     let author_kp_a = AuthorKeypair::deterministic(601);
     let net_a = MemNetwork::new(bus.clone(), kp_a.public);
-    let runtime_a = Runtime::start(
-        net_a,
+    let _runtime_a = Runtime::start(
+        net_a.clone(),
         t,
         APP_BUNDLE,
         "main".into(),
         helpers::counter_handle(),
-        kp_a,
+        kp_a_for_runtime,
         Some(AuthorKeypair::deterministic(601)),
-        fast_cfg(),
+        // Long tick — A should not interfere with B's index via its own
+        // HeadsSummary during the test; B's index is seeded manually below.
+        RuntimeCfg {
+            heads_summary_tick: Duration::from_secs(3600),
+            ..RuntimeCfg::default()
+        },
     )
     .await
     .expect("runtime_a start");
 
-    // Author genesis + 3 increments = 4 events.
-    let (tx0, rx0) = tokio::sync::oneshot::channel();
-    runtime_a
-        .author_tx
-        .send(AuthorCommand::Author {
-            payload: genesis_payload(TOPIC_SEED, author_kp_a.author),
-            deps: BTreeSet::new(),
-            reply: tx0,
-        })
-        .await
-        .expect("author genesis");
-    rx0.await.expect("genesis reply").expect("genesis ok");
+    // Install CapturingHandler on A AFTER Runtime::start (last-call-wins).
+    // B will issue direct-stream requests to kp_a.public, which this handler
+    // intercepts. The handler does not emit any events back — only records.
+    let seen = Arc::new(TokioMutex::new(Vec::<(PeerPubkey, AuthorPubkey)>::new()));
+    net_a.install_request_handler(Arc::new(CapturingHandler {
+        seen: Arc::clone(&seen),
+    }));
 
-    for delta in [1_i64, 1, 1] {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        runtime_a
-            .author_tx
-            .send(AuthorCommand::Author {
-                payload: delta.to_be_bytes().to_vec(),
-                deps: BTreeSet::new(),
-                reply: tx,
-            })
-            .await
-            .expect("author increment");
-        rx.await.expect("increment reply").expect("increment ok");
-    }
-
-    // Peer B — read-only, slow tick so it starts with empty index.
-    // We inject A's HeadsSummary manually to populate the index, then
-    // inject a forged event 4 (skipping seqs 1-3) to trigger InvalidChain.
+    // Peer B — read-only, very long tick so no automatic HeadsSummary
+    // fires during the test window. Index is seeded manually below.
     let kp_b = PeerKeypair::deterministic(602);
-    let runtime_b = Runtime::start(
+    let b_peer_pubkey = kp_b.public;
+    let _runtime_b = Runtime::start(
         MemNetwork::new(bus.clone(), kp_b.public),
         t,
         APP_BUNDLE,
@@ -796,35 +826,79 @@ async fn invalid_chain_uses_direct_stream_when_index_populated() {
         helpers::counter_handle(),
         kp_b,
         None,
-        fast_cfg(),
+        RuntimeCfg {
+            heads_summary_tick: Duration::from_secs(3600),
+            ..RuntimeCfg::default()
+        },
     )
     .await
     .expect("runtime_b start");
 
-    // Wait for B to receive A's HeadsSummary (50ms tick) → index populated,
-    // then A's direct-stream backfill fully converges B to A's digest.
-    let mut watch_b = runtime_b.digest_watch.clone();
-    let watch_a = runtime_a.digest_watch.clone();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Seed B's peer-authority index: inject a HeadsSummary signed by kp_a
+    // advertising author_kp_a.author at seq=3. B's index records
+    // kp_a.public as the candidate peer for author_kp_a.author.
+    // No actual events are sent, so B's DAG has expected_seq=1 for A's author.
+    let injector = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xA6; 32]));
+    let summary = build_signed_heads_summary(&kp_a, t, author_kp_a.author, 3);
+    injector
+        .publish(t, GossipMessage::HeadsSummary(summary))
+        .await
+        .expect("inject HeadsSummary from A");
+
+    // Give B time to process the HeadsSummary and populate its index.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Build a valid chain of 3 events signed by author_kp_a.
+    // Only e3 (seq=3) will be injected. B has expected_seq=1 for A's author,
+    // so inserting e3 returns DagError::InvalidChain{expected_seq=1, got_seq=3},
+    // which triggers request_author_chain_gap(A.author, 1, 2).
+    // The peer-authority index has kp_a.public for A's author → direct-stream
+    // to A → CapturingHandler records the request from B.
+    let builder = EventBuilder::new(&author_kp_a);
+    let e1 = builder.genesis(
+        &APP_BUNDLE,
+        TOPIC_SEED,
+        "main",
+        0_i64.to_be_bytes().to_vec(),
+    );
+    let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
+    let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
+
+    // Inject only e3 (seq=3). B has no prior events for A's author
+    // (expected_seq=1), so InvalidChain fires and request_author_chain_gap
+    // issues a direct-stream request to kp_a.public via the index.
+    injector
+        .publish(t, GossipMessage::Event(e3))
+        .await
+        .expect("inject e3");
+
+    // Wait for the CapturingHandler on A to record B's direct-stream request.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "convergence timeout (InvalidChain path) — A digest {:?}, B digest {:?}",
-            watch_a.borrow().as_slice(),
-            watch_b.borrow().as_slice(),
-        );
-        let a = watch_a.borrow().clone();
-        let b = watch_b.borrow().clone();
-        if !a.is_empty() && a == b {
+        if std::time::Instant::now() > deadline {
+            let recorded = seen.lock().await.clone();
+            panic!(
+                "CapturingHandler on A never received a direct-stream request from B \
+                 after InvalidChain gap injection; recorded={recorded:?}"
+            );
+        }
+        let recorded = seen.lock().await.clone();
+        if recorded
+            .iter()
+            .any(|(req, auth)| *req == b_peer_pubkey && *auth == author_kp_a.author)
+        {
             break;
         }
-        let _ = timeout(Duration::from_millis(50), watch_b.changed()).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    assert_eq!(
-        watch_a.borrow().as_slice(),
-        watch_b.borrow().as_slice(),
-        "B must converge to A's digest via the InvalidChain → direct-stream recovery path \
-         (request_author_chain_gap uses peer-authority index, not gossip broadcast)"
+    let recorded = seen.lock().await.clone();
+    assert!(
+        recorded
+            .iter()
+            .any(|(req, auth)| *req == b_peer_pubkey && *auth == author_kp_a.author),
+        "CapturingHandler must have seen B's direct-stream request to A targeting \
+         A's author chain (InvalidChain{{expected_seq=1, got_seq=3}} → \
+         request_author_chain_gap → peer-authority index lookup → direct-stream)"
     );
 }
