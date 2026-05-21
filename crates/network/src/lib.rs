@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod memory;
+pub mod request;
 pub mod subscription;
 
 #[cfg(feature = "network-iroh")]

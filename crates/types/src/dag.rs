@@ -302,7 +302,7 @@ pub struct HeadsRequestSignedPayload {
 /// one stream on one ALPN, so cross-topic replay has no vector.
 ///
 /// **Wire layout (canonical bincode v1, normative)**:
-///   1. `topic`: `Topic` (serde_bytes_32_pub, 40 bytes)
+///   1. `topic`: `Topic` (`serde_bytes_32_pub`, 40 bytes)
 ///   2. `requests`: `Vec<EventRequest>` (length-prefixed sequence)
 ///
 /// Field order is normative — emitter and verifier MUST encode fields
