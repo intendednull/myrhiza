@@ -22,6 +22,7 @@ fn fast_cfg() -> RuntimeCfg {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     }
 }
 
@@ -556,6 +557,7 @@ async fn pending_event_triggers_heads_request_not_heads_summary() {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     };
 
     // Spawn peer B (read-only — it never authors).
@@ -713,6 +715,7 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     };
 
     // Spawn read-only B. No author key — B never authors, only observes.
@@ -918,6 +921,7 @@ async fn dropped_at_apply_records_rejected_events() {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     };
 
     // Spawn read-only B with the rejector handle. No author key — B

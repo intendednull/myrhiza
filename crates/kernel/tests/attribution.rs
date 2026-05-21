@@ -33,6 +33,7 @@ fn fast_cfg() -> RuntimeCfg {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     }
 }
 
@@ -603,6 +604,7 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     };
 
     let pub_a = PeerKeypair::deterministic(15).public;
@@ -706,6 +708,7 @@ async fn runtime_loopback_filter_skips_own_heads_summary_verify() {
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,
         drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
     };
 
     let net = MemNetwork::new(bus.clone());
