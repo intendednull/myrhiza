@@ -166,22 +166,44 @@ Channel capacities:
 
 ### 3.4 `Runtime::start` wiring — `crates/kernel/src/runtime.rs`
 
-Modify `Runtime::start` (currently around `runtime.rs:436-510`) to:
+Modify `Runtime::start` (currently `runtime.rs:444-524`):
 
-1. Create the new channels:
-   ```rust
-   let (heads_req_tx, heads_req_rx) = mpsc::channel::<HeadsRequestCommand>(32);
-   let (internal_event_tx, internal_event_rx) = mpsc::channel::<Event>(128);
-   ```
-2. Construct and install the handler BEFORE moving `network` into the runtime:
-   ```rust
-   let handler = KernelRequestHandler {
-       tx: heads_req_tx,
-       topic,
-   };
-   network.install_request_handler(Arc::new(handler));
-   ```
-3. Populate the new `Runtime` fields with `heads_req_rx`, `internal_event_rx`, `internal_event_tx`.
+The constructor erases the parameter `network: N` into `NetworkErased<N>` at `runtime.rs:454`, then subscribes via `erased.subscribe(...)` at line 458, then wraps in `Arc::new(erased)` at line 478 when populating the `Runtime` struct. **The install call must run on `erased` after line 454 and before line 478.** Calling on the raw `network: N` parameter after line 454 is a use-after-move; calling on `Arc::new(erased)` would require cloning the Arc twice for the handler reference, which is unnecessary since `Network::install_request_handler` takes `&self`.
+
+Concrete wiring:
+
+```rust
+let erased = NetworkErased::new(network);
+// B-4.* will plumb peer-discovery into Runtime::start; for now ...
+let sub = erased.subscribe(topic, vec![]).await?;
+
+let (author_tx, author_rx) = mpsc::channel(64);
+// NEW (B-4.5): create the direct-stream channels BEFORE building the handler.
+let (heads_req_tx, heads_req_rx) = mpsc::channel::<HeadsRequestCommand>(32);
+let (internal_event_tx, internal_event_rx) = mpsc::channel::<Event>(128);
+
+// NEW (B-4.5): install the handler on the erased network. The trait
+// method takes &self; NetworkErased delegates the call to the inner N.
+// Must run before `Arc::new(erased)` below — Arc::new consumes the erased
+// value into the Runtime field.
+let handler = KernelRequestHandler {
+    tx: heads_req_tx,
+    topic,
+};
+erased.install_request_handler(Arc::new(handler));
+
+// ... existing log/digest/watch construction unchanged ...
+
+let mut runtime = Runtime {
+    network: Arc::new(erased),  // line 478 — unchanged
+    // ... existing fields ...
+    // NEW (B-4.5) fields:
+    heads_req_rx,
+    internal_event_rx,
+    internal_event_tx,
+    consecutive_transport_errors: 0,  // existing
+};
+```
 
 ### 3.5 `Runtime::serve_direct_heads_request` — `crates/kernel/src/runtime.rs`
 
@@ -447,7 +469,7 @@ If the audit reveals any test where `net_a` / `net_tap` IS attached to a Runtime
 | Requester sends `requests: vec![]` | Outer loop has zero iterations; responder drops immediately; clean EOF. |
 | Direct-stream response yields a duplicate Event | `handle_event` calls `dag.insert(event)` which is idempotent on hash collision. Replay continues normally. |
 | Direct-stream response yields a malformed Event | `handle_event` catches it via signature verification or pre-check; event is rejected; no DAG mutation. |
-| `request_heads(self.peer_pubkey, ...)` (loopback) | MemNetwork: handler installed locally; KernelRequestHandler topic-validates and runs `serve_direct_heads_request` on the SAME runtime task — deadlock risk because the runtime is awaiting `request_heads().await` while the handler waits to run on the same task. **Mitigation**: `handle_heads_summary` should skip backfill when `target_peer == self.peer_pubkey`. Same loopback filter the B-4.2 spec applied to verify-side handling. |
+| `request_heads(self.peer_key.public, ...)` (loopback) | MemNetwork: handler installed locally; KernelRequestHandler topic-validates and runs `serve_direct_heads_request` on the SAME runtime task — deadlock risk because the runtime is awaiting `request_heads().await` while the handler waits to run on the same task. **Mitigation**: `handle_heads_summary` skips backfill when `target_peer == self.peer_key.public`. Same loopback filter the B-4.2 spec applied to verify-side handling. |
 | Runtime shutdown while a drainer task is mid-stream | The drainer's `tx.send(event).await` returns Err once `internal_event_rx` drops. Drainer exits cleanly. |
 | `heads_req_rx` channel full | Send from handler shim returns `Err`. Responder drops; requester sees clean EOF. The protocol's natural retry (next HeadsSummary tick on the requester) will re-issue. |
 | Two concurrent `request_heads` to same target peer | IrohNetwork opens two independent QUIC bidi streams (multiplexed on one Connection). MemNetwork spawns two handler tasks. No collision — handler is `&self`. Drainers both feed into the same `internal_event_rx`. Deduplication is implicit in `handle_event`. |
@@ -463,7 +485,12 @@ if !requests.is_empty() {
     // request would deadlock. The HeadsSummary signed by our own
     // pubkey arrives via MemNetwork's broadcast — we receive our own
     // emit. Drop the backfill attempt.
-    if remote.signed_by_peer == self.peer_pubkey {
+    //
+    // The Runtime's local pubkey is `self.peer_key.public` —
+    // `peer_key: PeerKeypair` is the Ed25519 keypair field (matches
+    // the existing loopback filter in `verify_heads_summary` at
+    // `runtime.rs:1585`).
+    if remote.signed_by_peer == self.peer_key.public {
         return Ok(());
     }
     self.issue_direct_backfill(remote.signed_by_peer, requests).await;
