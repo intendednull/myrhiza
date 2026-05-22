@@ -40,11 +40,12 @@ check:
 # Tools required: rustup target wasm32-unknown-unknown, wasm-tools.
 build-fixtures: \
     (_build-fixture "counter-state-apply" "counter_state_apply_fixture") \
+    (_build-fixture "echo-state-apply" "echo_state_apply_fixture") \
     (_build-fixture "over-importer" "over_importer_fixture") \
     (_build-fixture "pre-check-rejector" "pre_check_rejector_fixture") \
     (_build-fixture "infinite-loop" "infinite_loop_fixture") \
     (_build-fixture "float-banned" "float_banned_fixture")
-    @echo "Built 5 fixtures into tests/fixtures/built/"
+    @echo "Built 6 fixtures into tests/fixtures/built/"
 
 # Compile a single fixture into a wasm component. `crate_name` is the
 # Rust crate name with hyphens replaced by underscores (cargo's artifact

@@ -15,6 +15,7 @@ exclude = [
     # Workspace inclusion would force `cargo check --workspace` to
     # attempt cross-compiling on every gate run.
     "tests/fixtures/counter-state-apply",
+    "tests/fixtures/echo-state-apply",
     "tests/fixtures/over-importer",
     "tests/fixtures/pre-check-rejector",
     "tests/fixtures/infinite-loop",
