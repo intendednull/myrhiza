@@ -14,8 +14,8 @@ use myrhiza_kernel::identity::PeerKeypair;
 use myrhiza_kernel::runtime::{PeerWarning, Runtime, RuntimeCfg};
 use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network};
 use myrhiza_types::{
-    AuthorHead, AuthorPubkey, BundleHash, EventHash, HeadsSummary, HeadsSummarySignedPayload,
-    Topic, canonical_bincode,
+    AuthorHead, AuthorPubkey, AuthorSeq, BundleHash, DriftAnchor, DriftMessage, EventHash,
+    HeadsSummary, HeadsSummarySignedPayload, Topic, canonical_bincode,
 };
 
 mod helpers;
@@ -303,6 +303,95 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
     );
 
     // Cleanup.
+    let _ = runtime_b
+        .author_tx
+        .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)
+        .await;
+}
+
+/// Covers: convergence.md §4.7 — bad-signature drift surfaces as `PeerWarning::SignatureInvalid` (B-4.8 carryover).
+///
+/// Mirrors the `runtime_drops_heads_summary_with_bad_signature` shape
+/// but on the drift path. Peer A hand-forges a `DriftMessage` with a
+/// deliberately wrong signature; peer B's `process_drift_message`
+/// rejects the signature AND (post-B-4.8) pushes a `SignatureInvalid`
+/// warning instead of silently dropping. Per B-4.2 §10 carryover.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_drops_drift_with_bad_signature() {
+    let bus = MemBus::new(256);
+    let app_bundle_hash = BundleHash::from_bytes([0xA1; 32]);
+    let topic_name = "main".to_string();
+    let seed = [0x01u8; 32];
+    let topic = Topic::derive(&app_bundle_hash, &seed, &topic_name);
+
+    let kp_a = PeerKeypair::deterministic(81);
+    let pub_a = kp_a.public;
+    let pub_b = PeerKeypair::deterministic(82).public;
+    assert_ne!(pub_a, pub_b);
+
+    let peer_kp_b = PeerKeypair::deterministic(82);
+    let net_b = MemNetwork::new(bus.clone(), peer_kp_b.public);
+    let runtime_b = Runtime::start(
+        net_b,
+        topic,
+        app_bundle_hash,
+        topic_name.clone(),
+        helpers::counter_handle(),
+        peer_kp_b,
+        None,
+        fast_cfg(),
+    )
+    .await
+    .expect("runtime_b start");
+
+    // Give B's startup HeadsSummary a chance to flush.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Hand-forge a bad-sig DriftMessage with an empty anchor (covers
+    // vacuously since `author_seq_vec` is empty; means the anchor-covered
+    // check passes trivially in process_drift_message). The signature is
+    // [0xFF; 64] — definitely wrong against any real peer key.
+    let bad_sig_drift = DriftMessage {
+        anchor: DriftAnchor {
+            event_hash: EventHash::ZERO,
+            author_seq_vec: Vec::<AuthorSeq>::new(),
+        },
+        digest: [0xCC; 32],
+        digest_format: "bincode-1.3".into(),
+        signed_by_peer: pub_a,
+        signature: [0xFF; 64],
+    };
+
+    // Synthetic bus-injection MemNetwork (no Runtime attached).
+    let net_inject = MemNetwork::new(
+        bus.clone(),
+        myrhiza_types::PeerPubkey::from_bytes([0xE5; 32]),
+    );
+    net_inject
+        .publish(topic, GossipMessage::Drift(bad_sig_drift))
+        .await
+        .expect("publish bad-sig drift");
+
+    // Give B time to receive and process the message.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // B must have accumulated exactly one SignatureInvalid warning
+    // attributed to the claimed peer pub_a (the verify failed; the
+    // warning records the *claimed* identity for observability).
+    let warnings = runtime_b
+        .peer_warnings
+        .lock()
+        .expect("peer_warnings mutex")
+        .clone();
+    let sig_invalid_count = warnings
+        .iter()
+        .filter(|w| matches!(w, PeerWarning::SignatureInvalid { peer: Some(p) } if *p == pub_a))
+        .count();
+    assert_eq!(
+        sig_invalid_count, 1,
+        "B must record exactly one SignatureInvalid warning attributed to pub_a; saw warnings={warnings:?}"
+    );
+
     let _ = runtime_b
         .author_tx
         .send(myrhiza_kernel::runtime::AuthorCommand::Shutdown)

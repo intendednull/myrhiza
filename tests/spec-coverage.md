@@ -80,14 +80,14 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:276
 - crates/kernel/tests/acceptance.rs:71
 - crates/kernel/tests/attribution.rs:220
-- crates/kernel/tests/attribution.rs:312
+- crates/kernel/tests/attribution.rs:401
 - crates/kernel/tests/halt_detection.rs:223
 - crates/kernel/tests/halt_detection.rs:314
 - crates/kernel/tests/halt_detection.rs:364
 - crates/kernel/tests/halt_detection.rs:475
 
 ## convergence.md §4.4 — User-visible contract: a single-peer
-- crates/kernel/tests/attribution.rs:408
+- crates/kernel/tests/attribution.rs:497
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
 - crates/kernel/tests/convergence.rs:861
@@ -126,6 +126,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## convergence.md §4.7 — `spawn_blocking` off-loop compute for drift-anchor digest (B-2.1 §4.2)
 - crates/kernel/tests/perf_carryovers.rs:646
+
+## convergence.md §4.7 — bad-signature drift surfaces as `PeerWarning::SignatureInvalid` (B-4.8 carryover)
+- crates/kernel/tests/attribution.rs:312
 
 ## convergence.md §4.7 — multi-author convergence regression guard for tip-fast-path landing (B-2.1 §5 test 5)
 - crates/kernel/tests/perf_carryovers.rs:573
@@ -208,10 +211,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:204
 
 ## networking.md §11.1
-- crates/kernel/tests/attribution.rs:494
+- crates/kernel/tests/attribution.rs:583
 
 ## networking.md §11.1 — `IrohNetwork::publish` and the
-- crates/kernel/tests/attribution.rs:524
+- crates/kernel/tests/attribution.rs:613
 
 ## networking.md §11.1 — iroh's `NodeID` pubkey
 - crates/network/tests/iroh_skeleton.rs:15
