@@ -219,7 +219,10 @@ async fn kernel_instantiates_and_applies_echo() {
 /// underlying key material, which is the B-4.5 Task 5 established
 /// pattern for reusing a peer pubkey across two runtimes without Clone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines, reason = "linear scenario test; splitting into helpers would obscure the protocol-shape assertion")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear scenario test; splitting into helpers would obscure the protocol-shape assertion"
+)]
 async fn two_apps_coexist_no_event_crossing() {
     // --- Shared bus -----------------------------------------------------------
     let bus = MemBus::new(256);
@@ -246,7 +249,13 @@ async fn two_apps_coexist_no_event_crossing() {
 
     // --- Author keypairs ------------------------------------------------------
     // Distinct author keys per runtime so there's no same-author cross-chain
-    // confusion.
+    // confusion. SEED ALIGNMENT: the runtimes' internal AuthorKeypair seeds
+    // (501 for counter, 502 for echo, passed to Runtime::start below) MUST
+    // match these seeds — the genesis payloads embed kp_*_author.author as
+    // `founder_pubkey`, and that pubkey must equal the pubkey of the
+    // keypair the runtime uses to sign events. If these seeds drift,
+    // genesis validation will fail silently. Cross-reference both seed
+    // sources before editing.
     let kp_counter_author = AuthorKeypair::deterministic(501);
     let kp_echo_author = AuthorKeypair::deterministic(502);
 
@@ -264,7 +273,7 @@ async fn two_apps_coexist_no_event_crossing() {
         topic_name.clone(),
         helpers::counter_handle(),
         peer_key_for_counter,
-        Some(AuthorKeypair::deterministic(501)),
+        Some(AuthorKeypair::deterministic(501)), // seed MUST match kp_counter_author above.
         cfg.clone(),
     )
     .await
@@ -281,7 +290,7 @@ async fn two_apps_coexist_no_event_crossing() {
         topic_name.clone(),
         helpers::echo_handle(),
         peer_key_for_echo,
-        Some(AuthorKeypair::deterministic(502)),
+        Some(AuthorKeypair::deterministic(502)), // seed MUST match kp_echo_author above.
         cfg,
     )
     .await
