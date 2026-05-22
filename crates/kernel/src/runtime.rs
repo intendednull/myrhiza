@@ -1883,6 +1883,18 @@ impl Runtime {
         if myrhiza_manifest::verify_signature(d.signed_by_peer.as_bytes(), &bytes, &d.signature)
             .is_err()
         {
+            // B-4.8: surface bad-sig drift messages as a PeerWarning,
+            // matching the equivalent shape in `verify_heads_summary`
+            // (B-4.2 §10 carryover). Note the claimed peer is *claimed*
+            // (the sig failed to verify against this key), useful for
+            // observability + correlation, not for trust decisions.
+            #[allow(clippy::expect_used)]
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::SignatureInvalid {
+                    peer: Some(d.signed_by_peer),
+                });
             return;
         }
         // Step 2: anchor coverage check.
