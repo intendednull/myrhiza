@@ -38,11 +38,7 @@ The **load-bearing finding**: Tor v3's hidden-service descriptor-rotation constr
 
 The **second finding**: anonymity is a **layer of layers** (transport / sealed-sender / E2E content / pattern-traffic). No transport alone is "anonymity." Myrhiza compositions must name **which adversary** each layer defeats. See [`lessons.md`](lessons.md) §"The single most important lesson".
 
-## Framing disclosure
-
-This folder is written from a **Myrhiza-as-netlayer-pluggable-runtime** stance: the "Implications for Myrhiza" framings assume anonymity transports are *one* of several optional transports apps may select. A different design (anonymity-by-default, single-transport runtime) would weight the same facts differently. Future readers auditing whether netlayer-pluggability is itself the right primitive should weigh the corpus accordingly.
-
-The folder also leans toward **donation-funded / foundation-stewarded** transports (Tor, Veilid, I2P) over **token-funded** (Nym, HOPR). The token-funded entries are documented honestly but the "Implications for Myrhiza" framings flag the token-narrative bias explicitly so spec authors can evaluate the claims independently.
+**Framing disclosure.** This folder is written from a **Myrhiza-as-netlayer-pluggable-runtime** stance: the "Implications for Myrhiza" framings assume anonymity transports are *one* of several optional transports apps may select. A different design (anonymity-by-default, single-transport runtime) would weight the same facts differently. Future readers auditing whether netlayer-pluggability is itself the right primitive should weigh the corpus accordingly. The folder also leans toward **donation-funded / foundation-stewarded** transports (Tor, Veilid, I2P) over **token-funded** (Nym, HOPR). The token-funded entries are documented honestly but the "Implications for Myrhiza" framings flag the token-narrative bias explicitly so spec authors can evaluate the claims independently.
 
 ## Sources
 
