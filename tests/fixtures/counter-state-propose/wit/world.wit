@@ -1,0 +1,38 @@
+// Local copy of the kernel WIT for the fixture.
+//
+// The production canonical ABI lives at `wit/myrhiza-kernel/wit/`.
+// We re-declare a structurally-compatible subset here because
+// wit-bindgen requires the target's WIT inside the fixture crate.
+//
+// The package name + interface names mirror the production kernel
+// package so the resulting component's import paths match what
+// `WasmtimeBackend::instantiate_state_propose` expects when its
+// bindgen-generated linker looks up `myrhiza:kernel/host-deterministic`.
+//
+// The production `state-propose` world also declares
+// `import host-non-deterministic`. We DROP that import here because
+// counter's propose does not call any non-deterministic function, and
+// binding non-det imports requires resource-table plumbing deferred to
+// a later slice (see spec §3.5 + Choice B). The component model emits
+// only the imports the fixture actually uses; since this WIT does not
+// declare those imports the produced component will not import them,
+// which is a valid subset of the ambient set per architecture.md §3.5.
+package myrhiza:kernel@1.0.0;
+
+interface types {
+    variant verdict {
+        accept,
+        reject(string),
+    }
+}
+
+interface host-deterministic {
+    hash: func(bytes: list<u8>) -> list<u8>;
+    log: func(level: u8, msg: string);
+}
+
+world state-propose {
+    import host-deterministic;
+    export propose: func(prior-state: list<u8>, intent: list<u8>) ->
+        result<list<u8>, string>;
+}

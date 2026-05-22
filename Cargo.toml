@@ -20,6 +20,7 @@ exclude = [
     "tests/fixtures/pre-check-rejector",
     "tests/fixtures/infinite-loop",
     "tests/fixtures/float-banned",
+    "tests/fixtures/counter-state-propose",
 ]
 
 [workspace.package]

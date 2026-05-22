@@ -39,25 +39,27 @@ check:
 #
 # Tools required: rustup target wasm32-unknown-unknown, wasm-tools.
 build-fixtures: \
-    (_build-fixture "counter-state-apply" "counter_state_apply_fixture") \
-    (_build-fixture "echo-state-apply" "echo_state_apply_fixture") \
-    (_build-fixture "over-importer" "over_importer_fixture") \
-    (_build-fixture "pre-check-rejector" "pre_check_rejector_fixture") \
-    (_build-fixture "infinite-loop" "infinite_loop_fixture") \
-    (_build-fixture "float-banned" "float_banned_fixture")
-    @echo "Built 6 fixtures into tests/fixtures/built/"
+    (_build-fixture "counter-state-apply" "counter_state_apply_fixture" "state-apply") \
+    (_build-fixture "echo-state-apply" "echo_state_apply_fixture" "state-apply") \
+    (_build-fixture "over-importer" "over_importer_fixture" "state-apply") \
+    (_build-fixture "pre-check-rejector" "pre_check_rejector_fixture" "state-apply") \
+    (_build-fixture "infinite-loop" "infinite_loop_fixture" "state-apply") \
+    (_build-fixture "float-banned" "float_banned_fixture" "state-apply") \
+    (_build-fixture "counter-state-propose" "counter_state_propose_fixture" "state-propose")
+    @echo "Built 7 fixtures into tests/fixtures/built/"
 
 # Compile a single fixture into a wasm component. `crate_name` is the
 # Rust crate name with hyphens replaced by underscores (cargo's artifact
 # filename rule). `dir` is the fixture directory under tests/fixtures/.
-_build-fixture dir crate_name:
+# `world` is the WIT world name passed to `wasm-tools component embed`.
+_build-fixture dir crate_name world:
     @mkdir -p tests/fixtures/built
     cd tests/fixtures/{{dir}} && \
         cargo build --release --target wasm32-unknown-unknown --locked
     wasm-tools component embed \
         tests/fixtures/{{dir}}/wit \
         tests/fixtures/{{dir}}/target/wasm32-unknown-unknown/release/{{crate_name}}.wasm \
-        --world state-apply \
+        --world {{world}} \
         -o tests/fixtures/built/{{dir}}.embed.wasm
     wasm-tools component new \
         tests/fixtures/built/{{dir}}.embed.wasm \
