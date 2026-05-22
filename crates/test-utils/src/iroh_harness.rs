@@ -48,7 +48,7 @@ pub struct IrohPeerStack {
 ///
 /// If `iroh_secret` is `Some(bytes)`, the endpoint is constructed with
 /// that Ed25519 secret. The kernel's `PeerKeypair::deterministic(seed)`
-/// derives `secret = SigningKey::from_bytes(seed.to_le_bytes()-padded
+/// derives `secret = SigningKey::from_bytes(seed.to_be_bytes()-padded
 /// to 32 bytes)`. Passing the same bytes here makes
 /// `network.peer_pubkey() == peer_key.public`, which is required for
 /// kernel-issued `request_heads(target, ...)` to dial the correct iroh
