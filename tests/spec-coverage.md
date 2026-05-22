@@ -81,6 +81,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:71
 - crates/kernel/tests/attribution.rs:220
 - crates/kernel/tests/attribution.rs:401
+- crates/kernel/tests/coexistence.rs:92
 - crates/kernel/tests/halt_detection.rs:223
 - crates/kernel/tests/halt_detection.rs:314
 - crates/kernel/tests/halt_detection.rs:364
@@ -117,6 +118,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/attribution.rs:101
 - crates/kernel/tests/attribution.rs:156
 - crates/kernel/tests/convergence.rs:204
+
+## convergence.md §4.6 (topic identity)
+- crates/kernel/tests/coexistence.rs:198
 
 ## convergence.md §4.6 — topic-binding on direct-stream requests (B-4.5 §4.1 test 3)
 - crates/kernel/tests/direct_backfill.rs:278

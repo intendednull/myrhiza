@@ -74,6 +74,22 @@ pub fn write_bundle(m: &Manifest, component_bytes: &[u8]) -> std::io::Result<Tes
     })
 }
 
+/// Path to the echo-state-apply fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/echo-state-apply.wasm`
+/// via `CARGO_MANIFEST_DIR`. Test-utils sits at `crates/test-utils/`, so
+/// walking up two ancestors reaches the workspace root — same shape as
+/// every other crate under `crates/`.
+#[allow(clippy::expect_used)]
+fn echo_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/echo-state-apply.wasm")
+}
+
 /// Path to the counter-state-apply fixture built by `just build-fixtures`.
 ///
 /// Resolves to `<workspace_root>/tests/fixtures/built/counter-state-apply.wasm`
@@ -118,6 +134,43 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(7);
+    sign_manifest(&mut manifest, &content_hash, &key);
+
+    let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
+    let addr = BundleAddress {
+        bundle_dir: test_bundle.bundle_dir.clone(),
+        manifest_path: test_bundle.manifest_path.clone(),
+    };
+    (test_bundle, addr)
+}
+
+/// Build a signed echo-state-apply bundle from the
+/// reproducibly-built fixture at `tests/fixtures/built/echo-state-apply.wasm`.
+/// Returns the [`TestBundle`] (with on-disk artifacts retained via the
+/// inner [`TempDir`]) and its [`BundleAddress`] (suitable for
+/// [`myrhiza_kernel::InstallFlow::load`]).
+///
+/// Requires `just build-fixtures` to have produced the wasm artifact.
+/// Used by plan-B-5 coexistence tests (two distinct WASM state-apply
+/// components running on the same network).
+///
+/// # Panics
+/// Panics if the fixture wasm is missing or unreadable, or if the
+/// tempdir bundle write fails. Both indicate a broken test environment
+/// (forgot `just build-fixtures`, /tmp unwriteable) rather than a
+/// runtime condition the test should recover from.
+#[allow(clippy::expect_used, clippy::panic)]
+pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
+    let component_bytes = std::fs::read(echo_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "echo fixture missing at {}: {e} — run `just build-fixtures`",
+            echo_fixture_path().display()
+        )
+    });
+    let content_hash = EventHash::blake3(&component_bytes);
+
+    let mut manifest = helpers_only_state_apply_manifest();
+    let key = deterministic_signing_key(11);
     sign_manifest(&mut manifest, &content_hash, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");

@@ -46,30 +46,26 @@ Cross-checking against [mvp.md §15.1](../specs/2026-05-09-myrhiza-master-design
 | Criterion | Status |
 |---|---|
 | 1. Kernel loads + instantiates WASM state component from a bundle (iroh-blobs not required for the in-process tier) | ✅ Plan A acceptance tests prove this against the `counter-state-apply.wasm` fixture. |
-| 2. Multi-peer convergence on same component bytes (verified via state-digest) | 🟡 The B-1 + B-4 convergence tests use the `counter_handle()` native Rust state-apply, NOT the WASM component. A test that runs the WASM `counter-state-apply` across two peers and asserts digest convergence is the gap. |
+| 2. Multi-peer convergence on same component bytes (verified via state-digest) | ✅ **Corrected 2026-05-21 during B-5 brainstorming**: `helpers::counter_handle()` (used by every B-1 + B-4 convergence test) loads the real `counter-state-apply.wasm` via `WasmtimeBackend::instantiate_state_apply` — every existing convergence test already runs on real WASM bytes. |
 | 3. UI app loads interaction component, projects a view, submits a command, observes state change | ❌ Needs the counter app's interaction component + a host-side launcher. Native (CLI) suffices for v1; jco-browser is v1.5+. |
-| 4. Two apps coexist (counter + poll), events don't cross | ❌ Needs poll app + `coexistence.rs` test. |
+| 4. Two apps coexist (different state component, different topic, same peer; events don't cross) | ✅ **Shipped in B-5 (2026-05-21)**: `crates/kernel/tests/coexistence.rs::two_apps_coexist_no_event_crossing` proves criterion 4 with counter + echo bundles on one peer. |
 | 5. Capability declarations gate access (component cannot import undeclared interfaces) | ✅ Plan A `crates/kernel/tests/acceptance.rs` tests this with the `over-importer.wasm` fixture. |
 
-**v1 blockers**: criteria 2, 3, 4. Criterion 2 needs a multi-peer test against the real WASM component. Criteria 3 + 4 need example apps (counter interaction + poll state-apply/interaction) and a coexistence harness.
+**v1 blockers (post-B-5)**: criterion 3 only. Needs a counter-app interaction component + a host-side launcher (native CLI).
 
 ## Proposed slice sequence to v1 acceptance
 
 Each slice = one PR, sized at ~B-4-slice cadence (1–3 days of focused work). Sequenced by dependency, with reduced-scope fallbacks for sub-items that can defer.
 
-### B-5: Counter app full + multi-peer convergence test
+### ~~B-5: Counter app full + multi-peer convergence test~~ → SHIPPED 2026-05-21 (re-scoped to "Two-app coexistence + echo fixture")
 
-**Scope**: build the counter example as a real component bundle (state-apply already exists as a fixture; add propose + interaction; manifest with capability declarations). Acceptance test: two `Runtime` instances on a shared `MemBus`, both load the counter bundle, one authors `Increment` events, the other converges via direct-stream backfill, both produce the same state-digest.
+The original B-5 scope was based on the incorrect read of criterion 2's status (see the dated correction above). The corrected B-5 scope shipped: built an `echo-state-apply` WASM fixture as the second app + a same-peer two-runtime acceptance test (`coexistence.rs::two_apps_coexist_no_event_crossing`). Closes criterion 4.
 
-**Closes**: criterion 2 (multi-peer convergence on real WASM bytes); items 15, 17 partial.
+### B-6: Poll app (deferred slice; not v1-blocking)
 
-**Estimate**: 2-3 days.
+**Scope**: build the poll example (state-apply + propose + interaction + manifest with `EndPoll` admin gate). Per [mvp.md §15.2](../specs/2026-05-09-myrhiza-master-design/mvp.md), poll is the second of two MVP demo apps. Criterion 4 ("two apps coexist") is now satisfied by counter + echo, so poll is no longer v1-blocking — it remains valuable as a non-trivial demo app for the v1 release showcase.
 
-### B-6: Poll app + coexistence test
-
-**Scope**: build the poll example (state-apply + propose + interaction + manifest with `EndPoll` admin gate). Acceptance test: a single `Runtime` with both counter and poll bundles loaded on different topics; events on one app don't appear on the other.
-
-**Closes**: criterion 4 (coexistence); items 16, 18 (coexistence portion).
+**Closes**: implementation.md §20 item 16; mvp.md §15.2 (second app for the v1 release).
 
 **Estimate**: 2-3 days.
 
@@ -126,6 +122,10 @@ Each slice = one PR, sized at ~B-4-slice cadence (1–3 days of focused work). S
 
 ## Recommendation
 
-**Next immediate slice: B-5 (counter app + multi-peer convergence on real WASM)**. This is the highest-impact single PR — it converts the existing counter-state-apply fixture into a full app + closes criterion 2, the only criterion currently 🟡. After B-5, B-6 (coexistence) follows naturally; together they close criteria 2 + 4 and three of the deferred items (15, 16, 18 coexistence).
+**Next immediate slice (post-B-5): B-7 (native interaction harness + counter-interaction E2E)**. With criteria 1, 2, 4, 5 all ✅ post-B-5, criterion 3 is the sole v1 blocker. B-7 wires the counter app's interaction component to a CLI harness that projects state, takes user input, submits a command, and shows the resulting state change.
 
-Then evaluate whether to push toward criterion 3 via B-7 (native interaction) or sidetrack into B-9/B-10 (storage + iroh-blobs distribution) depending on which gap looks more demo-load-bearing.
+After B-7, all v1 acceptance criteria are met. B-6 (poll app), B-8 (SDK ergonomics), B-9 (storage), B-10 (iroh-blobs distribution) can land in any order driven by demo-readiness needs.
+
+---
+
+**Correction (2026-05-21)**: criterion 2 was originally listed as 🟡 partial with the rationale "B-1 + B-4 convergence tests use the `counter_handle()` native Rust state-apply, NOT the WASM component." This was wrong. Audit during B-5 brainstorming revealed `helpers::counter_handle()` (`crates/kernel/tests/helpers/mod.rs:33`) calls through to `counter_component_instance()` → `WasmtimeBackend::instantiate_state_apply` → a real wasmtime instance of `counter-state-apply.wasm`. Every existing convergence test runs on real WASM bytes; criterion 2 was ✅ shipped before B-5 began. The B-5 scope was re-pivoted to close criterion 4 (two-app coexistence) instead, which IS a genuine gap. The roadmap above reflects the corrected status.
