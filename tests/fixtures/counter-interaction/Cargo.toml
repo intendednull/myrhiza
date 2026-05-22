@@ -1,0 +1,25 @@
+[package]
+name = "counter-interaction-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Intentionally NOT a workspace member — see root `Cargo.toml`'s
+# `[workspace.exclude]`. The fixture builds for `wasm32-unknown-unknown`
+# and is wrapped into a component by `just build-fixtures`.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.30"
+
+# panic=abort + aggressive size opts to keep the binary lean.
+# The interaction profile does not run the float-ban lint (it's a
+# non-deterministic profile per spec §3.3), but we still size-opt
+# to avoid pulling in float-Display dispatch tables unnecessarily.
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+strip = "symbols"
