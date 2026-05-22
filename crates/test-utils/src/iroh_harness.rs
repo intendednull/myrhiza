@@ -148,6 +148,26 @@ impl IrohHarness {
         }
     }
 
+    /// Pubkey of the i-th peer spawned via `spawn_peer`.
+    ///
+    /// Provided so tests can pass a previously-spawned peer's pubkey
+    /// as the `bootstrap` arg of a later `spawn_peer` call without
+    /// exposing the internal `peers` vec.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of range (i.e. fewer than `index + 1`
+    /// peers have been spawned). Test-only helper; callers are expected
+    /// to pass an index they know is valid.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn peer_pubkey(&self, index: usize) -> PeerPubkey {
+        self.peers
+            .get(index)
+            .expect("peer index out of range")
+            .network
+            .peer_pubkey()
+    }
+
     /// Spawn a peer with the given identity seeds. `bootstrap` is the
     /// pubkey of an already-spawned peer this one should dial; pass an
     /// empty vec for the first peer (it waits for inbound joins).
