@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use myrhiza_backend::{Backend, BackendError};
 use myrhiza_kernel::{ApplyOutcome, BundleAddress, InstallFlow, StateApplyHandle};
+use myrhiza_manifest::bundle_content_hash;
 use myrhiza_test_utils::bundle::{
     build_counter_bundle_with_extra_cap, build_signed_counter_bundle, write_bundle,
 };
@@ -62,10 +63,11 @@ fn kernel_loads_signed_bundle() {
         !loaded.component_bytes.is_empty(),
         "component bytes must be populated"
     );
-    // The recomputed content hash must match what the signing target
-    // committed to (otherwise verify_signature would have errored).
-    let recomputed = EventHash::blake3(&loaded.component_bytes);
-    assert_eq!(recomputed, loaded.content_hash);
+    // The stored content_hash is the composite bundle-content-hash per
+    // spec §3.4. For a single-component bundle (no propose/interaction/behavior)
+    // it equals bundle_content_hash(Some(&bytes), None, None, None).
+    let expected = bundle_content_hash(Some(&loaded.component_bytes), None, None, None);
+    assert_eq!(expected, loaded.content_hash);
 }
 
 /// Covers: mvp.md §15.1, convergence.md §4.4
@@ -214,7 +216,7 @@ fn capability_gating_rejects_non_deterministic_import() {
     // §7.2: the linker is the gate, not just the manifest.
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(11);
-    sign_manifest(&mut manifest, &EventHash::blake3(&component_bytes), &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let Err(err) = backend.instantiate_state_apply(&component_bytes, &manifest) else {
@@ -259,11 +261,9 @@ fn build_signed_bundle_for(
             fixture_path(fixture_name).display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
-
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(seed);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
     let addr = BundleAddress {
@@ -385,11 +385,9 @@ fn float_banned_fixture_rejected_at_install() {
             fixture_path("float-banned").display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
-
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(19);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let Err(err) = backend.instantiate_state_apply(&component_bytes, &manifest) else {

@@ -8,6 +8,7 @@ members = [
     "crates/kernel",
     "crates/network",
     "crates/test-utils",
+    "crates/myrhiza-cli",
 ]
 exclude = [
     # Wasm-only fixtures — built for wasm32-unknown-unknown by
@@ -20,6 +21,8 @@ exclude = [
     "tests/fixtures/pre-check-rejector",
     "tests/fixtures/infinite-loop",
     "tests/fixtures/float-banned",
+    "tests/fixtures/counter-state-propose",
+    "tests/fixtures/counter-interaction",
 ]
 
 [workspace.package]

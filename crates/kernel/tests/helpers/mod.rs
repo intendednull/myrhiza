@@ -25,7 +25,6 @@ use myrhiza_test_utils::bundle::{
 use myrhiza_test_utils::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest, sign_manifest,
 };
-use myrhiza_types::EventHash;
 use myrhiza_wasmtime_backend::WasmtimeBackend;
 
 /// Install + instantiate the counter-state-apply fixture and return a
@@ -104,13 +103,11 @@ pub fn build_signed_pre_check_rejector_bundle() -> (TestBundle, BundleAddress) {
             pre_check_rejector_fixture_path().display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
-
     let mut manifest = helpers_only_state_apply_manifest();
     // Seed 13 mirrors the seed used in `acceptance::pre_check_returns_reject_and_does_not_commit`
     // — cosmetic, not load-bearing for the test.
     let key = deterministic_signing_key(13);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
     let addr = BundleAddress {

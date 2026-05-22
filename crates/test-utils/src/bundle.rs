@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use bincode::Options;
 use myrhiza_kernel::BundleAddress;
 use myrhiza_manifest::schema::Manifest;
-use myrhiza_types::{EventHash, canonical_bincode};
+use myrhiza_types::canonical_bincode;
 use tempfile::TempDir;
 
 use crate::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest,
-    helpers_only_state_apply_manifest_with_extra_cap, sign_manifest,
+    helpers_only_state_apply_manifest_with_extra_cap, helpers_only_three_component_manifest,
+    sign_manifest, sign_manifest_three_components,
 };
 
 /// A built test bundle: tempdir + manifest path + content bytes.
@@ -130,11 +131,10 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
             counter_fixture_path().display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(7);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
     let addr = BundleAddress {
@@ -167,13 +167,155 @@ pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
             echo_fixture_path().display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(11);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
+    let addr = BundleAddress {
+        bundle_dir: test_bundle.bundle_dir.clone(),
+        manifest_path: test_bundle.manifest_path.clone(),
+    };
+    (test_bundle, addr)
+}
+
+/// Path to the counter-state-propose fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/counter-state-propose.wasm`.
+#[allow(clippy::expect_used)]
+fn counter_state_propose_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/counter-state-propose.wasm")
+}
+
+/// Path to the counter-interaction fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/counter-interaction.wasm`.
+#[allow(clippy::expect_used)]
+fn counter_interaction_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/counter-interaction.wasm")
+}
+
+/// Write a three-component bundle (state-apply + state-propose + interaction)
+/// into a fresh tempdir. Signs with the composite `bundle_content_hash` covering
+/// all three component slots.
+///
+/// Mirrors [`write_bundle`] but handles the three-path manifest layout.
+///
+/// # Errors
+/// Returns any underlying [`std::io::Error`].
+///
+/// # Panics
+/// Panics if any component path in the manifest has no parent directory.
+#[allow(clippy::expect_used)]
+pub fn write_three_component_bundle(
+    m: &Manifest,
+    apply_bytes: &[u8],
+    propose_bytes: &[u8],
+    interaction_bytes: &[u8],
+) -> std::io::Result<TestBundle> {
+    let dir = TempDir::new()?;
+    let bundle_dir = dir.path().to_path_buf();
+
+    // Write state-apply
+    let apply_rel = m
+        .components
+        .state_apply
+        .clone()
+        .unwrap_or_else(|| "components/state-apply.wasm".into());
+    let apply_path = bundle_dir.join(&apply_rel);
+    let parent = apply_path
+        .parent()
+        .expect("state-apply component path has a parent dir");
+    std::fs::create_dir_all(parent)?;
+    std::fs::write(&apply_path, apply_bytes)?;
+
+    // Write state-propose (same parent dir — components/)
+    let propose_rel = m
+        .components
+        .state_propose
+        .clone()
+        .unwrap_or_else(|| "components/state-propose.wasm".into());
+    std::fs::write(bundle_dir.join(&propose_rel), propose_bytes)?;
+
+    // Write interaction
+    let ix_rel = m
+        .components
+        .interaction
+        .clone()
+        .unwrap_or_else(|| "components/interaction.wasm".into());
+    std::fs::write(bundle_dir.join(&ix_rel), interaction_bytes)?;
+
+    let manifest_rel = PathBuf::from("manifest.bincode");
+    let manifest_bytes = canonical_bincode()
+        .serialize(m)
+        .expect("canonical bincode of Manifest never fails");
+    std::fs::write(bundle_dir.join(&manifest_rel), manifest_bytes)?;
+
+    Ok(TestBundle {
+        _dir: dir,
+        bundle_dir,
+        manifest_path: manifest_rel,
+        content_bytes: apply_bytes.to_vec(),
+    })
+}
+
+/// Build a signed three-component counter bundle from the reproducibly-built
+/// fixtures at `tests/fixtures/built/`.
+///
+/// Signs all three components (state-apply, state-propose, interaction) under
+/// the composite `bundle_content_hash` with [`deterministic_signing_key`](7).
+/// Returns the [`TestBundle`] and its [`BundleAddress`].
+///
+/// Requires `just build-fixtures` to have produced all three artifacts.
+///
+/// # Panics
+/// Panics if any fixture is missing or unreadable, or if the tempdir write
+/// fails. Both indicate a broken test environment.
+#[allow(clippy::expect_used, clippy::panic)]
+pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddress) {
+    let apply_bytes = std::fs::read(counter_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "counter-state-apply fixture missing at {}: {e} — run `just build-fixtures`",
+            counter_fixture_path().display()
+        )
+    });
+    let propose_bytes = std::fs::read(counter_state_propose_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "counter-state-propose fixture missing at {}: {e} — run `just build-fixtures`",
+            counter_state_propose_fixture_path().display()
+        )
+    });
+    let interaction_bytes = std::fs::read(counter_interaction_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "counter-interaction fixture missing at {}: {e} — run `just build-fixtures`",
+            counter_interaction_fixture_path().display()
+        )
+    });
+
+    let mut manifest = helpers_only_three_component_manifest();
+    let key = deterministic_signing_key(7);
+    sign_manifest_three_components(
+        &mut manifest,
+        &apply_bytes,
+        &propose_bytes,
+        &interaction_bytes,
+        &key,
+    );
+
+    let test_bundle =
+        write_three_component_bundle(&manifest, &apply_bytes, &propose_bytes, &interaction_bytes)
+            .expect("write three-component bundle to tempdir");
     let addr = BundleAddress {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
@@ -205,9 +347,8 @@ pub fn build_counter_bundle_with_extra_cap(
     extra_cap: &str,
     seed: u8,
 ) -> std::io::Result<TestBundle> {
-    let content_hash = EventHash::blake3(component_bytes);
     let mut manifest = helpers_only_state_apply_manifest_with_extra_cap(extra_cap);
     let key = deterministic_signing_key(seed);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, component_bytes, &key);
     write_bundle(&manifest, component_bytes)
 }

@@ -10,10 +10,13 @@
 
 use std::sync::Arc;
 
-use myrhiza_backend::{Backend, BackendError, ComponentInstance};
+use myrhiza_backend::{
+    Backend, BackendError, ComponentInstance, InteractionInstance, ProposeInstance,
+};
 use myrhiza_manifest::Manifest;
 use myrhiza_types::limits::{
-    COMPONENT_MEMORY_CAP_V1, MAX_WASM_STACK_V1, STATE_APPLY_FUEL_BUDGET_V1,
+    COMPONENT_MEMORY_CAP_V1, INTERACTION_FUEL_BUDGET_V1, MAX_WASM_STACK_V1,
+    STATE_APPLY_FUEL_BUDGET_V1, STATE_PROPOSE_FUEL_BUDGET_V1,
 };
 use wasmtime::{
     Config, Engine, Store,
@@ -26,6 +29,8 @@ use crate::gating::{
 };
 use crate::helpers::LogSink;
 use crate::instance::StateApplyInstance;
+use crate::interaction_instance::InteractionInstanceImpl;
+use crate::propose_instance::StateProposeInstance;
 
 /// WIT instance name for the deterministic-helper interface bound to
 /// state-apply per architecture.md §3.5. Pre-walking the component's
@@ -50,6 +55,14 @@ const HOST_DETERMINISTIC_INSTANCE: &str = "myrhiza:kernel/host-deterministic@1.0
 /// callables here means such a future bump fails closed instead of
 /// silently bypassing the deterministic-helper gate.
 const SHARED_TYPES_INSTANCE: &str = "myrhiza:kernel/types@1.0.0";
+
+/// WIT instance name for the ui-surfaces interface. Interaction world
+/// `use`s ui-element / panel / button / etc. from this interface, which
+/// surfaces as a top-level component import. The instance is types-only
+/// in v1 — no callable functions — so the prewalk permits `Type` and
+/// `Resource` items and rejects any `ComponentFunc`. Mirrors the rule
+/// already applied to `myrhiza:kernel/types@1.0.0`.
+pub(crate) const HOST_UI_SURFACES_INSTANCE: &str = "myrhiza:kernel/host-ui-surfaces@1.0.0";
 
 /// `host.log` is unconditionally bound on state-apply per
 /// determinism.md §5.1 — the manifest does not need to declare it. The
@@ -115,51 +128,76 @@ fn prewalk_state_apply_imports(
     component: &Component,
     bound_imports: &std::collections::BTreeSet<String>,
 ) -> Result<(), BackendError> {
+    prewalk_imports_inner(engine, component, bound_imports, false)
+}
+
+/// Walk the component's top-level instance imports against `bound_imports`
+/// for the state-propose profile. Allowlist: `host-deterministic@1.0.0`
+/// and `types@1.0.0`. Same rule as state-apply; non-deterministic and async
+/// instances surface as `UnauthorizedImport`.
+///
+/// Called by `instantiate_state_propose` (B-7.3).
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnauthorizedImport`] for the first import that
+/// is not in the state-propose ambient set.
+pub(crate) fn prewalk_state_propose_imports(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+) -> Result<(), BackendError> {
+    prewalk_imports_inner(engine, component, bound_imports, false)
+}
+
+/// Walk the component's top-level instance imports against `bound_imports`
+/// for the interaction profile. Allowlist: `host-deterministic@1.0.0`,
+/// `types@1.0.0`, PLUS `host-ui-surfaces@1.0.0` (types-only — same audit
+/// rule as `types@1.0.0`). Non-deterministic and async instances surface
+/// as `UnauthorizedImport`.
+///
+/// Called by `instantiate_interaction` (B-7.4).
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnauthorizedImport`] for the first import that
+/// is not in the interaction ambient set.
+pub(crate) fn prewalk_interaction_imports(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+) -> Result<(), BackendError> {
+    prewalk_imports_inner(engine, component, bound_imports, true)
+}
+
+/// Shared prewalk implementation used by all three profiles.
+///
+/// `allow_ui_surfaces` enables the `host-ui-surfaces@1.0.0` types-only
+/// instance (interaction profile only). When false, that instance
+/// produces `UnauthorizedImport` — matching state-apply and state-propose.
+fn prewalk_imports_inner(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+    allow_ui_surfaces: bool,
+) -> Result<(), BackendError> {
     use wasmtime::component::types::ComponentItem;
 
     let component_type = component.component_type();
     for (import_name, item) in component_type.imports(engine) {
-        // The shared `types` instance carries only type definitions
-        // and resource declarations — no callable functions — so it
-        // is permitted but still walked: any callable inside this
-        // instance is treated as unauthorized so a future WIT bump
-        // that adds a method to one of `types.wit`'s resources fails
-        // closed instead of silently surfacing a capability the
-        // manifest never declared. Components that `use types.{...}`
-        // in their world surface this as a top-level instance import,
-        // and wit-parser today renders only `type` / `resource`
-        // declarations inside it (see
-        // `tests/snapshots/state-apply-world.bindgen.txt`).
-        //
-        // wasmtime exposes resources opaquely as
-        // `ComponentItem::Resource(_)` here — there is no method
-        // introspection at this level. Method-on-resource imports
-        // surface separately as `ComponentItem::ComponentFunc` items
-        // in the parent instance with mangled names of the shape
-        // `[method]resource.method-name`. The callable rejection
-        // below catches them.
-        if import_name == SHARED_TYPES_INSTANCE {
+        // types-only instances: SHARED_TYPES_INSTANCE and (for interaction)
+        // HOST_UI_SURFACES_INSTANCE. Walk contents: Type/Resource allowed,
+        // any callable rejected.
+        let is_types_only = import_name == SHARED_TYPES_INSTANCE
+            || (allow_ui_surfaces && import_name == HOST_UI_SURFACES_INSTANCE);
+
+        if is_types_only {
             let ComponentItem::ComponentInstance(inst) = item else {
-                // The shared `types` import is declared as an
-                // instance in the WIT; anything else is a malformed
-                // or future-shape import we have not audited.
                 return Err(BackendError::UnauthorizedImport(import_name.into()));
             };
             for (item_name, child_item) in inst.exports(engine) {
                 match child_item {
-                    // Pure type aliases (verdict, hlc, log-level,
-                    // identity-scope, instance-binding, instance-kind)
-                    // and resource declarations (identity-handle,
-                    // peer-handle, key-handle, request-token) are the
-                    // only items today; both are fine.
                     ComponentItem::Type(_) | ComponentItem::Resource(_) => {}
-                    // Any callable on a types-only instance is
-                    // unauthorized: types.wit declares no functions,
-                    // so a `ComponentFunc` here is either a future
-                    // method on a resource or a future top-level
-                    // function. Either way, it bypasses the
-                    // deterministic-helper gate; reject fail-closed.
-                    // The qualified name pinpoints the audit site.
                     ComponentItem::ComponentFunc(_)
                     | ComponentItem::CoreFunc(_)
                     | ComponentItem::Module(_)
@@ -173,29 +211,15 @@ fn prewalk_state_apply_imports(
             }
             continue;
         }
+
         if import_name != HOST_DETERMINISTIC_INSTANCE {
-            // Any non-`host-deterministic` instance is outside the
-            // state-apply ambient set per architecture.md §3.5.
             return Err(BackendError::UnauthorizedImport(import_name.into()));
         }
-        // Walk the items inside the deterministic-helper instance.
-        // Only `ComponentInstance` carries function-typed exports we
-        // can iterate; other shapes (functions, types, resources at
-        // the top level) are not produced by the state-apply WIT
-        // world, but we treat them defensively as unauthorized.
+
         let ComponentItem::ComponentInstance(inst) = item else {
             return Err(BackendError::UnauthorizedImport(import_name.into()));
         };
         for (item_name, child_item) in inst.exports(engine) {
-            // Today's state-apply WIT world surfaces only
-            // `ComponentFunc` items inside `host-deterministic` — the
-            // host-bound deterministic helpers. A future WIT change
-            // surfacing a resource, type, or nested instance import
-            // here would be a new capability surface we haven't
-            // audited; reject fail-closed instead of skipping. This
-            // is the inverse of the previous "skip non-functions"
-            // behavior, which silently bypassed the gate. The
-            // qualified name pinpoints the audit site.
             if !matches!(child_item, ComponentItem::ComponentFunc(_)) {
                 return Err(BackendError::UnauthorizedImport(format!(
                     "{import_name}.{item_name}"
@@ -214,6 +238,32 @@ wasmtime::component::bindgen!({
     path: "../../wit/myrhiza-kernel/wit",
     world: "state-apply",
 });
+
+/// Bindgen-generated bindings for the `state-propose` WIT world.
+/// Scoped in a separate module to avoid collision with the
+/// `myrhiza::kernel::types` module generated by the state-apply bindgen
+/// above — both worlds share the `types` interface, which produces
+/// identically-named items in each module. Scoping separates the two
+/// generated namespaces; `propose_instance.rs` imports `StatePropose`
+/// from here.
+pub(crate) mod propose_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/myrhiza-kernel/wit",
+        world: "state-propose",
+    });
+}
+
+/// Bindgen-generated bindings for the `interaction` WIT world.
+/// Scoped in its own module for the same reason as `propose_bindings`:
+/// the interaction world shares the `types` interface with the other
+/// worlds, producing identically-named items; isolation prevents
+/// collisions. `interaction_instance.rs` imports `Interaction` from here.
+pub(crate) mod interaction_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/myrhiza-kernel/wit",
+        world: "interaction",
+    });
+}
 
 /// Per-instance host state held in the Wasmtime `Store`.
 ///
@@ -474,6 +524,112 @@ impl Backend for WasmtimeBackend {
 
         // 8. Instantiate via the bindgen-generated `StateApply` type.
         let instance = StateApplyInstance::instantiate(store, &component, &linker)?;
+        Ok(Box::new(instance))
+    }
+
+    fn instantiate_state_propose(
+        &self,
+        component_bytes: &[u8],
+        manifest: &Manifest,
+    ) -> Result<Box<dyn ProposeInstance>, BackendError> {
+        use crate::gating::{
+            state_propose_bound_imports, validate_state_propose_manifest, wire_state_propose_linker,
+        };
+
+        // 1. Manifest gating — declared imports must be a subset of the
+        //    state-propose ambient set (deterministic helpers only).
+        validate_state_propose_manifest(manifest)?;
+
+        // 2. No float-ban scan — state-propose is a non-deterministic profile
+        //    per spec §3.3; cross-peer determinism does not apply.
+
+        // 3. Compute the bound import set (manifest ∩ ambient).
+        let bound_imports = state_propose_bound_imports(manifest);
+
+        // 4. Decode the component.
+        let component = Component::from_binary(&self.engine, component_bytes)
+            .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
+
+        // 5. Pre-walk component imports against the bound set.
+        prewalk_state_propose_imports(&self.engine, &component, &bound_imports)?;
+
+        // 6. Build the linker, binding only the allowed imports.
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wire_state_propose_linker(&mut linker, &bound_imports)?;
+
+        // 7. Build the store with propose fuel budget + memory cap per
+        //    spec §3.3. Fuel budget is 5× state-apply (50M) because
+        //    propose is non-deterministic; the kernel re-checks via
+        //    state-apply dry-run before signing.
+        let host_state = HostState {
+            log_sink: Arc::new(LogSink::default()),
+            bound_imports,
+            table: ResourceTable::new(),
+            limits: wasmtime::StoreLimitsBuilder::new()
+                .memory_size(COMPONENT_MEMORY_CAP_V1)
+                .build(),
+        };
+        let mut store: Store<HostState> = Store::new(&self.engine, host_state);
+        store
+            .set_fuel(STATE_PROPOSE_FUEL_BUDGET_V1)
+            .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
+        store.limiter(|s| &mut s.limits);
+
+        // 8. Instantiate via the bindgen-generated `StatePropose` type.
+        let instance = StateProposeInstance::instantiate(store, &component, &linker)?;
+        Ok(Box::new(instance))
+    }
+
+    fn instantiate_interaction(
+        &self,
+        component_bytes: &[u8],
+        manifest: &Manifest,
+    ) -> Result<Box<dyn InteractionInstance>, BackendError> {
+        use crate::gating::{
+            interaction_bound_imports, validate_interaction_manifest, wire_interaction_linker,
+        };
+
+        // 1. Manifest gating — declared imports must be a subset of the
+        //    interaction ambient set.
+        validate_interaction_manifest(manifest)?;
+
+        // 2. No float-ban scan — interaction is a non-deterministic profile
+        //    per spec §3.3; cross-peer determinism does not apply.
+
+        // 3. Compute the bound import set (manifest ∩ ambient).
+        let bound_imports = interaction_bound_imports(manifest);
+
+        // 4. Decode the component.
+        let component = Component::from_binary(&self.engine, component_bytes)
+            .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
+
+        // 5. Pre-walk component imports against the bound set.
+        prewalk_interaction_imports(&self.engine, &component, &bound_imports)?;
+
+        // 6. Build the linker, binding only the allowed imports.
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wire_interaction_linker(&mut linker, &bound_imports)?;
+
+        // 7. Build the store with interaction fuel budget + memory cap per
+        //    spec §3.3. Fuel budget is 50M — identical to propose because
+        //    interaction is also a non-deterministic per-peer profile; the
+        //    kernel never replays interaction calls.
+        let host_state = HostState {
+            log_sink: Arc::new(LogSink::default()),
+            bound_imports,
+            table: ResourceTable::new(),
+            limits: wasmtime::StoreLimitsBuilder::new()
+                .memory_size(COMPONENT_MEMORY_CAP_V1)
+                .build(),
+        };
+        let mut store: Store<HostState> = Store::new(&self.engine, host_state);
+        store
+            .set_fuel(INTERACTION_FUEL_BUDGET_V1)
+            .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
+        store.limiter(|s| &mut s.limits);
+
+        // 8. Instantiate via the bindgen-generated `Interaction` type.
+        let instance = InteractionInstanceImpl::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
     }
 }

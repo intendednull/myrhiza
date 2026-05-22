@@ -23,6 +23,8 @@ thiserror.workspace = true
 # Dev-dep only — breaks the otherwise-circular path types -> network -> types
 # (cargo allows dev-dep cycles).
 myrhiza-network = { path = "../network" }
+# Used by tests/wire_freeze.rs to pin bundle-content-hash bytes.
+myrhiza-manifest = { path = "../manifest" }
 
 [build-dependencies]
 # Aligned with wasmtime 36 line (transitively pulls wit-parser 0.236.x);

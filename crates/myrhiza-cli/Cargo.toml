@@ -1,0 +1,31 @@
+[package]
+name = "myrhiza-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Myrhiza CLI harness — loads a signed bundle and runs the view → dispatch → propose → apply loop."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "myrhiza-cli"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+myrhiza-kernel = { path = "../kernel" }
+myrhiza-manifest = { path = "../manifest" }
+myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
+myrhiza-backend = { path = "../backend" }
+myrhiza-types = { path = "../types" }
+clap = { version = "4", features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+myrhiza-test-utils = { path = "../test-utils" }
+tempfile.workspace = true

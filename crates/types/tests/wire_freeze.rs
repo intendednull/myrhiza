@@ -14,6 +14,27 @@ use myrhiza_types::{
     HeadsSummarySignedPayload, PeerPubkey, canonical_bincode,
 };
 
+// ---------------------------------------------------------------------------
+// Bundle-content-hash wire-freeze (spec §2 Choice G + §3.4).
+//
+// Pins the composite BLAKE3 output for a 3-component fixture with stable
+// byte inputs so any change to the formula surfaces as a CI failure.
+// Absent behavior slot contributes [0; 32] (NOT BLAKE3(&[])).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bundle_content_hash_three_component_fixture_is_frozen() {
+    use myrhiza_manifest::bundle_content_hash;
+    // sa=b"a", sp=b"b", ix=b"c", behavior=absent → [0;32] sentinel
+    let h = bundle_content_hash(Some(b"a"), Some(b"b"), Some(b"c"), None);
+    let got = hex_dump(h.as_bytes());
+    let expected = "c1cb93b990d3dcc8027db29f3f92f0d206eec3a12419f988e096536ee5cbe5c4";
+    assert_eq!(
+        got, expected,
+        "bundle-content-hash wire-freeze drift detected"
+    );
+}
+
 fn hex_dump(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(bytes.len() * 2);

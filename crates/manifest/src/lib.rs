@@ -22,8 +22,8 @@ pub use parse::{ParseError, parse_manifest};
 
 pub mod canonical;
 pub use canonical::{
-    DOMAIN_SEP, length_prefix_concat, manifest_canonical_hash, signed_body_bytes,
-    signing_target_bytes,
+    DOMAIN_SEP, bundle_content_hash, length_prefix_concat, manifest_canonical_hash,
+    signed_body_bytes, signing_target_bytes,
 };
 
 pub mod signature;
