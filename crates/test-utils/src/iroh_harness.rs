@@ -8,7 +8,13 @@
 #![cfg(feature = "network-iroh")]
 
 use iroh::address_lookup::MemoryLookup;
+use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
+use myrhiza_kernel::runtime::{Runtime, RuntimeCfg};
+use myrhiza_kernel::state_apply::StateApplyHandle;
 use myrhiza_network::{HEADS_REQUEST_ALPN, IrohNetwork};
+use myrhiza_types::{BundleHash, PeerPubkey, Topic};
+
+use crate::harness::PeerHandle;
 
 /// One iroh peer's complete stack: endpoint, gossip handle, router,
 /// and the `IrohNetwork`. Ownership lives on the harness so endpoints
@@ -88,5 +94,154 @@ pub async fn spawn_iroh_peer(
         gossip,
         router,
         network,
+    }
+}
+
+/// Multi-peer fixture for iroh-backed convergence + coexistence tests.
+///
+/// Owns the shared `MemoryLookup` so each spawned peer's address is
+/// discoverable by every other peer. Peer stacks are owned by the
+/// harness; dropping the harness tears them all down together,
+/// avoiding the "endpoint died mid-test" hazard from manual
+/// lifecycle management.
+///
+/// Constructor difference from `InProcessHarness`: there is no
+/// `bus_capacity` arg — iroh has no bus. Otherwise the field set
+/// matches `InProcessHarness` exactly so test bodies remain
+/// near-identical between `MemNetwork` and `IrohNetwork` variants.
+pub struct IrohHarness {
+    /// Shared address-lookup table all peers register their `addr()` into.
+    pub lookup: MemoryLookup,
+    /// Application bundle hash bound to this topic (genesis-derived).
+    pub app_bundle_hash: BundleHash,
+    /// Human-readable topic name (re-used when deriving genesis).
+    pub topic_name: String,
+    /// 32-byte topic-derivation seed.
+    pub seed: [u8; 32],
+    /// Pre-computed topic id (derived from `app_bundle_hash`, `seed`, `topic_name`).
+    pub topic: Topic,
+    /// Owned per-peer stacks. Retained so endpoints and routers
+    /// outlive the runtimes they back; dropping the harness drops
+    /// all of them together.
+    peers: Vec<IrohPeerStack>,
+}
+
+impl IrohHarness {
+    /// Construct a fresh harness with a private `MemoryLookup`.
+    ///
+    /// Bundle hash + topic name are fixed at construction to match
+    /// `InProcessHarness::new`'s defaults so test bodies stay
+    /// near-identical between `MemNetwork` and `IrohNetwork` variants.
+    #[must_use]
+    pub fn new(seed: [u8; 32]) -> Self {
+        let lookup = MemoryLookup::default();
+        let app_bundle_hash = BundleHash::from_bytes([0xAB; 32]);
+        let topic_name = "main".to_string();
+        let topic = Topic::derive(&app_bundle_hash, &seed, &topic_name);
+        Self {
+            lookup,
+            app_bundle_hash,
+            topic_name,
+            seed,
+            topic,
+            peers: Vec::new(),
+        }
+    }
+
+    /// Spawn a peer with the given identity seeds. `bootstrap` is the
+    /// pubkey of an already-spawned peer this one should dial; pass an
+    /// empty vec for the first peer (it waits for inbound joins).
+    ///
+    /// Internally derives the iroh endpoint's secret key from the same
+    /// `peer_seed` so the endpoint identity equals `peer_key.public` —
+    /// required for direct-stream backfill since kernel-issued
+    /// `request_heads(target, ...)` dials `target` as an iroh endpoint id,
+    /// where `target` is `peer_key.public` from a peer `HeadsSummary`
+    /// signature (see plan T3.0 prep). The seed-byte formula here MUST
+    /// stay aligned with `PeerKeypair::deterministic` in
+    /// `crates/kernel/src/identity/mod.rs` — both use `to_be_bytes`.
+    ///
+    /// Always registers the heads-request ALPN on every peer because
+    /// kernel-tier tests rely on `Runtime`'s `install_request_handler`
+    /// call to wire the responder (spec §3.2 load-bearing detail).
+    ///
+    /// # Panics
+    /// Panics if `Runtime::start` fails. The iroh subscribe path can
+    /// fail in principle (e.g. invalid bootstrap pubkey), but every
+    /// test fixture passes well-formed bootstrap data; a panic here
+    /// is a test-infrastructure bug, not a runtime error.
+    #[allow(clippy::expect_used)]
+    pub async fn spawn_peer(
+        &mut self,
+        peer_seed: u64,
+        author_seed: Option<u64>,
+        handle: StateApplyHandle,
+        cfg: RuntimeCfg,
+        bootstrap: Vec<PeerPubkey>,
+    ) -> PeerHandle {
+        // Recompute the same seed bytes that `PeerKeypair::deterministic`
+        // uses internally (crates/kernel/src/identity/mod.rs:61-65). Both
+        // `PeerKeypair` and the iroh endpoint then derive from the same
+        // Ed25519 secret, so `network.peer_pubkey() == peer_key.public`.
+        // Endianness must match the kernel formula: it uses `to_be_bytes`.
+        let mut iroh_secret_bytes = [0u8; 32];
+        iroh_secret_bytes[..8].copy_from_slice(&peer_seed.to_be_bytes());
+
+        let stack = spawn_iroh_peer(&self.lookup, Some(iroh_secret_bytes), true).await;
+        let peer_key = PeerKeypair::deterministic(peer_seed);
+        let author_key = author_seed.map(AuthorKeypair::deterministic);
+
+        // Clone the IrohNetwork handle out of the stack so we can pass
+        // it to Runtime::start. The original is retained on the stack
+        // for cleanup ordering. Clone is structurally sound — every
+        // field is either `Arc`-backed or `Copy`; see the doc comment
+        // on `IrohNetwork` in `crates/network/src/iroh_transport.rs`.
+        let network = stack.network.clone();
+
+        let runtime = Runtime::start(
+            network,
+            self.topic,
+            self.app_bundle_hash,
+            self.topic_name.clone(),
+            handle,
+            peer_key,
+            author_key,
+            cfg,
+            bootstrap,
+        )
+        .await
+        .expect("Runtime::start (iroh)");
+
+        self.peers.push(stack);
+        PeerHandle::from_runtime(runtime)
+    }
+}
+
+// Suppress unused-import warnings for items used only when running the
+// `cargo build` path with no tests; everything below is `#[cfg(test)]`.
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// Sanity: structural check that `iroh_secret`-bytes derived from a
+    /// `u64` peer seed via the same formula `PeerKeypair::deterministic`
+    /// uses produce `network.peer_pubkey() == PeerKeypair::deterministic(seed).public`.
+    /// No `Runtime`, no swarm — this isolates the load-bearing identity
+    /// alignment from any networking failure modes. Full integration
+    /// validation lives in T4.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn iroh_secret_aligns_network_pubkey_with_peer_key() {
+        let lookup = MemoryLookup::default();
+        let seed = 7_u64;
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&seed.to_be_bytes());
+        let stack = spawn_iroh_peer(&lookup, Some(bytes), true).await;
+        let pk = PeerKeypair::deterministic(seed);
+        assert_eq!(
+            stack.network.peer_pubkey(),
+            pk.public,
+            "iroh endpoint identity must equal PeerKeypair::deterministic(seed).public",
+        );
     }
 }
