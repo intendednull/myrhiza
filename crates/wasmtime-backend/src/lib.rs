@@ -12,6 +12,7 @@ mod float_ban;
 mod gating;
 mod helpers;
 mod instance;
+mod interaction_instance;
 mod propose_instance;
 
 pub use engine::{HostState, WasmtimeBackend, deterministic_config};

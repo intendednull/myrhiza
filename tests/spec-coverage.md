@@ -6,11 +6,14 @@ Mapping: each spec section to the tests that prove it. Tests carry
 `/// Covers: <file>.md §X.Y` doc comments; this file aggregates them.
 
 ## architecture.md §3.2
-- crates/wasmtime-backend/tests/profile_instantiation.rs:106
-- crates/wasmtime-backend/tests/profile_instantiation.rs:73
+- crates/wasmtime-backend/tests/profile_instantiation.rs:127
+- crates/wasmtime-backend/tests/profile_instantiation.rs:160
+- crates/wasmtime-backend/tests/profile_instantiation.rs:188
+- crates/wasmtime-backend/tests/profile_instantiation.rs:232
 
 ## architecture.md §3.3
-- crates/wasmtime-backend/tests/profile_instantiation.rs:73
+- crates/wasmtime-backend/tests/profile_instantiation.rs:127
+- crates/wasmtime-backend/tests/profile_instantiation.rs:188
 
 ## architecture.md §3.5
 - crates/wasmtime-backend/src/gating.rs:350

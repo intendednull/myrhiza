@@ -15,8 +15,8 @@ use myrhiza_backend::{
 };
 use myrhiza_manifest::Manifest;
 use myrhiza_types::limits::{
-    COMPONENT_MEMORY_CAP_V1, MAX_WASM_STACK_V1, STATE_APPLY_FUEL_BUDGET_V1,
-    STATE_PROPOSE_FUEL_BUDGET_V1,
+    COMPONENT_MEMORY_CAP_V1, INTERACTION_FUEL_BUDGET_V1, MAX_WASM_STACK_V1,
+    STATE_APPLY_FUEL_BUDGET_V1, STATE_PROPOSE_FUEL_BUDGET_V1,
 };
 use wasmtime::{
     Config, Engine, Store,
@@ -29,6 +29,7 @@ use crate::gating::{
 };
 use crate::helpers::LogSink;
 use crate::instance::StateApplyInstance;
+use crate::interaction_instance::InteractionInstanceImpl;
 use crate::propose_instance::StateProposeInstance;
 
 /// WIT instance name for the deterministic-helper interface bound to
@@ -249,6 +250,18 @@ pub(crate) mod propose_bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/myrhiza-kernel/wit",
         world: "state-propose",
+    });
+}
+
+/// Bindgen-generated bindings for the `interaction` WIT world.
+/// Scoped in its own module for the same reason as `propose_bindings`:
+/// the interaction world shares the `types` interface with the other
+/// worlds, producing identically-named items; isolation prevents
+/// collisions. `interaction_instance.rs` imports `Interaction` from here.
+pub(crate) mod interaction_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/myrhiza-kernel/wit",
+        world: "interaction",
     });
 }
 
@@ -576,17 +589,48 @@ impl Backend for WasmtimeBackend {
             interaction_bound_imports, validate_interaction_manifest, wire_interaction_linker,
         };
 
+        // 1. Manifest gating — declared imports must be a subset of the
+        //    interaction ambient set.
         validate_interaction_manifest(manifest)?;
+
+        // 2. No float-ban scan — interaction is a non-deterministic profile
+        //    per spec §3.3; cross-peer determinism does not apply.
+
+        // 3. Compute the bound import set (manifest ∩ ambient).
         let bound_imports = interaction_bound_imports(manifest);
+
+        // 4. Decode the component.
         let component = Component::from_binary(&self.engine, component_bytes)
             .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
+
+        // 5. Pre-walk component imports against the bound set.
         prewalk_interaction_imports(&self.engine, &component, &bound_imports)?;
+
+        // 6. Build the linker, binding only the allowed imports.
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         wire_interaction_linker(&mut linker, &bound_imports)?;
-        // Bindgen and interaction_instance wiring land in B-7.4.
-        Err(BackendError::Instantiation(
-            "interaction instance type not yet wired (B-7.4)".into(),
-        ))
+
+        // 7. Build the store with interaction fuel budget + memory cap per
+        //    spec §3.3. Fuel budget is 50M — identical to propose because
+        //    interaction is also a non-deterministic per-peer profile; the
+        //    kernel never replays interaction calls.
+        let host_state = HostState {
+            log_sink: Arc::new(LogSink::default()),
+            bound_imports,
+            table: ResourceTable::new(),
+            limits: wasmtime::StoreLimitsBuilder::new()
+                .memory_size(COMPONENT_MEMORY_CAP_V1)
+                .build(),
+        };
+        let mut store: Store<HostState> = Store::new(&self.engine, host_state);
+        store
+            .set_fuel(INTERACTION_FUEL_BUDGET_V1)
+            .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
+        store.limiter(|s| &mut s.limits);
+
+        // 8. Instantiate via the bindgen-generated `Interaction` type.
+        let instance = InteractionInstanceImpl::instantiate(store, &component, &linker)?;
+        Ok(Box::new(instance))
     }
 }
 
