@@ -191,7 +191,7 @@
   ///
   /// If `iroh_secret` is `Some(bytes)`, the endpoint is constructed with
   /// that Ed25519 secret. The kernel's `PeerKeypair::deterministic(seed)`
-  /// derives `secret = SigningKey::from_bytes(seed.to_le_bytes()-padded
+  /// derives `secret = SigningKey::from_bytes(seed.to_be_bytes()-padded
   /// to 32 bytes)`. Passing the same bytes here makes
   /// `network.peer_pubkey() == peer_key.public`, which is required for
   /// kernel-issued `request_heads(target, ...)` to dial the correct iroh
@@ -254,7 +254,7 @@
 
 **Spec ref:** §3.2 (the harness struct), §3.6 (load-bearing detail on heads-ALPN registration). Plan review I1 (bootstrap), B1/B5 (identity alignment).
 
-**Pre-task investigation (T3.0):** verify that the iroh endpoint's identity must align with the kernel's `peer_key.public`. Quick audit: `crates/kernel/src/runtime.rs` line 1182, 1250, 1261, 1832, 1871 all compare HeadsSummary's `signed_by_peer` against `self.peer_key.public`. When a kernel issues `request_heads(target_peer_pubkey, ...)`, the iroh transport must dial that pubkey as an iroh endpoint ID. Therefore: **iroh endpoint identity MUST equal the kernel's `peer_key.public`** for direct-stream backfill (T6) to work. `PeerKeypair::deterministic(seed)` derives `secret = SigningKey::from_bytes(bytes)` where `bytes[..8] = seed.to_le_bytes(); bytes[8..] = [0; 24]` (per [`crates/kernel/src/identity/mod.rs:61-65`](../../crates/kernel/src/identity/mod.rs)). We can recompute these bytes inside the harness and pass them as `iroh_secret` to `spawn_iroh_peer` — no new accessor on PeerKeypair needed.
+**Pre-task investigation (T3.0):** verify that the iroh endpoint's identity must align with the kernel's `peer_key.public`. Quick audit: `crates/kernel/src/runtime.rs` line 1182, 1250, 1261, 1832, 1871 all compare HeadsSummary's `signed_by_peer` against `self.peer_key.public`. When a kernel issues `request_heads(target_peer_pubkey, ...)`, the iroh transport must dial that pubkey as an iroh endpoint ID. Therefore: **iroh endpoint identity MUST equal the kernel's `peer_key.public`** for direct-stream backfill (T6) to work. `PeerKeypair::deterministic(seed)` derives `secret = SigningKey::from_bytes(bytes)` where `bytes[..8] = seed.to_be_bytes(); bytes[8..] = [0; 24]` (per [`crates/kernel/src/identity/mod.rs:61-65`](../../crates/kernel/src/identity/mod.rs)). We can recompute these bytes inside the harness and pass them as `iroh_secret` to `spawn_iroh_peer` — no new accessor on PeerKeypair needed.
 
 **Files:**
 - Modify: `crates/test-utils/src/iroh_harness.rs`
@@ -364,7 +364,7 @@
       // PeerKeypair and the iroh endpoint then derive from the same
       // Ed25519 secret, so `network.peer_pubkey() == peer_key.public`.
       let mut iroh_secret_bytes = [0u8; 32];
-      iroh_secret_bytes[..8].copy_from_slice(&peer_seed.to_le_bytes());
+      iroh_secret_bytes[..8].copy_from_slice(&peer_seed.to_be_bytes());
 
       let stack = spawn_iroh_peer(&self.lookup, Some(iroh_secret_bytes), true).await;
       let peer_key = PeerKeypair::deterministic(peer_seed);
@@ -415,7 +415,7 @@
           let lookup = MemoryLookup::default();
           let seed = 7_u64;
           let mut bytes = [0u8; 32];
-          bytes[..8].copy_from_slice(&seed.to_le_bytes());
+          bytes[..8].copy_from_slice(&seed.to_be_bytes());
           let stack = spawn_iroh_peer(&lookup, Some(bytes), true).await;
           let pk = PeerKeypair::deterministic(seed);
           assert_eq!(
@@ -842,7 +842,7 @@
       // the same peer identity (single peer, two apps).
       let peer_seed: u64 = 501;
       let mut iroh_secret_bytes = [0u8; 32];
-      iroh_secret_bytes[..8].copy_from_slice(&peer_seed.to_le_bytes());
+      iroh_secret_bytes[..8].copy_from_slice(&peer_seed.to_be_bytes());
       let stack = spawn_iroh_peer(&lookup, Some(iroh_secret_bytes), true).await;
 
       let counter_bundle_hash = BundleHash::from_bytes([0xC0; 32]);

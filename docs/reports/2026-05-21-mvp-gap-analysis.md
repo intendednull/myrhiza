@@ -30,14 +30,14 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 | 16. Poll app | ❌ | Not started. |
 | 17. State-tier tests | ❌ | Per-app state-apply unit tests not present — current tests use the in-Rust `counter_handle()` test helper, not real-app state-apply. |
 | 18. Kernel-tier tests (convergence, coexistence, capability gating) | 🟡 partial | Convergence tested via B-1 + B-4. Capability gating tested in `crates/kernel/tests/acceptance.rs`. **Coexistence test (two apps in same kernel) missing** — load-bearing v1 demo per mvp.md §15.3. |
-| 19. E2E test suite | ❌ | No real iroh-cross-process tests; B-4.4 acceptance tests use in-process two-`IrohNetwork`-peers (sufficient for protocol shape but not a true E2E). |
+| 19. E2E test suite | 🟡 partial | In-process iroh integration tests landed in E2E-1 (2026-05-22) — `crates/kernel/tests/iroh_convergence.rs` + `iroh_coexistence.rs` route real `IrohNetwork` through real `Runtime` through real WASM; `crates/myrhiza-cli/tests/cli_binary.rs` exercises the binary entrypoint via subprocess. Remaining gap: cross-OS-process iroh convergence (deferred to E2E-2). See [docs/specs/2026-05-22-e2e-test-coverage-design.md](../specs/2026-05-22-e2e-test-coverage-design.md). |
 | 20. SDK ergonomics (macros + tooling) | ❌ | No `crates/sdk/`. App authors today would write raw wit-bindgen + manifest TOML. |
 | 21. jco backend | ❌ | Not started. Deferable to v1.5 per mvp.md §15.5 reduced-scope fallback. |
 | 22. Browser-tier tests | ❌ | Depends on item 21. |
 | 23. v1.1 behavior profile + criterion #6 | ❌ | Deferable per mvp.md §15.5. |
 | 24. Dependency-direction CI check | ❌ | No examples yet to enforce direction against. |
 
-**Tally**: 12 items ✅, 4 items 🟡, 8 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback).
+**Tally**: 12 items ✅, 5 items 🟡, 7 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback).
 
 ## v1 acceptance criteria status
 
