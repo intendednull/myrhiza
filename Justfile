@@ -19,6 +19,8 @@ test:
 # iroh transport during B-4.x work.
 test-iroh:
     cargo test -p myrhiza-network --features network-iroh --tests
+    cargo test -p myrhiza-kernel --features network-iroh --tests
+    cargo test -p myrhiza-test-utils --features network-iroh --tests
 
 check:
     cargo check --workspace --all-targets
