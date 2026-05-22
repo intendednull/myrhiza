@@ -47,11 +47,11 @@ Cross-checking against [mvp.md §15.1](../specs/2026-05-09-myrhiza-master-design
 |---|---|
 | 1. Kernel loads + instantiates WASM state component from a bundle (iroh-blobs not required for the in-process tier) | ✅ Plan A acceptance tests prove this against the `counter-state-apply.wasm` fixture. |
 | 2. Multi-peer convergence on same component bytes (verified via state-digest) | ✅ **Corrected 2026-05-21 during B-5 brainstorming**: `helpers::counter_handle()` (used by every B-1 + B-4 convergence test) loads the real `counter-state-apply.wasm` via `WasmtimeBackend::instantiate_state_apply` — every existing convergence test already runs on real WASM bytes. |
-| 3. UI app loads interaction component, projects a view, submits a command, observes state change | ❌ Needs the counter app's interaction component + a host-side launcher. Native (CLI) suffices for v1; jco-browser is v1.5+. |
+| 3. UI app loads interaction component, projects a view, submits a command, observes state change | ✅ **Shipped in B-7 (2026-05-21)**: `crates/myrhiza-cli/` harness drives the counter bundle's three components (state-apply + state-propose + interaction) through the `view → dispatch → propose → pre-check → apply` loop. E2E test at `crates/myrhiza-cli/tests/e2e.rs` asserts final state == `8_i64.to_be_bytes()` and pre-check ≡ apply on every step. |
 | 4. Two apps coexist (different state component, different topic, same peer; events don't cross) | ✅ **Shipped in B-5 (2026-05-21)**: `crates/kernel/tests/coexistence.rs::two_apps_coexist_no_event_crossing` proves criterion 4 with counter + echo bundles on one peer. |
 | 5. Capability declarations gate access (component cannot import undeclared interfaces) | ✅ Plan A `crates/kernel/tests/acceptance.rs` tests this with the `over-importer.wasm` fixture. |
 
-**v1 blockers (post-B-5)**: criterion 3 only. Needs a counter-app interaction component + a host-side launcher (native CLI).
+**v1 blockers (post-B-7)**: none. All five v1 acceptance criteria are met. 5/5 ✅.
 
 ## Proposed slice sequence to v1 acceptance
 

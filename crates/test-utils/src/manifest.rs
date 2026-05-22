@@ -60,6 +60,86 @@ pub fn helpers_only_state_apply_manifest() -> Manifest {
     m
 }
 
+/// Build a manifest declaring three component slots (state-apply,
+/// state-propose, interaction) with the same helper set as
+/// [`helpers_only_state_apply_manifest`].
+///
+/// Used by [`crate::bundle::build_signed_counter_bundle_three_components`]
+/// to create a fully-populated counter bundle covering the
+/// `view → dispatch → propose → apply` loop required by spec §3.6.
+#[must_use]
+pub fn helpers_only_three_component_manifest() -> Manifest {
+    let mut helpers = BTreeMap::new();
+    helpers.insert("host.hash".into(), true);
+    helpers.insert("host.log".into(), true);
+
+    let mut m = Manifest {
+        app: AppSection {
+            name: "test-fixture".into(),
+            version: "0.1.0".into(),
+            description: "test".into(),
+            author_pubkey: "0x".into(), // filled by sign_manifest_three_components
+            author_identity_class: AuthorIdentityClass::ThirdParty,
+        },
+        abi: AbiSection {
+            kernel_major: 1,
+            kernel_minor_min: 0,
+            state_digest_format: StateDigestFormat::Bincode13,
+        },
+        capabilities: CapabilitiesSection {
+            host_imports: BTreeMap::new(),
+            ui_surfaces: BTreeMap::new(),
+            high_value_ops: HighValueOps::default(),
+            deterministic_helpers: helpers,
+        },
+        determinism: DeterminismSection {
+            allow_floats: false,
+            drift_detection: DriftDetectionSection {
+                interval_events: 1024,
+            },
+        },
+        modules: ModulesSection { dep: vec![] },
+        components: ComponentsSection {
+            state_apply: Some("components/state-apply.wasm".into()),
+            state_propose: Some("components/state-propose.wasm".into()),
+            interaction: Some("components/interaction.wasm".into()),
+            behavior: None,
+        },
+        author_policy: AuthorPolicy::default_deny(),
+        signature: None,
+    };
+    m.canonicalize();
+    m
+}
+
+/// Sign `m` against the composite bundle-content-hash of all three component
+/// byte slices (state-apply, state-propose, interaction; behavior absent →
+/// `[0; 32]` sentinel per spec §3.4). Mutates `m.signature` and
+/// `m.app.author_pubkey` in place.
+pub fn sign_manifest_three_components(
+    m: &mut Manifest,
+    apply_bytes: &[u8],
+    propose_bytes: &[u8],
+    interaction_bytes: &[u8],
+    key: &SigningKey,
+) {
+    let composite = bundle_content_hash(
+        Some(apply_bytes),
+        Some(propose_bytes),
+        Some(interaction_bytes),
+        None,
+    );
+    let pk = key.verifying_key().to_bytes();
+    m.app.author_pubkey = format!("0x{}", hex::encode(pk));
+    m.canonicalize();
+    let target = signing_target_bytes(m, &composite);
+    let sig = key.sign(&target);
+    m.signature = Some(Signature {
+        algorithm: SignatureAlgorithm::Ed25519,
+        value: sig.to_bytes(),
+    });
+}
+
 /// Like [`helpers_only_state_apply_manifest`] but augmented with one
 /// extra entry under `capabilities.host_imports` set to `true`.
 ///

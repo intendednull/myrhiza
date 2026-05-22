@@ -8,6 +8,7 @@ members = [
     "crates/kernel",
     "crates/network",
     "crates/test-utils",
+    "crates/myrhiza-cli",
 ]
 exclude = [
     # Wasm-only fixtures — built for wasm32-unknown-unknown by

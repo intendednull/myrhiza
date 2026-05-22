@@ -34,3 +34,9 @@ pub mod runtime;
 
 pub mod event_builder;
 pub use event_builder::{EventBuilder, canonical_envelope, counter_increment_payload};
+
+pub mod state_propose;
+pub use state_propose::{ProposeError, StateProposeHandle};
+
+pub mod interaction;
+pub use interaction::{InteractionError, InteractionHandle};
