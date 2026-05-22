@@ -33,7 +33,9 @@ fn fast_cfg() -> RuntimeCfg {
     }
 }
 
-/// Covers: mvp.md §15.1 #2, spec §3.3 row 1.
+/// Covers: mvp.md §15.1 #2
+///
+/// Closes the in-process iroh portion of E2E-1 design §3.3 row 1.
 /// Mirrors `convergence.rs::single_originator_single_receiver_converges`
 /// but routes events through real `IrohNetwork` (loopback UDP, iroh-gossip
 /// Plumtree forwarding) rather than `MemNetwork`'s in-memory bus.
