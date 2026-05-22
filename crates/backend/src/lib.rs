@@ -137,6 +137,69 @@ pub struct InstanceIdentity {
     pub scope: IdentityScope,
 }
 
+/// A loaded state-propose component instance ready to be called.
+pub trait ProposeInstance: Send + 'static {
+    /// Invoke `propose(prior_state, intent) -> result<list<u8>, string>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component traps, exhausts fuel,
+    /// or the call cannot be dispatched. The inner `Result` is the
+    /// component's own `result<list<u8>, string>` return.
+    fn call_propose(
+        &mut self,
+        prior_state: &[u8],
+        intent: &[u8],
+    ) -> Result<Result<Vec<u8>, String>, BackendError>;
+}
+
+/// A loaded interaction component instance ready to be called.
+pub trait InteractionInstance: Send + 'static {
+    /// Invoke `view(state, peer-state) -> list<u8>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component traps or the call
+    /// cannot be dispatched.
+    fn call_view(&mut self, state: &[u8], peer_state: &[u8]) -> Result<Vec<u8>, BackendError>;
+
+    /// Invoke `dispatch(action) -> result<list<u8>, string>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component traps or the call
+    /// cannot be dispatched. The inner `Result` is the component's
+    /// own `result<list<u8>, string>` return.
+    fn call_dispatch(&mut self, action: &str) -> Result<Result<Vec<u8>, String>, BackendError>;
+
+    /// Invoke `on-broadcast-completion(token, ok, err)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component traps or the call
+    /// cannot be dispatched.
+    fn call_on_broadcast_completion(
+        &mut self,
+        token: &[u8],
+        ok: bool,
+        err: &str,
+    ) -> Result<(), BackendError>;
+
+    /// Invoke `on-blob-fetch-completion(token, ok, payload, err)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component traps or the call
+    /// cannot be dispatched.
+    fn call_on_blob_fetch_completion(
+        &mut self,
+        token: &[u8],
+        ok: bool,
+        payload: &[u8],
+        err: &str,
+    ) -> Result<(), BackendError>;
+}
+
 /// A backend creates `ComponentInstance`s from component bytes + manifest.
 pub trait Backend: Send + Sync + 'static {
     /// Instantiate a state-apply component, applying capability gating
@@ -152,4 +215,53 @@ pub trait Backend: Send + Sync + 'static {
         component_bytes: &[u8],
         manifest: &Manifest,
     ) -> Result<Box<dyn ComponentInstance>, BackendError>;
+
+    /// Instantiate a state-propose component.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component bytes fail to decode,
+    /// the manifest declares unauthorized imports, or instantiation
+    /// fails for any other reason.
+    fn instantiate_state_propose(
+        &self,
+        component_bytes: &[u8],
+        manifest: &Manifest,
+    ) -> Result<Box<dyn ProposeInstance>, BackendError>;
+
+    /// Instantiate an interaction component.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BackendError` if the component bytes fail to decode,
+    /// the manifest declares unauthorized imports, or instantiation
+    /// fails for any other reason.
+    fn instantiate_interaction(
+        &self,
+        component_bytes: &[u8],
+        manifest: &Manifest,
+    ) -> Result<Box<dyn InteractionInstance>, BackendError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // B-7.1.1 / B-7.1.2: compile-time assertions that the new instance
+    // traits are Send + 'static so they can be boxed and sent across tasks.
+    #[test]
+    fn propose_instance_is_send_static() {
+        const _: fn() = || {
+            fn ensure<T: Send + 'static>() {}
+            ensure::<Box<dyn ProposeInstance>>();
+        };
+    }
+
+    #[test]
+    fn interaction_instance_is_send_static() {
+        const _: fn() = || {
+            fn ensure<T: Send + 'static>() {}
+            ensure::<Box<dyn InteractionInstance>>();
+        };
+    }
 }

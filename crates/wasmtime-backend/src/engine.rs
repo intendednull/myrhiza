@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use myrhiza_backend::{Backend, BackendError, ComponentInstance};
+use myrhiza_backend::{
+    Backend, BackendError, ComponentInstance, InteractionInstance, ProposeInstance,
+};
 use myrhiza_manifest::Manifest;
 use myrhiza_types::limits::{
     COMPONENT_MEMORY_CAP_V1, MAX_WASM_STACK_V1, STATE_APPLY_FUEL_BUDGET_V1,
@@ -475,6 +477,22 @@ impl Backend for WasmtimeBackend {
         // 8. Instantiate via the bindgen-generated `StateApply` type.
         let instance = StateApplyInstance::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
+    }
+
+    fn instantiate_state_propose(
+        &self,
+        _component_bytes: &[u8],
+        _manifest: &Manifest,
+    ) -> Result<Box<dyn ProposeInstance>, BackendError> {
+        Err(BackendError::Instantiation("not yet wired in B-7.1".into()))
+    }
+
+    fn instantiate_interaction(
+        &self,
+        _component_bytes: &[u8],
+        _manifest: &Manifest,
+    ) -> Result<Box<dyn InteractionInstance>, BackendError> {
+        Err(BackendError::Instantiation("not yet wired in B-7.1".into()))
     }
 }
 
