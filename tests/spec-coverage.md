@@ -232,6 +232,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## mvp.md §15.1 #4
 - crates/kernel/tests/convergence.rs:204
+- crates/kernel/tests/iroh_coexistence.rs:40
 
 ## networking.md §11.1
 - crates/kernel/tests/attribution.rs:588
