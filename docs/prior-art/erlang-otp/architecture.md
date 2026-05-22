@@ -59,7 +59,7 @@ A **supervisor** is a process whose only job is to start, monitor, and restart i
 - `one_for_one` — if child dies, restart just that child. Default; most common.
 - `one_for_all` — if any child dies, kill all siblings and restart the entire group together. For tightly-coupled groups where one dying invalidates the rest.
 - `rest_for_one` — if child N dies, kill children N+1..end (those started after it), then restart N and the rest. For pipeline dependencies.
-- `simple_one_for_one` — deprecated since OTP 18; replaced by `simple_one_for_one`-style `DynamicSupervisor` (Elixir) and `child_spec` dynamic API. Used for "spawn N transient workers."
+- `simple_one_for_one` — for "spawn N transient workers" — children all start from the same `child_spec`, added dynamically via `supervisor:start_child/2`. Still supported in current OTP, though Elixir's `DynamicSupervisor` is the ergonomic successor for new Elixir code; not deprecated in Erlang itself.
 
 **Restart intensity** is a `(MaxRestarts, MaxSeconds)` tuple. If the supervisor restarts children more than `MaxRestarts` times within `MaxSeconds`, the supervisor itself terminates and propagates the failure upward. This is the "let it crash, but stop crashing if you crash too often" backstop.
 

@@ -25,7 +25,7 @@ Read [`README.md`](./README.md) (this file) → [`oci-artifacts.md`](./oci-artif
 | `wkg` (Bytecode Alliance wasm-pkg-tools) | v0.15.0 | 2025-02-06 | Apache-2.0 WITH LLVM-exception | active; small-team BA-stewarded |
 | `wac` (wac-cli) | v0.10.0 | 2024-04-17 | Apache-2.0 | active; Bytecode Alliance |
 | `warg` (Wasm Registry protocol) | n/a | archived 2025-07-28 | Apache-2.0 | superseded by wasm-pkg-tools |
-| Sigstore Cosign | v3.0.6 (latest), v2.6.3 (LTS) | 2025-04-06 | Apache-2.0 | GA since 2022-10-26 |
+| Sigstore Cosign | v3.0.6 (latest), v2.6.3 (LTS) | 2026-04-06 | Apache-2.0 | GA since 2022-10-26 |
 | Sigstore (umbrella) | — | — | Apache-2.0 | OpenSSF Incubating |
 | Notation CLI (Notary Project) | v1.3.2 stable, v2.0.0-alpha.1 | 2025-04-27 / 2025-03-13 | Apache-2.0 | CNCF Incubating |
 | HTML import maps | (HTML Standard) | Baseline since 2023-03 | — | Chrome 89, Firefox 108, Safari 16.4 |
@@ -51,7 +51,6 @@ Read [`README.md`](./README.md) (this file) → [`oci-artifacts.md`](./oci-artif
 | [`history.md`](./history.md) | timeline: docker registry (2014) → OCI image-spec 1.0 (2017) → OCI artifacts proposal (2019) → Sigstore launch (2021) → image-spec 1.1 (2024-02-15) → wkg replaces warg (2025-07) |
 | [`open-problems.md`](./open-problems.md) | what the lineage doesn't solve: P2P distribution (OCI is HTTPS-pull only), trust roots without OIDC, key rotation, install UX, content-addressed P2P interop |
 | [`lessons.md`](./lessons.md) | **the decision file:** validates / avoid / borrow — synthesis for Myrhiza spec authors |
-| [`glossary.md`](./glossary.md) | OCI + WASM-distribution + signing terms |
 
 ## Quick orientation
 

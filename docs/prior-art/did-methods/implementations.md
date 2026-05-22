@@ -125,7 +125,7 @@ Text representation: legacy base58btc multihash, modern multibase-encoded CIDv1 
 - iroh's NodeID is functionally a PeerID-shaped Ed25519 identifier ([`prior-art/iroh/identity.md`](../iroh/identity.md) covers this in depth).
 - The libp2p PeerID is NOT registered in the DID Methods registry. There is no `did:libp2p` or `did:peerid`.
 
-**Relevance to Myrhiza:** Myrhiza's `PeerKeypair` ([`crates/kernel/src/identity.rs`](../../../crates/kernel/src/identity.rs)) is Ed25519, exactly the same primitive a libp2p PeerID wraps. Myrhiza's bech32m encoding of the public key (`wpeer1...` HRP per master spec) is *another* encoding of the same primitive — interconvertible with libp2p PeerID, with `did:key`, and with raw 32-byte bytes. Choosing between them is a UX/wire-format decision, not a cryptographic one.
+**Relevance to Myrhiza:** Myrhiza's `PeerKeypair` ([`crates/kernel/src/identity/mod.rs`](../../../crates/kernel/src/identity/mod.rs)) is Ed25519, exactly the same primitive a libp2p PeerID wraps. Myrhiza's bech32m encoding of the public key (`wpeer1...` HRP per master spec) is *another* encoding of the same primitive — interconvertible with libp2p PeerID, with `did:key`, and with raw 32-byte bytes. Choosing between them is a UX/wire-format decision, not a cryptographic one.
 
 ## Implementation choice matrix for Myrhiza
 
@@ -135,7 +135,7 @@ Text representation: legacy base58btc multihash, modern multibase-encoded CIDv1 
 | Emit a `did:key` or `did:web` representation of a Myrhiza author key | `ssi` crate (or hand-roll the multicodec encoding — it's ~30 lines) |
 | Resolve any of the long-tail DIDs | DIF universal-resolver via HTTP (don't vendor it) |
 | JS-side interop in a jco-browser deployment | Veramo (specifically `@veramo/did-resolver` + the `did-resolver` underlying TS package) |
-| Pure peer identity (no DID conformance) | Myrhiza's own bech32m + Ed25519 (already in `crates/kernel/src/identity.rs`); equivalent to libp2p PeerID |
+| Pure peer identity (no DID conformance) | Myrhiza's own bech32m + Ed25519 (already in `crates/kernel/src/identity/mod.rs`); equivalent to libp2p PeerID |
 
 **The honest answer:** for Plan B-2, Myrhiza doesn't *need* any of these libraries. The cryptography is `ed25519-dalek` (already in use). The encoding is bech32m (already in use). External interop via `did:key`/`did:web` is a *future* feature that adds <100 lines of multicodec encoding when needed. **The DID library ecosystem is a thing to know about, not a thing to integrate.**
 
@@ -150,4 +150,4 @@ Text representation: legacy base58btc multihash, modern multibase-encoded CIDv1 
 - DIF universal-resolver hosted instance — <https://dev.uniresolver.io>.
 - libp2p PeerID spec — <https://github.com/libp2p/specs/blob/master/peer-ids/peer-ids.md>.
 - iroh NodeID in-tree — [`prior-art/iroh/identity.md`](../iroh/identity.md).
-- Myrhiza identity module — [`crates/kernel/src/identity.rs`](../../../crates/kernel/src/identity.rs).
+- Myrhiza identity module — [`crates/kernel/src/identity/mod.rs`](../../../crates/kernel/src/identity/mod.rs).

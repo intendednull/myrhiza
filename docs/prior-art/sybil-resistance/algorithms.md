@@ -59,7 +59,7 @@ One-paragraph summary per algorithm, ordered by category (see [`taxonomy.md`](ta
 - **Paper:** Meulpolder / D'Acunto / Pouwelse, "BarterCast: A practical approach to prevent lazy freeriding in P2P networks," **HotP2P 2009** (6th International Workshop on Hot Topics in P2P Systems).
 - **Mechanism:** Each peer maintains a local view of bandwidth exchanges (direct + gossiped-indirect). Reputation is a max-flow computation over the local-view graph: "how much bandwidth has flowed *to* this peer from sources I trust?" The peer requesting a download is preferentially served by peers who have a positive max-flow path from a trusted source.
 - **Sybil property:** Sybils with no real bandwidth contribution show zero max-flow from real sources. Sybils that *do* contribute aren't free identities anymore.
-- **Deployment:** Deployed in Tribler (open-source P2P client + research project from TU Delft, active 2008–present). Thousands-of-users scale. See [`tribler-bartercast.md`](tribler-bartercast.md).
+- **Deployment:** Deployed in Tribler (open-source P2P client + research project from TU Delft, active 2008–present). Thousands-of-users scale. See [Tribler BarterCast in `algorithms.md`](algorithms.md).
 
 ## Social-graph Sybil defenses
 
@@ -130,13 +130,13 @@ One-paragraph summary per algorithm, ordered by category (see [`taxonomy.md`](ta
 - **Paper:** Benet & Dalrymple et al., "Proof of Replication" technical report, Protocol Labs, 2017; subsequent academic publications and engineering iterations through 2026.
 - **Mechanism:** A storage provider seals a *unique copy* of a sector (data + per-provider randomness, slow-VDE-encoded). The sealing is provably slow and uniquely tied to that provider's identity. A SNARK over the sealed sector + commitments allows fast verification.
 - **Sybil property:** Cryptographically Sybil-resistant — each Sybil identity would have to *separately* seal their own sectors, paying the full computational + storage cost.
-- **Deployment:** Filecoin mainnet, October 2020 onwards; ongoing protocol revisions. See [`filecoin-post.md`](filecoin-post.md).
+- **Deployment:** Filecoin mainnet, October 2020 onwards; ongoing protocol revisions. See [Filecoin PoRep/PoSt in `algorithms.md`](algorithms.md).
 
 ### Filecoin Proof of Spacetime (PoSt)
 
 - **Mechanism:** After PoRep, the provider must periodically prove they still hold the sealed copy. The proof is challenge-response over the sealed sector; passing the challenge with high probability requires actually holding the data.
 - **Sybil property:** Combined with PoRep, gives ongoing cryptographic Sybil-resistance for *storage* specifically.
-- **Deployment:** Filecoin mainnet. See [`filecoin-post.md`](filecoin-post.md).
+- **Deployment:** Filecoin mainnet. See [Filecoin PoRep/PoSt in `algorithms.md`](algorithms.md).
 
 ## Measurement / empirical-baseline references
 
@@ -145,7 +145,7 @@ One-paragraph summary per algorithm, ordered by category (see [`taxonomy.md`](ta
 - **Paper:** Adar & Huberman, "Free Riding on Gnutella," ***First Monday* 5(10), October 2000.**
 - **Result:** 24-hour Gnutella measurement (August 2000): ~70% of users shared *zero* files; ~50% of all query responses came from the top 1% of sharers; ~25% of users provided ~99% of files.
 - **Significance:** Established the canonical empirical baseline for "free-riding is the default user behavior in permissionless P2P." Predates everything else in this corpus.
-- See [`adar-huberman.md`](adar-huberman.md).
+- See [Adar & Huberman entry in `algorithms.md`](algorithms.md).
 
 ## Survey papers / SoKs
 

@@ -21,7 +21,7 @@ Selection is environment-detected at module-load (typeof `window` / `process`). 
 
 ## 3. Subsystem-by-subsystem coverage
 
-(Drawn from `preview2-shim/src/`; verified against the version pin `1.17.9` shipped with jco 1.19.0.)
+(Drawn from `preview2-shim/src/`; verified against the version pin `0.17.9` shipped with jco 1.19.0.)
 
 ### `wasi:cli`
 

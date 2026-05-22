@@ -44,7 +44,6 @@ Read [`methods.md`](methods.md) first — it surveys all eight methods side-by-s
 - [`abandoned.md`](abandoned.md) — `did:ion`'s Microsoft retreat, `didkit` archival, the long tail of dead methods.
 - [`open-problems.md`](open-problems.md) — what the DID layer structurally doesn't solve.
 - [`lessons.md`](lessons.md) — **the consult-this-when-designing decision file.** validates / avoid / borrow.
-- [`glossary.md`](glossary.md) — terms specific to the DID ecosystem.
 
 ## Key facts (verified 2026-05-22)
 

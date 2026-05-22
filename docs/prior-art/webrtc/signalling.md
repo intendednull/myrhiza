@@ -120,7 +120,7 @@ The genius of trystero: **the application code is identical across all seven bac
 - ❌ **Variable reliability.** Public trackers go down, MQTT brokers rate-limit, Nostr relays disconnect. You depend on someone else's uptime.
 - ❌ **Hash-based topic discovery.** You and the peer must derive the same topic hash. Trystero hashes a string + secret; if anyone else hashes the same string, they're in your room. Use real secrets.
 
-**Verdict for Myrhiza:** Trystero is the **single most interesting prior art for "P2P apps without our own signalling server."** If Myrhiza had a no-Myrhiza-infra mode for ad-hoc apps, the trystero pattern is the template. But: the metadata leak is real, and the reliability of any specific third-party backend is not guaranteed. Reading the trystero source as a study of "what would a backend-pluggable Myrhiza signalling layer look like" is high-value work. See [`js-ecosystem.md`](js-ecosystem.md).
+**Verdict for Myrhiza:** Trystero is the **single most interesting prior art for "P2P apps without our own signalling server."** If Myrhiza had a no-Myrhiza-infra mode for ad-hoc apps, the trystero pattern is the template. But: the metadata leak is real, and the reliability of any specific third-party backend is not guaranteed. Reading the trystero source as a study of "what would a backend-pluggable Myrhiza signalling layer look like" is high-value work. See [`signalling.md`](signalling.md) §"JS-ecosystem patterns".
 
 ### 6. PeerJS-style "broker" servers (cloud signalling)
 
@@ -195,4 +195,4 @@ This is the right pattern for Myrhiza. The Myrhiza identity becomes the trust an
 - PeerJS (broker-based signalling): <https://github.com/peers/peerjs-server>
 - RFC 8838 — Trickle ICE: <https://datatracker.ietf.org/doc/rfc8838/>
 - RFC 8866 — SDP: <https://datatracker.ietf.org/doc/rfc8866/>
-- Cross-refs: [`stack.md`](stack.md), [`libp2p-webrtc.md`](libp2p-webrtc.md), [`js-ecosystem.md`](js-ecosystem.md), [`open-problems.md`](open-problems.md), [`prior-art/iroh/critiques.md`](../iroh/critiques.md)
+- Cross-refs: [`stack.md`](stack.md), [`libp2p-webrtc.md`](libp2p-webrtc.md), [`signalling.md`](signalling.md) §"JS-ecosystem patterns", [`open-problems.md`](open-problems.md), [`prior-art/iroh/critiques.md`](../iroh/critiques.md)

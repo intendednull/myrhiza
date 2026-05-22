@@ -16,7 +16,7 @@ The Holochain folder (`prior-art/holochain/open-problems.md#2-free-rider-partici
 
 You can pick at most two. Pick (resistance + permissionless) and you must impose a cost — PoW, PoS, proof-of-personhood ceremony. Pick (resistance + free) and you must have a gatekeeper — an invite graph, an allow-list, a trust authority. Pick (permissionless + free) and you have Gnutella circa 2000 — open, free, and Sybil-collapsing.
 
-Myrhiza's permission/invite graph is a *gatekeeper-style* primitive — Willow takes the (resistance + free, sacrificing permissionlessness) corner of the trilemma. This is by design and is the structural advantage [`myrhiza-social-graph.md`](myrhiza-social-graph.md) builds on.
+Myrhiza's permission/invite graph is a *gatekeeper-style* primitive — Willow takes the (resistance + free, sacrificing permissionlessness) corner of the trilemma. This is by design and is the structural advantage [`lessons.md` §"Validates" #1 + `taxonomy.md` §"Where Myrhiza sits"](lessons.md) builds on.
 
 ## Six approach categories
 
@@ -42,7 +42,7 @@ Myrhiza's permission/invite graph is a *gatekeeper-style* primitive — Willow t
 
 **Cost.** Gossip overhead. Convergence latency (~minutes to hours). State drift across peers (each peer's score is approximate).
 
-**Canonical references.** EigenTrust (Kamvar et al. 2003), PowerTrust, PeerTrust, BarterCast. See [`eigentrust.md`](eigentrust.md), [`tribler-bartercast.md`](tribler-bartercast.md).
+**Canonical references.** EigenTrust (Kamvar et al. 2003), PowerTrust, PeerTrust, BarterCast. See [`eigentrust.md`](eigentrust.md), [Tribler BarterCast in `algorithms.md`](algorithms.md).
 
 **Strength.** Reputation captures long-running history that pairwise reciprocity discards. Lets a honest newcomer reach a useful subset of high-trust peers quickly.
 
@@ -84,7 +84,7 @@ Myrhiza's permission/invite graph is a *gatekeeper-style* primitive — Willow t
 
 **Cost.** Significant — heavyweight cryptography, settlement-layer dependency, real economic cost imposed on every participant. A bad fit for a free-to-use consumer-mobile P2P app.
 
-**Canonical references.** Filecoin PoRep + PoSt (Benet & Dalrymple, 2017 onwards). See [`filecoin-post.md`](filecoin-post.md). Bitcoin / Ethereum PoW / PoS are out of scope for this corpus but are the same shape mathematically.
+**Canonical references.** Filecoin PoRep + PoSt (Benet & Dalrymple, 2017 onwards). See [Filecoin PoRep/PoSt in `algorithms.md`](algorithms.md). Bitcoin / Ethereum PoW / PoS are out of scope for this corpus but are the same shape mathematically.
 
 **Strength.** *The only category with formal Sybil-resistance proofs.*
 
@@ -123,7 +123,7 @@ Willow's permission/invite graph is the **category-3 input** (social-graph defen
 2. **Ongoing accountability:** maintenance-component-as-declared-capacity per peer; refusal-to-serve-non-participants as the enforcement primitive.
 3. **Misbehavior:** Holochain-warrant-style signed evidence of detected misbehavior, gossip-distributed.
 
-This composition is developed in [`myrhiza-social-graph.md`](myrhiza-social-graph.md). The component pieces have research-grade or deployment-grade prior art; the composition is novel and unproven. Be honest about both.
+This composition is developed in [`lessons.md` §"Validates" #1 + `taxonomy.md` §"Where Myrhiza sits"](lessons.md). The component pieces have research-grade or deployment-grade prior art; the composition is novel and unproven. Be honest about both.
 
 ## Sources
 

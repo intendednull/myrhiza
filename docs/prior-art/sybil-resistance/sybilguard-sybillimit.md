@@ -4,7 +4,7 @@
 
 # SybilGuard and SybilLimit
 
-If Myrhiza adopts the **invite graph as the Sybil-defense input** — the load-bearing thesis of [`myrhiza-social-graph.md`](myrhiza-social-graph.md) — the two papers that most directly shape what's possible are SybilGuard (Yu / Kaminsky / Gibbons / Flaxman, SIGCOMM 2006) and SybilLimit (Yu / Gibbons / Kaminsky / Xiao, IEEE S&P 2008). They are the most-cited, most-influential, most-imitated social-graph Sybil defenses. They are also the most fundamentally limited — surface the limitations honestly, then evaluate whether the limitations apply to Myrhiza's specific graph shape.
+If Myrhiza adopts the **invite graph as the Sybil-defense input** — the load-bearing thesis of [`lessons.md` §"Validates" #1 + `taxonomy.md` §"Where Myrhiza sits"](lessons.md) — the two papers that most directly shape what's possible are SybilGuard (Yu / Kaminsky / Gibbons / Flaxman, SIGCOMM 2006) and SybilLimit (Yu / Gibbons / Kaminsky / Xiao, IEEE S&P 2008). They are the most-cited, most-influential, most-imitated social-graph Sybil defenses. They are also the most fundamentally limited — surface the limitations honestly, then evaluate whether the limitations apply to Myrhiza's specific graph shape.
 
 This file's job: cover both papers in enough depth that a Myrhiza spec author can decide *whether* and *how* to adopt the technique, then surface the 2013 SoK critique (Alvisi et al.) that bounds what any social-graph defense can ever achieve.
 
@@ -147,4 +147,4 @@ The honest reading: **social-graph Sybil defenses are research-grade artifacts d
 - [Koll / Li / Stein / Fu, "On the State of OSN-based Sybil Defenses," IFIP Networking 2014](https://dl.ifip.org/db/conf/networking/networking2014/KollLSF14.pdf).
 - [Tran / Min / Li / Subramanian, "Sybil-resilient Online Content Voting," NSDI 2009 (SumUp)](https://www.usenix.org/legacy/event/nsdi09/tech/full_papers/tran/tran.pdf).
 - [Yu, "Sybil defenses via social networks: a tutorial and survey," SIGACT News 42(3), 2011](https://dl.acm.org/doi/10.1145/2034575.2034593) — earlier survey by SybilGuard's lead author.
-- Cross-references: [`whanau.md`](whanau.md), [`myrhiza-social-graph.md`](myrhiza-social-graph.md), [`taxonomy.md`](taxonomy.md), [`open-problems.md`](open-problems.md).
+- Cross-references: [`whanau.md`](whanau.md), [`lessons.md` §"Validates" #1 + `taxonomy.md` §"Where Myrhiza sits"](lessons.md), [`taxonomy.md`](taxonomy.md), [`open-problems.md`](open-problems.md).

@@ -47,25 +47,19 @@ These three facts are load-bearing for the Myrhiza spec. See [`lessons.md`](less
 - **[`browser-stack.md`](browser-stack.md)** — what `RTCPeerConnection` actually does inside the browser, mDNS-for-ICE privacy behavior, what's still vendor-specific.
 - **[`webtransport.md`](webtransport.md)** — HTTP/3-based browser transport. **Complementary, not a WebRTC replacement.** Why it doesn't do browser-to-browser; when it's the right tool.
 - **[`libp2p-webrtc.md`](libp2p-webrtc.md)** — the libp2p ecosystem's two WebRTC profiles (browser-to-server / WebRTC-Direct, browser-to-browser). Spec status, implementation maturity, certhash trick.
-- **[`js-ecosystem.md`](js-ecosystem.md)** — simple-peer (stale), trystero (serverless matchmaking), PeerJS, and the broader JS landscape. What ships in apps today.
-- **[`nat-and-turn.md`](nat-and-turn.md)** — honest accounting of NAT traversal: what % of connections need TURN, who runs TURN servers in production, the cost question.
-- **[`history.md`](history.md)** — 2011 Google/Mozilla origins → 2021 W3C REC → WebRTC-NV. Why the standard is the way it is.
 - **[`open-problems.md`](open-problems.md)** — what WebRTC structurally doesn't solve (and what is unlikely to be solved): signalling discovery, TURN economics, mobile background, metadata leaks, browser-quirk inventory.
 - **[`lessons.md`](lessons.md)** — **the consult-this-when-designing decision file.** Validates / avoid / borrow for the Myrhiza browser-peer profile.
-- **[`glossary.md`](glossary.md)** — WebRTC-specific terms (SDP, ICE candidate, mDNS hostname, DTLS-SRTP, TURN allocation, etc).
 
 ## Recommended reading order
 
 1. **[`stack.md`](stack.md)** — get the protocol layering straight; without this nothing else makes sense.
-2. **[`signalling.md`](signalling.md)** — the most important file for Myrhiza. The honest answer to "how does WebRTC find peers" is the design decision you cannot avoid.
+2. **[`signalling.md`](signalling.md)** — the most important file for Myrhiza. The honest answer to "how does WebRTC find peers" is the design decision you cannot avoid. JS-ecosystem patterns (simple-peer, trystero, PeerJS) are covered inline here.
 3. **[`browser-stack.md`](browser-stack.md)** — what the browser actually does when you call `new RTCPeerConnection()`. The privacy-via-mDNS behavior is a load-bearing-for-spec fact.
 4. **[`implementations.md`](implementations.md)** — pick a library mental model: libdatachannel for embedded, str0m for sans-IO Rust, pion for Go, webrtc-rs for Tokio Rust.
 5. **[`libp2p-webrtc.md`](libp2p-webrtc.md)** — the spec closest to what Myrhiza would build (browser-peer as a transport profile).
-6. **[`nat-and-turn.md`](nat-and-turn.md)** — operational reality. Spec authors who skip this end up with "P2P that doesn't connect for 20% of users."
-7. **[`webtransport.md`](webtransport.md)** — the complementary alternative when browser-to-server is acceptable.
-8. **[`js-ecosystem.md`](js-ecosystem.md)** — what JS apps actually ship.
-9. **[`history.md`](history.md) + [`open-problems.md`](open-problems.md)** — context and unsolved problems.
-10. **[`lessons.md`](lessons.md)** — synthesis for the Myrhiza spec.
+6. **[`webtransport.md`](webtransport.md)** — the complementary alternative when browser-to-server is acceptable.
+7. **[`open-problems.md`](open-problems.md)** — context and unsolved problems (TURN economics + NAT-traversal accounting covered here).
+8. **[`lessons.md`](lessons.md)** — synthesis for the Myrhiza spec.
 
 ## Cross-links to other corpus folders
 
@@ -78,7 +72,7 @@ These three facts are load-bearing for the Myrhiza spec. See [`lessons.md`](less
 
 This folder is for: spec authors weighing browser-peer transport options for Myrhiza; reviewers reading those specs; and future agents who need to skim the WebRTC ecosystem without reading 30 specs and 8 README's.
 
-**Framing disclosure.** These docs are written from a Myrhiza-needs-a-browser-peer-profile stance — most "Implications for Myrhiza" sub-sections frame WebRTC's choices through whether they survive contact with our jco-transpiled-WASM-component browser kernel. Future readers auditing whether browser-peer-via-WebRTC is itself the right primitive (vs accepting relay-only and shipping faster) should weigh the corpus accordingly: it's a learn-from-WebRTC-into-Myrhiza-browser-peer artifact, not a neutral catalog of "should we use WebRTC at all." We also have a load-bearing-dependency-style bias: if Myrhiza commits to WebRTC, the corpus has an incentive to soft-pedal its operational rough edges. We try to surface those (especially in [`nat-and-turn.md`](nat-and-turn.md) and [`open-problems.md`](open-problems.md)) — but be skeptical.
+**Framing disclosure.** These docs are written from a Myrhiza-needs-a-browser-peer-profile stance — most "Implications for Myrhiza" sub-sections frame WebRTC's choices through whether they survive contact with our jco-transpiled-WASM-component browser kernel. Future readers auditing whether browser-peer-via-WebRTC is itself the right primitive (vs accepting relay-only and shipping faster) should weigh the corpus accordingly: it's a learn-from-WebRTC-into-Myrhiza-browser-peer artifact, not a neutral catalog of "should we use WebRTC at all." We also have a load-bearing-dependency-style bias: if Myrhiza commits to WebRTC, the corpus has an incentive to soft-pedal its operational rough edges. We try to surface those (especially in [`stack.md`](stack.md) §"Operational reality" and [`open-problems.md`](open-problems.md)) — but be skeptical.
 
 ## Sources
 

@@ -134,7 +134,7 @@ For OTP 23. The replacement `pg` module (by the WhatsApp/Meta team) ships in OTP
 
 Notable for the new `pg`, `socket` module improvements, and the floor laid for BeamAsm.
 
-## 2020-09-08 — BeamAsm PR (otp#2745)
+## 2020-09-11 — BeamAsm PR (otp#2745)
 
 Lukas Larsson submits the JIT PR. Merged later that year.
 

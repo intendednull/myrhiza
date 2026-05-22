@@ -105,4 +105,4 @@ In each case, Sybil resistance is *external* to the reputation algorithm. The re
 - [Xiong & Liu, "PeerTrust: Supporting Reputation-Based Trust for Peer-to-Peer Electronic Communities," IEEE TKDE, 2004](https://ieeexplore.ieee.org/document/1318566).
 - [Zhou & Hwang, "PowerTrust," IEEE TPDS, 2007](https://ieeexplore.ieee.org/document/4287437).
 - [Alvisi et al., "SoK: The Evolution of Sybil Defense via Social Networks," IEEE S&P 2013](https://oaklandsok.github.io/papers/alvisi2013.pdf) — §6 on reputation systems.
-- Cross-references: [`taxonomy.md`](taxonomy.md), [`tribler-bartercast.md`](tribler-bartercast.md) (deployed reputation system), [`lessons.md`](lessons.md), [`myrhiza-social-graph.md`](myrhiza-social-graph.md).
+- Cross-references: [`taxonomy.md`](taxonomy.md), [Tribler BarterCast in `algorithms.md`](algorithms.md) (deployed reputation system), [`lessons.md`](lessons.md), [`lessons.md` §"Validates" #1 + `taxonomy.md` §"Where Myrhiza sits"](lessons.md).

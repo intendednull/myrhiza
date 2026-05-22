@@ -161,7 +161,7 @@ This works for *every* NAT topology (including symmetric NATs that defeat STUN),
 - **Metadata.** The TURN operator sees source IP, destination IP, packet timings, sizes. Same metadata leak as iroh relays (cf. [`prior-art/iroh/critiques.md`](../iroh/critiques.md)).
 - **Operational obligation.** Someone runs and pays for the TURN. No free public TURNs of consequence; sketchy "free TURN" services exist but are unreliable. Production WebRTC deployments self-host coturn, or pay a provider (Twilio Network Traversal Service, Xirsys, Cloudflare Calls).
 
-See [`nat-and-turn.md`](nat-and-turn.md) for the operational accounting.
+See [`open-problems.md`](open-problems.md) §2 (TURN economics) for the operational accounting.
 
 ## Layer 6: UDP (with ICE-TCP fallback)
 
@@ -208,7 +208,7 @@ This is the timing budget every browser-peer profile inherits. QUIC for comparis
 - **Setup latency.** 300–600ms best case, multi-second worst case.
 - **SCTP-over-DTLS-over-UDP is three handshakes in series.** Modern transports (QUIC) collapse this to one.
 - **Signalling is your problem.** Every deployment reinvents it; see [`signalling.md`](signalling.md).
-- **20–30% of connections need TURN.** And TURN is not free; see [`nat-and-turn.md`](nat-and-turn.md).
+- **20–30% of connections need TURN.** And TURN is not free; see [`open-problems.md`](open-problems.md) §2 (TURN economics).
 - **The implementation is enormous.** `libwebrtc` (Google's reference) is hundreds of thousands of LOC; even the lighter stacks ([`implementations.md`](implementations.md)) are still 50k+ LOC because the stack itself is huge.
 
 ## Sources
@@ -225,4 +225,4 @@ This is the timing budget every browser-peer profile inherits. QUIC for comparis
 - RFC 9147 — DTLS 1.3: <https://datatracker.ietf.org/doc/rfc9147/>
 - RFC 8838 — Trickle ICE: <https://datatracker.ietf.org/doc/rfc8838/>
 - RFC 6544 — ICE-TCP: <https://datatracker.ietf.org/doc/rfc6544/>
-- Sibling: [`signalling.md`](signalling.md), [`browser-stack.md`](browser-stack.md), [`nat-and-turn.md`](nat-and-turn.md), [`webtransport.md`](webtransport.md)
+- Sibling: [`signalling.md`](signalling.md), [`browser-stack.md`](browser-stack.md), [`open-problems.md`](open-problems.md) §2 (TURN economics), [`webtransport.md`](webtransport.md)

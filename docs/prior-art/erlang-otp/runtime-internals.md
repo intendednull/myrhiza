@@ -12,7 +12,7 @@ The implementation details that determine BEAM's real-world performance envelope
 
 **Design:** load-time conversion of BEAM bytecode to native machine code, using the **asmjit** library. Not a tracing JIT, not a tiered JIT — a single-pass ahead-of-execution compile that happens when each module is loaded. No warmup, no deoptimisation, predictable execution after load.
 
-**Authors:** Lukas Larsson (Erlang Solutions) proposed the original PR (otp#2745, 2020-09); joined by the OTP core team at Ericsson (notably John Högberg / `jhogberg`) for the production landing. The AArch64 port (PR otp#4869) was Högberg-led.
+**Authors:** Lukas Larsson (`garazdawi`, Ericsson OTP team) proposed the original PR (otp#2745, 2020-09-11); joined by the OTP core team at Ericsson (notably John Högberg / `jhogberg`) for the production landing. The AArch64 port (PR otp#4869) was Högberg-led.
 
 **Performance impact:**
 

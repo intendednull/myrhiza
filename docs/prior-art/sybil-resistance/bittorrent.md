@@ -116,4 +116,4 @@ The lesson generalizes: **deployed-at-scale P2P reciprocity always pairs with an
 - [PropShare project page at UMD](http://www.cs.umd.edu/projects/propshare/).
 - [Piatek et al., "Do incentives build robustness in BitTorrent?" (BitTyrant paper), NSDI 2007](https://www.usenix.org/legacy/event/nsdi07/tech/full_papers/piatek/piatek.pdf).
 - [BitTorrent.org protocol specification](https://www.bittorrent.org/beps/bep_0003.html) — the wire-level reference.
-- Cross-references: [`taxonomy.md`](taxonomy.md) §1, [`ipfs-bitswap.md`](ipfs-bitswap.md), [`tribler-bartercast.md`](tribler-bartercast.md), [`lessons.md`](lessons.md), `prior-art/pears/hyperswarm.md` (a different deployed P2P reciprocity model).
+- Cross-references: [`taxonomy.md`](taxonomy.md) §1, [`ipfs-bitswap.md`](ipfs-bitswap.md), [Tribler BarterCast in `algorithms.md`](algorithms.md), [`lessons.md`](lessons.md), `prior-art/pears/hyperswarm.md` (a different deployed P2P reciprocity model).

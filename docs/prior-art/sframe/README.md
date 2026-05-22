@@ -20,7 +20,7 @@ This folder captures SFrame as Myrhiza's anticipated answer to E2EE A/V on top o
 | Ciphersuites | 5 total: `AES_128_CTR_HMAC_SHA256_{80,64,32}`, `AES_128_GCM_SHA256_128`, `AES_256_GCM_SHA512_128` |
 | Key derivation | HKDF with labels `"SFrame 1.0 Secret key"` / `"SFrame 1.0 Secret salt"` from an external `base_key` |
 | MLS coupling | Optional but canonical: `base_key = MLS-Exporter(...)` per RFC 9605 §5.2 |
-| Relation to SRTP | **Alternative** to SRTP for media protection, not a layer inside SRTP. Transport-independent by design |
+| Relation to SRTP | **Complementary, not a profile inside SRTP.** Per RFC 9605 §1 + §4.1, SFrame is the E2EE layer applied to codec frames; the underlying transport (SRTP, QUIC, plain RTP) handles HBH encryption separately. Composable with SRTP-HBH; not a replacement for SRTP |
 | Production deployments | Webex (since pre-2023 on draft-01); no other public production at-scale deployment that uses RFC 9605 verbatim |
 | Production using the same pattern | Discord DAVE (since 2024-09-17) — implements the **MLS-exporter → per-sender frame transform** *pattern* without using RFC 9605 |
 

@@ -110,4 +110,4 @@ The systems that *do* have social graphs (federated social networks, contact-lis
 - [Lesniewski-Laas NSDI 2010 slides](https://www.usenix.org/legacy/event/nsdi10/tech/slides/lesniewski-laas.pdf).
 - [Lesniewski-Laas, "Sybil-Resistant DHT Routing" (precursor), ESORICS 2008](https://www.semanticscholar.org/paper/Sybil-Resistant-DHT-Routing-Danezis-Lesniewski-Laas/57513efe75e555bb04b76ca6b633fc91ad9ee5c4).
 - [Whanau teaching-fork GitHub (geektoni)](https://github.com/geektoni/whanau-sybil-proof-DHT) — the only maintained reference implementation in 2026.
-- Cross-references: [`sybilguard-sybillimit.md`](sybilguard-sybillimit.md), [`taxonomy.md`](taxonomy.md), [`myrhiza-social-graph.md`](myrhiza-social-graph.md), `prior-art/iroh/` (for transport-layer context if Myrhiza ever ran DHT over iroh).
+- Cross-references: [`sybilguard-sybillimit.md`](sybilguard-sybillimit.md), [`taxonomy.md`](taxonomy.md), [`lessons.md` §"Validates" #1 + `taxonomy.md` §"Where Myrhiza sits"](lessons.md), `prior-art/iroh/` (for transport-layer context if Myrhiza ever ran DHT over iroh).

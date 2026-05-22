@@ -118,9 +118,9 @@ No CVE-grade exploit has hit gossipsub v1.1's score function in production since
 
 The license diversity (MIT vs Apache-2.0 vs dual) is governance-relevant:
 
-- **go-libp2p, rust-libp2p, nim-libp2p, py-libp2p:** MIT.
-- **js-libp2p:** dual Apache-2.0 OR MIT (covers the broader Node.js ecosystem norms).
-- **jvm-libp2p, cpp-libp2p:** Apache-2.0 (enterprise-friendly choice for Java/C++ contributors).
+- **go-libp2p, rust-libp2p, py-libp2p:** MIT.
+- **js-libp2p, nim-libp2p, cpp-libp2p:** dual Apache-2.0 OR MIT.
+- **jvm-libp2p:** MIT + Apache-2.0 via the Permissive License Stack.
 - **`@chainsafe/libp2p-gossipsub`:** Apache-2.0 single (drift from js-libp2p's dual — ChainSafe's choice for the higher-stakes gossipsub deployment in Eth2).
 
 No CLA / DCO requirement on any major implementation. Inbound = outbound (default for MIT/Apache-2.0).

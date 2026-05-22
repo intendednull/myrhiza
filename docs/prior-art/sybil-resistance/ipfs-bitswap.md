@@ -83,7 +83,7 @@ There is **no formal deprecation of Bitswap**, and search for "bao" or "beetswap
 - **Free-rider enforcement.** The ledger is informational.
 - **Long-running misbehavior.** No reputation that persists across sessions.
 - **Asymmetric-bandwidth fairness.** A peer with no upload can consume without paying.
-- **Storage-providing accountability.** Bitswap is a *retrieval* protocol; it does not verify that any peer is *storing* content. Filecoin's PoSt (see [`filecoin-post.md`](filecoin-post.md)) is the cryptographic answer; IPFS pinning services are the operational answer.
+- **Storage-providing accountability.** Bitswap is a *retrieval* protocol; it does not verify that any peer is *storing* content. Filecoin's PoSt (see [Filecoin PoRep/PoSt in `algorithms.md`](algorithms.md)) is the cryptographic answer; IPFS pinning services are the operational answer.
 
 ## Implications for Myrhiza
 
@@ -107,4 +107,4 @@ There is **no formal deprecation of Bitswap**, and search for "bao" or "beetswap
 - [WithScoreLedger PR (#430)](https://github.com/ipfs/go-bitswap/pull/430) — the operator-extension hook.
 - [Enhancing IPFS Bitswap (2024)](https://www.researchgate.net/publication/384428232_Enhancing_IPFS_Bitswap) — recent academic analysis.
 - [IPFS and Friends: A Qualitative Comparison (arXiv 2102.12737, 2021)](https://arxiv.org/pdf/2102.12737) — comparative analysis vs other P2P data layers.
-- Cross-references: [`bittorrent.md`](bittorrent.md), [`filecoin-post.md`](filecoin-post.md), [`taxonomy.md`](taxonomy.md) §1, [`lessons.md`](lessons.md).
+- Cross-references: [`bittorrent.md`](bittorrent.md), [Filecoin PoRep/PoSt in `algorithms.md`](algorithms.md), [`taxonomy.md`](taxonomy.md) §1, [`lessons.md`](lessons.md).

@@ -13,9 +13,9 @@ libp2p ships in seven languages with varying maturity, feature parity, and stewa
 | **go-libp2p** | MIT | Protocol Labs + IPFS team | [`libp2p/go-libp2p`](https://github.com/libp2p/go-libp2p) repo license field |
 | **rust-libp2p** | **MIT** (every crate, verified per-Cargo.toml) | rust-libp2p team (Elena Frank `@elenaf9`, João Oliveira `@jxs`); historical author Parity Technologies | crates.io + repo license fields |
 | **js-libp2p** | **Apache-2.0 OR MIT** (dual) | Protocol Labs + ChainSafe (for gossipsub) | npm registry `license` field |
-| **nim-libp2p** | MIT | Status Research & Development GmbH (Vac team) | nimble package metadata |
-| **jvm-libp2p** | Apache-2.0 | ConsenSys (Teku Eth2 client) + ChainSafe | [`libp2p/jvm-libp2p`](https://github.com/libp2p/jvm-libp2p) |
-| **cpp-libp2p** | Apache-2.0 | Soramitsu (KAGOME Polkadot client) | [`libp2p/cpp-libp2p`](https://github.com/libp2p/cpp-libp2p) |
+| **nim-libp2p** | **Apache-2.0 OR MIT** (dual; `LICENSE-APACHEv2` + `LICENSE-MIT` in repo root) | Status Research & Development GmbH (Vac team) | repo LICENSE files |
+| **jvm-libp2p** | **MIT + Apache-2.0** (Permissive License Stack — dual-licensed per repo NOTICE) | ConsenSys (Teku Eth2 client) + ChainSafe | [`libp2p/jvm-libp2p`](https://github.com/libp2p/jvm-libp2p) |
+| **cpp-libp2p** | **Apache-2.0 OR MIT** (dual; `LICENSE-APACHE` + `LICENSE-MIT` in repo root) | Soramitsu (KAGOME Polkadot client) | [`libp2p/cpp-libp2p`](https://github.com/libp2p/cpp-libp2p) |
 | **py-libp2p** | MIT/Apache-2.0 | Ethereum Foundation (Trinity client era), now in slow recovery | [`libp2p/py-libp2p`](https://github.com/libp2p/py-libp2p) |
 
 The dual Apache-2.0 OR MIT on js-libp2p is common in the JavaScript-around-IPFS world; `@chainsafe/libp2p-gossipsub` (the gossipsub TS port) is **Apache-2.0 only**, not dual — a single-license drift inside the otherwise-dual js ecosystem. Verified at npm registry directly.
@@ -206,9 +206,9 @@ The [universal-connectivity](https://github.com/libp2p/universal-connectivity) d
 - [libp2p/go-libp2p](https://github.com/libp2p/go-libp2p) — verified version v0.48.0 (2026-03-17), MIT, Go 1.25.7
 - [libp2p/rust-libp2p](https://github.com/libp2p/rust-libp2p) — verified workspace at 0.57.0 master / 0.56.0 crates.io, MIT, rust 1.88
 - [libp2p/js-libp2p](https://github.com/libp2p/js-libp2p) — verified npm `libp2p@3.3.1`, dual Apache-2.0/MIT
-- [vacp2p/nim-libp2p](https://github.com/vacp2p/nim-libp2p) — verified version 1.15.3, MIT
-- [libp2p/jvm-libp2p](https://github.com/libp2p/jvm-libp2p) — Apache-2.0
-- [libp2p/cpp-libp2p](https://github.com/libp2p/cpp-libp2p) — Apache-2.0
+- [vacp2p/nim-libp2p](https://github.com/vacp2p/nim-libp2p) — verified version 1.15.3, **Apache-2.0 OR MIT (dual)**
+- [libp2p/jvm-libp2p](https://github.com/libp2p/jvm-libp2p) — **MIT + Apache-2.0** (Permissive License Stack)
+- [libp2p/cpp-libp2p](https://github.com/libp2p/cpp-libp2p) — **Apache-2.0 OR MIT (dual)**
 - [libp2p/py-libp2p](https://github.com/libp2p/py-libp2p) — MIT
 - [libp2p/test-plans](https://github.com/libp2p/test-plans) — cross-impl interop CI
 - [libp2p/universal-connectivity](https://github.com/libp2p/universal-connectivity) — multi-impl demo

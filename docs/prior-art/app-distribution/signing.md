@@ -23,8 +23,8 @@ The WASM ecosystem inherits container-world signing primitives almost wholesale.
 
 ### Cosign — versions verified 2026-05
 
-- **v3.0.6** (2025-04-06) — current main line. Cosign 3 was the major rewrite that made Referrers the default discovery mode and removed legacy tag-based signature discovery.
-- **v2.6.3** (2025-04-06) — current LTS for environments still on Cosign 2.
+- **v3.0.6** (2026-04-06) — current main line. Cosign 3 was the major rewrite that made Referrers the default discovery mode and removed legacy tag-based signature discovery.
+- **v2.6.3** (2026-04-06) — current LTS for environments still on Cosign 2.
 
 License: Apache-2.0.
 

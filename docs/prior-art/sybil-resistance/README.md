@@ -13,7 +13,7 @@ Neither is solved in the general case. Every approach trades one of three proper
 
 **Why this corpus exists.** PR #636's research notes (sibling to the master spec) frame maintenance work as a fourth class of components alongside `state-apply` / `state-propose` / `interaction` / `behavior`: persister, snapshot provider, sync provider, replay buffer. A peer's "participation" is the set of maintenance components it has instantiated plus the capacity it has declared. The hard problem is **enforcement under Sybil**: a custom client that does not run maintenance components, multiplied by spinning up many identities, free-rides on honest participants. Self-reported participation is gameable. Refusal-to-serve-non-participants is the enforcement primitive Willow's note proposes; this corpus catalogs the metrics and Sybil-defenses underneath it.
 
-**The Willow advantage.** Most P2P systems bootstrap social graphs they don't have. Willow has one for free — every invite is a permission edge between two human-attested identities. That graph is exactly the input SybilGuard / SybilLimit / Whanau need. Whether it actually works depends on assumptions those papers spell out and Willow may or may not satisfy. The load-bearing file for this analysis is [`myrhiza-social-graph.md`](myrhiza-social-graph.md).
+**The Willow advantage.** Most P2P systems bootstrap social graphs they don't have. Willow has one for free — every invite is a permission edge between two human-attested identities. That graph is exactly the input SybilGuard / SybilLimit / Whanau need. Whether it actually works depends on assumptions those papers spell out and Willow may or may not satisfy. The synthesis lives in [`lessons.md`](lessons.md) §"Validates" #1 and [`taxonomy.md`](taxonomy.md) §"Where Myrhiza sits" — a dedicated `myrhiza-social-graph.md` deep-dive is queued as future work.
 
 ## Key facts
 
@@ -21,7 +21,7 @@ Neither is solved in the general case. Every approach trades one of three proper
 |---|---|
 | Survey scope | ~10 papers + 4 deployed systems, 2000–2024 |
 | Oldest reference | Adar & Huberman, "Free Riding on Gnutella," First Monday Oct 2000 |
-| Most-cited foundational paper | EigenTrust (Kamvar / Schlosser / Garcia-Molina, WWW 2003) — ~12,000+ citations |
+| Most-cited foundational paper | EigenTrust (Kamvar / Schlosser / Garcia-Molina, WWW 2003) — ~5,800+ citations |
 | Most-cited critique | Alvisi et al., "SoK: The Evolution of Sybil Defense via Social Networks," IEEE S&P 2013 |
 | Most-deployed reciprocity scheme | BitTorrent choking algorithm (Cohen, P2PECON 2003); ~25 years of production data |
 | Research-grade vs deployed | All Sybil-defense literature is **research-grade**. The deployed answers (BitTorrent, Bitswap, BarterCast) are all *reciprocity*, not *Sybil-defense* |
@@ -33,8 +33,7 @@ Each file is independent and can be skimmed standalone.
 
 **Reference**
 - [**Taxonomy**](taxonomy.md) — the canonical "tit-for-tat vs reputation vs social-graph vs DHT-responsibility vs PoW/PoS" partition. **Read first if new to the area.**
-- [**Algorithms index**](algorithms.md) — one-paragraph summary per algorithm with paper IDs, year, venue, status.
-- [**Glossary**](glossary.md) — domain terms (attack edge, mixing time, fast mixing, conductance, etc.).
+- [**Algorithms index**](algorithms.md) — one-paragraph summary per algorithm with paper IDs, year, venue, status. Covers Adar & Huberman 2000 (Gnutella free-riding measurement), Tribler BarterCast, Filecoin PoRep/PoSt.
 
 **Per-algorithm / per-system files**
 - [**BAR Gossip + BAR FT + FlightPath**](bar-gossip.md) — Byzantine / Altruistic / Rational research lineage from UT Austin's LASR group (Aiyer/Alvisi/Clement/Dahlin et al., 2005–2008). The right academic frame; never deployed at scale.
@@ -43,18 +42,14 @@ Each file is independent and can be skimmed standalone.
 - [**Whanau**](whanau.md) — Sybil-proof DHT routing (Lesniewski-Laas / Kaashoek, NSDI 2010). Uses a social graph to build the DHT routing tables themselves.
 - [**BitTorrent choking + PropShare**](bittorrent.md) — Cohen's tit-for-tat (P2PECON 2003) and the auction-theoretic improvement (Levin et al., SIGCOMM 2008). The deployed-at-scale reference point. Per-connection reciprocity, *not* Sybil defense.
 - [**IPFS Bitswap**](ipfs-bitswap.md) — ledger-based reciprocity for block exchange. Closer in spirit to BitTorrent than to a reputation system; the ledger as deployed is mostly informational, not enforced.
-- [**Tribler BarterCast**](tribler-bartercast.md) — TU Delft's deployed long-term reciprocity reputation atop BitTorrent (Meulpolder / Pouwelse, HotP2P 2009). Closest production-data-point to "reputation system in a real P2P network."
-- [**Filecoin PoRep + PoSt**](filecoin-post.md) — cryptographic proofs of replication and spacetime (Protocol Labs, ongoing). The strongest answer to "did the peer actually store the data"; depends on a blockchain settlement layer.
-- [**Adar & Huberman: Free Riding on Gnutella**](adar-huberman.md) — the canonical measurement paper (First Monday, October 2000). Establishes that ~70% of peers contributed nothing. Short file; the data is the contribution.
 
 **Synthesis**
 - [**Open problems**](open-problems.md) — what none of the above structurally solves; the gaps Myrhiza must accept or work around.
-- [**Lessons for Myrhiza**](lessons.md) — **the consult-this-when-designing file.** Validates / avoid / borrow.
-- [**Myrhiza social-graph thesis**](myrhiza-social-graph.md) — the load-bearing analysis: can Willow's permission/invite graph be the SybilGuard-style input? Where the assumptions hold, where they break.
+- [**Lessons for Myrhiza**](lessons.md) — **the consult-this-when-designing file.** Validates / avoid / borrow. The "permission-graph-as-Sybil-input" thesis lands in §"Validates" #1 + [`taxonomy.md`](taxonomy.md) §"Where Myrhiza sits" (a dedicated `myrhiza-social-graph.md` deep-dive is queued as future work).
 
 ## How to use this prior-art doc
 
-Designing a Myrhiza feature with overlap to maintenance enforcement or Sybil resistance? Start with [`taxonomy.md`](taxonomy.md) for orientation, then [`lessons.md`](lessons.md) for action-oriented synthesis, then [`myrhiza-social-graph.md`](myrhiza-social-graph.md) for the load-bearing thesis. Drop into per-paper files for primary-source depth when a specific algorithm becomes a candidate.
+Designing a Myrhiza feature with overlap to maintenance enforcement or Sybil resistance? Start with [`taxonomy.md`](taxonomy.md) for orientation, then [`lessons.md`](lessons.md) for action-oriented synthesis. Drop into per-paper files for primary-source depth when a specific algorithm becomes a candidate.
 
 **Framing disclosure.** This corpus is written from a Myrhiza-runtime stance — most "Implications for Myrhiza" sub-sections frame each algorithm through the lens of *"does this help enforce distributed maintenance under Sybil, given that Myrhiza already has a permission/invite trust graph?"* That framing biases the reading: it foregrounds social-graph approaches (because Myrhiza has the input) and backgrounds approaches that require independent cost imposition (PoW, PoS) or central authorities (CAPTCHAs, Sybil-detection services). A future reader asking *"should Myrhiza use the permission graph at all?"* should weigh the corpus accordingly — it is a learn-from-the-literature-into-graph-aware-Myrhiza artifact, not a neutral catalog.
 
