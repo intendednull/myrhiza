@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use bincode::Options;
 use myrhiza_kernel::BundleAddress;
 use myrhiza_manifest::schema::Manifest;
-use myrhiza_types::{EventHash, canonical_bincode};
+use myrhiza_types::canonical_bincode;
 use tempfile::TempDir;
 
 use crate::manifest::{
@@ -130,11 +130,10 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
             counter_fixture_path().display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(7);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
     let addr = BundleAddress {
@@ -167,11 +166,10 @@ pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
             echo_fixture_path().display()
         )
     });
-    let content_hash = EventHash::blake3(&component_bytes);
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(11);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
     let addr = BundleAddress {
@@ -205,9 +203,8 @@ pub fn build_counter_bundle_with_extra_cap(
     extra_cap: &str,
     seed: u8,
 ) -> std::io::Result<TestBundle> {
-    let content_hash = EventHash::blake3(component_bytes);
     let mut manifest = helpers_only_state_apply_manifest_with_extra_cap(extra_cap);
     let key = deterministic_signing_key(seed);
-    sign_manifest(&mut manifest, &content_hash, &key);
+    sign_manifest(&mut manifest, component_bytes, &key);
     write_bundle(&manifest, component_bytes)
 }

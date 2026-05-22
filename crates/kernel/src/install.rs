@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use bincode::Options;
 use myrhiza_manifest::{
-    ParseError, SignatureError,
+    ParseError, SignatureError, bundle_content_hash,
     canonical::signing_target_bytes,
     schema::{Manifest, Signature},
     verify_signature,
@@ -96,10 +96,15 @@ pub struct LoadedBundle {
     pub manifest: Manifest,
     /// The state-apply component bytes referenced by the manifest.
     pub component_bytes: Vec<u8>,
-    /// BLAKE3 of `component_bytes`. Recomputed by the loader; the
-    /// signing target commits to this value, so a mismatch surfaces
-    /// as a signature failure.
+    /// Composite bundle-content-hash per spec §2 Choice G + §3.4.
+    /// Covers all declared component slots; absent slots contribute `[0; 32]`.
     pub content_hash: EventHash,
+    /// The state-propose component bytes, if declared in the manifest.
+    pub state_propose_bytes: Option<Vec<u8>>,
+    /// The interaction component bytes, if declared in the manifest.
+    pub interaction_bytes: Option<Vec<u8>>,
+    /// The behavior component bytes, if declared in the manifest.
+    pub behavior_bytes: Option<Vec<u8>>,
 }
 
 /// Stateless install flow. Held by the kernel; calls into it for each
@@ -157,7 +162,32 @@ impl InstallFlow {
             .clone()
             .ok_or(InstallError::ComponentMissing)?;
         let component_bytes = std::fs::read(addr.bundle_dir.join(&component_rel))?;
-        let content_hash = EventHash::blake3(&component_bytes);
+
+        let state_propose_bytes = manifest
+            .components
+            .state_propose
+            .as_ref()
+            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .transpose()?;
+        let interaction_bytes = manifest
+            .components
+            .interaction
+            .as_ref()
+            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .transpose()?;
+        let behavior_bytes = manifest
+            .components
+            .behavior
+            .as_ref()
+            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .transpose()?;
+
+        let content_hash = bundle_content_hash(
+            Some(&component_bytes),
+            state_propose_bytes.as_deref(),
+            interaction_bytes.as_deref(),
+            behavior_bytes.as_deref(),
+        );
 
         // Decode author pubkey from `0x<hex>` form for plan A.
         // Plan B replaces this with bech32m decoding (per
@@ -171,6 +201,9 @@ impl InstallFlow {
             manifest,
             component_bytes,
             content_hash,
+            state_propose_bytes,
+            interaction_bytes,
+            behavior_bytes,
         })
     }
 }
@@ -192,8 +225,8 @@ mod tests {
     use super::*;
     use bincode::Options;
     use ed25519_dalek::{Signer, SigningKey};
-    use myrhiza_manifest::{canonical::signing_target_bytes, schema::*};
-    use myrhiza_types::{EventHash, canonical_bincode};
+    use myrhiza_manifest::{bundle_content_hash, canonical::signing_target_bytes, schema::*};
+    use myrhiza_types::canonical_bincode;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
@@ -208,7 +241,7 @@ mod tests {
         // tests/fixtures/built/counter-state-apply.wasm in the e2e test.
         std::fs::write(&component_path, b"\x00asm\x01\x00\x00\x00").unwrap();
         let component_bytes = std::fs::read(&component_path).unwrap();
-        let content_hash = EventHash::blake3(&component_bytes);
+        let content_hash = bundle_content_hash(Some(&component_bytes), None, None, None);
 
         let mut helpers = BTreeMap::new();
         helpers.insert("host.hash".into(), true);
@@ -268,6 +301,110 @@ mod tests {
             },
             pk,
         )
+    }
+
+    /// Write a fixture bundle with state-apply AND state-propose components.
+    /// Signs with the composite [`bundle_content_hash`]. Returns (addr, pk).
+    fn write_two_component_fixture_bundle(
+        dir: &std::path::Path,
+        apply_bytes: &[u8],
+        propose_bytes: &[u8],
+    ) -> (BundleAddress, [u8; 32]) {
+        use myrhiza_manifest::bundle_content_hash;
+
+        let sk = SigningKey::from_bytes(&[9u8; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let pk_hex = hex::encode(pk);
+
+        let apply_path = dir.join("components/state-apply.wasm");
+        std::fs::create_dir_all(apply_path.parent().unwrap()).unwrap();
+        std::fs::write(&apply_path, apply_bytes).unwrap();
+
+        let propose_path = dir.join("components/state-propose.wasm");
+        std::fs::write(&propose_path, propose_bytes).unwrap();
+
+        let composite = bundle_content_hash(Some(apply_bytes), Some(propose_bytes), None, None);
+
+        let mut m = Manifest {
+            app: AppSection {
+                name: "counter".into(),
+                version: "0.1.0".into(),
+                description: "test".into(),
+                author_pubkey: format!("0x{pk_hex}"),
+                author_identity_class: AuthorIdentityClass::ThirdParty,
+            },
+            abi: AbiSection {
+                kernel_major: 1,
+                kernel_minor_min: 0,
+                state_digest_format: StateDigestFormat::Bincode13,
+            },
+            capabilities: CapabilitiesSection {
+                host_imports: BTreeMap::new(),
+                ui_surfaces: BTreeMap::new(),
+                high_value_ops: HighValueOps::default(),
+                deterministic_helpers: {
+                    let mut h = BTreeMap::new();
+                    h.insert("host.log".into(), true);
+                    h
+                },
+            },
+            determinism: DeterminismSection {
+                allow_floats: false,
+                drift_detection: DriftDetectionSection {
+                    interval_events: 1024,
+                },
+            },
+            modules: ModulesSection { dep: vec![] },
+            components: ComponentsSection {
+                state_apply: Some("components/state-apply.wasm".into()),
+                state_propose: Some("components/state-propose.wasm".into()),
+                interaction: None,
+                behavior: None,
+            },
+            author_policy: AuthorPolicy::default_deny(),
+            signature: None,
+        };
+        m.canonicalize();
+
+        let target = signing_target_bytes(&m, &composite);
+        let sig = sk.sign(&target);
+        m.signature = Some(Signature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            value: sig.to_bytes(),
+        });
+
+        let manifest_bytes = canonical_bincode().serialize(&m).unwrap();
+        std::fs::write(dir.join("manifest.bincode"), manifest_bytes).unwrap();
+
+        (
+            BundleAddress {
+                bundle_dir: dir.to_path_buf(),
+                manifest_path: "manifest.bincode".into(),
+            },
+            pk,
+        )
+    }
+
+    #[test]
+    fn install_rejects_tampered_propose_bytes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let apply_bytes = b"\x00asm\x01\x00\x00\x00";
+        let propose_bytes = b"\x00asm\x02\x00\x00\x00";
+        let (addr, _) = write_two_component_fixture_bundle(tmp.path(), apply_bytes, propose_bytes);
+
+        // Tamper with the propose component after signing.
+        std::fs::write(
+            tmp.path().join("components/state-propose.wasm"),
+            b"\x00asmTAMPERED",
+        )
+        .unwrap();
+
+        let flow = InstallFlow::new();
+        let err = flow.load(&addr).expect_err("tampered propose must reject");
+        assert!(
+            matches!(err, InstallError::Signature(_)),
+            "expected Signature error, got {err:?}"
+        );
     }
 
     #[test]

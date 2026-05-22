@@ -89,6 +89,32 @@ pub fn length_prefix_concat(fields: &[&[u8]]) -> Vec<u8> {
     out
 }
 
+/// Compute the bundle-content-hash per spec §2 Choice G + §3.4.
+///
+/// Fixed slot order: `state_apply`, `state_propose`, `interaction`, `behavior`.
+/// Absent components contribute the 32-byte literal `[0; 32]` (sentinel),
+/// NOT `BLAKE3(&[])`. Outer hash input is always 128 bytes.
+#[must_use]
+pub fn bundle_content_hash(
+    state_apply: Option<&[u8]>,
+    state_propose: Option<&[u8]>,
+    interaction: Option<&[u8]>,
+    behavior: Option<&[u8]>,
+) -> EventHash {
+    let slot = |opt: Option<&[u8]>| -> [u8; 32] {
+        match opt {
+            Some(bytes) => *EventHash::blake3(bytes).as_bytes(),
+            None => [0u8; 32],
+        }
+    };
+    let mut concat = Vec::with_capacity(128);
+    concat.extend_from_slice(&slot(state_apply));
+    concat.extend_from_slice(&slot(state_propose));
+    concat.extend_from_slice(&slot(interaction));
+    concat.extend_from_slice(&slot(behavior));
+    EventHash::blake3(&concat)
+}
+
 /// Compute the byte string the author signs.
 ///
 /// Layout per §10.2: `length_prefix_concat` over the five fields
@@ -113,6 +139,33 @@ pub fn signing_target_bytes(m: &Manifest, content_hash: &EventHash) -> Vec<u8> {
 mod tests {
     use super::*;
     use myrhiza_types::EventHash;
+
+    #[test]
+    fn bundle_content_hash_for_single_component_differs_from_raw_blake3() {
+        // Composite formula wraps each slot in its own BLAKE3 and adds
+        // [0;32] sentinels for absent slots — result differs from raw
+        // BLAKE3(state_apply_bytes).
+        let raw = EventHash::blake3(b"x");
+        let composite = bundle_content_hash(Some(b"x"), None, None, None);
+        assert_ne!(
+            composite, raw,
+            "composite hash must differ from single-slot raw BLAKE3"
+        );
+    }
+
+    #[test]
+    fn bundle_content_hash_is_canonical_order_sa_propose_interaction_behavior() {
+        // Swapping propose and interaction bytes produces a different
+        // hash, confirming the order is enforced by the function signature
+        // (not caller-supplied field names). We verify by computing two
+        // distinct 4-slot combinations.
+        let h1 = bundle_content_hash(Some(b"sa"), Some(b"sp"), Some(b"ix"), None);
+        let h2 = bundle_content_hash(Some(b"sa"), Some(b"ix"), Some(b"sp"), None);
+        assert_ne!(
+            h1, h2,
+            "swapping propose and interaction bytes must yield a different hash"
+        );
+    }
 
     #[test]
     fn signed_body_excludes_signature() {

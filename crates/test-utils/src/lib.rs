@@ -9,7 +9,9 @@ pub mod event_builder;
 pub mod harness;
 pub mod manifest;
 
-pub use event_builder::{
-    AuthorKeypair, EventBuilder, canonical_envelope, counter_increment_payload,
-};
+// Re-export from canonical home in myrhiza_kernel for backward-compat.
 pub use harness::{InProcessHarness, PeerHandle};
+pub use myrhiza_kernel::event_builder::{
+    EventBuilder, canonical_envelope, counter_increment_payload,
+};
+pub use myrhiza_kernel::identity::AuthorKeypair;

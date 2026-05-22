@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use ed25519_dalek::{Signer, SigningKey};
 use myrhiza_manifest::{
+    bundle_content_hash,
     canonical::signing_target_bytes,
     schema::{
         AbiSection, AppSection, AuthorIdentityClass, AuthorPolicy, CapabilitiesSection,
@@ -12,8 +13,6 @@ use myrhiza_manifest::{
         ModulesSection, Signature, SignatureAlgorithm, StateDigestFormat,
     },
 };
-use myrhiza_types::EventHash;
-
 /// Build a state-apply manifest declaring just `host.hash` + `host.log`
 /// (the minimum useful set for plan A's counter fixture).
 #[must_use]
@@ -88,13 +87,15 @@ pub fn deterministic_signing_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
 }
 
-/// Sign `m` against `content_hash` using `key`. Mutates `m.signature`
-/// and `m.app.author_pubkey` in place.
-pub fn sign_manifest(m: &mut Manifest, content_hash: &EventHash, key: &SigningKey) {
+/// Sign `m` against the composite bundle-content-hash of `component_bytes`
+/// (state-apply only; absent slots contribute `[0; 32]` sentinels per spec §3.4).
+/// Mutates `m.signature` and `m.app.author_pubkey` in place.
+pub fn sign_manifest(m: &mut Manifest, component_bytes: &[u8], key: &SigningKey) {
+    let composite = bundle_content_hash(Some(component_bytes), None, None, None);
     let pk = key.verifying_key().to_bytes();
     m.app.author_pubkey = format!("0x{}", hex::encode(pk));
     m.canonicalize();
-    let target = signing_target_bytes(m, content_hash);
+    let target = signing_target_bytes(m, &composite);
     let sig = key.sign(&target);
     m.signature = Some(Signature {
         algorithm: SignatureAlgorithm::Ed25519,

@@ -16,8 +16,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:394
 
 ## capabilities.md §7.2
-- crates/kernel/tests/acceptance.rs:188
-- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:190
+- crates/kernel/tests/acceptance.rs:406
 
 ## convergence.md §4
 - crates/kernel/src/state_apply.rs:263
@@ -78,7 +78,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:276
-- crates/kernel/tests/acceptance.rs:71
+- crates/kernel/tests/acceptance.rs:73
 - crates/kernel/tests/attribution.rs:220
 - crates/kernel/tests/attribution.rs:401
 - crates/kernel/tests/coexistence.rs:92
@@ -180,8 +180,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/tests/wit_freeze.rs:74
 
 ## distribution.md §10.5
-- crates/kernel/tests/acceptance.rs:408
-- crates/kernel/tests/acceptance.rs:48
+- crates/kernel/tests/acceptance.rs:406
+- crates/kernel/tests/acceptance.rs:49
 
 ## identity.md §6
 - crates/kernel/tests/persistence.rs:108
@@ -197,13 +197,13 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/network/tests/iroh_skeleton.rs:15
 
 ## mvp.md §15.1
-- crates/kernel/tests/acceptance.rs:188
+- crates/kernel/tests/acceptance.rs:190
 - crates/kernel/tests/acceptance.rs:276
 - crates/kernel/tests/acceptance.rs:335
 - crates/kernel/tests/acceptance.rs:373
-- crates/kernel/tests/acceptance.rs:408
-- crates/kernel/tests/acceptance.rs:48
-- crates/kernel/tests/acceptance.rs:71
+- crates/kernel/tests/acceptance.rs:406
+- crates/kernel/tests/acceptance.rs:49
+- crates/kernel/tests/acceptance.rs:73
 
 ## mvp.md §15.1 #1+#2
 - crates/kernel/tests/convergence.rs:29
@@ -233,7 +233,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/network/tests/iroh_gossip.rs:110
 
 ## verification.md §22.1
-- crates/kernel/tests/acceptance.rs:48
+- crates/kernel/tests/acceptance.rs:49
 
 ## verification.md §22.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:50

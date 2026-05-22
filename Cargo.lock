@@ -2270,6 +2270,7 @@ dependencies = [
  "bincode",
  "blake3",
  "hex",
+ "myrhiza-manifest",
  "myrhiza-network",
  "serde",
  "serde_bytes",
