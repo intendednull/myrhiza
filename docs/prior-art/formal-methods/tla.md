@@ -73,7 +73,7 @@ What you *don't* get: any guarantee that the implementation matches the spec. Th
 ## Tooling status
 
 - **TLA+ Toolbox** (Eclipse-based IDE) is *unmaintained* per the repository README; the recommended IDE is the VS Code extension [tlaplus/vscode-tlaplus](https://github.com/tlaplus/vscode-tlaplus). The Toolbox is still functional but not receiving new development.
-- The **TLA+ Foundation** was announced 2023-04-21 under the Linux Foundation umbrella, with founding members AWS, Oracle, and Microsoft. Lamport is "distinguished scientist with Microsoft Research" and contributes but the Foundation now stewards day-to-day. This is governance-positive — TLA+ has a clear long-term home, which Coq/Rocq notably lacked until late 2024.
+- The **TLA+ Foundation** was announced 2023-04-21 under the Linux Foundation umbrella, with founding members AWS, Oracle, and Microsoft. Lamport is "distinguished scientist with Microsoft Research" and contributes but the Foundation now stewards day-to-day. This is governance-positive — TLA+ has a clear long-term home, which Coq/Rocq notably lacked until the rename to Rocq took effect with 9.0.0 on 2025-03-12 (announced 2023-10-11).
 - **Learn TLA+** ([learntla.com](https://learntla.com/)) by Hillel Wayne is the canonical free tutorial, superseding his earlier *Practical TLA+* book (Apress 2018). Wayne is the most visible TLA+ educator outside the AWS team and effectively the project's marketing arm. Approximately 1,000 unique visitors a week per Wayne's own framing — small but disproportionately influential.
 
 ## Strengths

@@ -122,7 +122,7 @@ This matters for Myrhiza: ION's architecture is the *most sophisticated* of any 
 
 ## `did:webvh` (formerly `did:tdw`)
 
-**Spec:** [DIF didwebvh](https://identity.foundation/didwebvh/), v1.0 stable + Editor's Draft. Formerly "Trust DID Web" (`did:tdw`); renamed to `did:webvh` (web + verifiable history). The rename happened during the v0.4 → v0.5 transition in mid-2025.
+**Spec:** [DIF didwebvh](https://identity.foundation/didwebvh/), v1.0 stable + Editor's Draft. Formerly "Trust DID Web" (`did:tdw`); renamed to `did:webvh` (web + verifiable history) circa the v0.4 → v0.5 transition in 2025. Primary-source citation for the rename date is pending — the DIF spec page redirects from the old `did:tdw` slug but does not preserve a changelog with date.
 
 **Identifier shape:** `did:webvh:<scid>:<host-and-path>` where `<scid>` is a self-certifying identifier hash committing to the genesis state.
 

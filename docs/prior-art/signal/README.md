@@ -34,7 +34,7 @@ licensing, threat-model, and adoption claims:
 | Name | What it is |
 |---|---|
 | **Signal Protocol** | The cryptographic spec family (X3DH, Double Ratchet, PQXDH, Sealed Sender). Free to implement. CC-BY 4.0 on the spec text. |
-| **libsignal** | The Rust + Java/Swift/TypeScript implementation Signal ships. AGPL-3.0. The reference impl, not the protocol itself. |
+| **libsignal** | The Rust core implementation Signal ships, with Java/Swift/Node.js (TypeScript-typed) bindings. AGPL-3.0. The reference impl, not the protocol itself. |
 | **Signal Foundation** | The 501(c)(3) nonprofit that operates the service. Founded 2018-02-21 by Moxie Marlinspike and Brian Acton with a $50M loan from Acton. |
 | **Signal app / service** | The mobile/desktop app + the centralized server operated by Signal Foundation. ~70M MAU as of January 2025 (Signal Foundation, "Signal is expensive," 2023-11-16; user count is per Wikipedia's Signal Messenger entry). |
 

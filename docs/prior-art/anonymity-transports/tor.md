@@ -260,6 +260,7 @@ by default.
 
 | Metric | Typical | Notes |
 |---|---|---|
+| C-tor stable version | 0.4.9.8 | Tor Project release stream as of 2026-05 |
 | Client RTT vs direct | 2-3x | Three hops, ntor key exchange |
 | Hidden service RTT | 5-10x | Six hops (3 client + 3 service) |
 | Throughput per circuit | 1-10 MB/s | Bottlenecked by slowest hop |
