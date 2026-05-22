@@ -48,6 +48,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:392
 - crates/kernel/tests/halt_detection.rs:138
 - crates/kernel/tests/halt_detection.rs:162
+- crates/kernel/tests/iroh_convergence.rs:170
 
 ## convergence.md §4.2 (deterministic variant per review M-9)
 - crates/kernel/tests/convergence.rs:426
@@ -225,6 +226,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## mvp.md §15.1 #2
 - crates/kernel/tests/convergence.rs:82
+- crates/kernel/tests/iroh_convergence.rs:170
 - crates/kernel/tests/iroh_convergence.rs:36
 - crates/kernel/tests/iroh_convergence.rs:92
 

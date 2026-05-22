@@ -166,3 +166,59 @@ async fn iroh_concurrent_multi_author_converges() {
         "peer B must converge to state {expected_state:?} over real iroh"
     );
 }
+
+/// Covers: mvp.md §15.1 #2, convergence.md §4.2
+///
+/// Closes the in-process iroh portion of E2E-1 design §3.3 row 3.
+/// Mirrors `convergence.rs::late_joiner_backfills_via_heads_summary`.
+/// Validates the Runtime-issued backfill path end-to-end over real
+/// iroh: late-joining B observes a `HeadsSummary` from A's
+/// `heads_summary_tick`, issues `request_heads` over real iroh, and
+/// catches up via direct-stream backfill (B-4.4/4.5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn iroh_late_joiner_backfills_via_heads_summary() {
+    let mut harness = IrohHarness::new([0x33; 32]);
+    let cfg = fast_cfg();
+    let peer_a = harness
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
+        .await;
+
+    // A authors genesis + 5 increments BEFORE B joins.
+    let kp_a = AuthorKeypair::deterministic(1);
+    let genesis = GenesisV1 {
+        seed: harness.seed,
+        founder_pubkey: kp_a.author,
+        app_payload: 0_i64.to_be_bytes().to_vec(),
+    };
+    let g_bytes = canonical_bincode().serialize(&genesis).expect("encode");
+    peer_a
+        .author(g_bytes, BTreeSet::new())
+        .await
+        .expect("genesis");
+    for delta in [1_i64, 1, 1, 1, 1] {
+        peer_a
+            .author(delta.to_be_bytes().to_vec(), BTreeSet::new())
+            .await
+            .expect("inc");
+    }
+
+    // Now B joins. Its bootstrap is A's pubkey so it dials A
+    // immediately and joins A's iroh-gossip swarm.
+    let peer_a_pk = harness.peer_pubkey(0);
+    let mut peer_b = harness
+        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![peer_a_pk])
+        .await;
+
+    // Expected: 0 + 5*1 = 5. The path is: A's
+    // `heads_summary_tick` fires → `HeadsSummary` published → B sees gap
+    // (its DAG has nothing for A) → B issues `request_heads` over real
+    // iroh direct-stream → A's installed `KernelRequestHandler`
+    // responds with all 6 events → B applies them.
+    let expected_state = 5_i64.to_be_bytes().to_vec();
+    assert!(
+        peer_b
+            .await_digest(expected_state, Duration::from_secs(15))
+            .await,
+        "late-joiner B must converge via HeadsSummary backfill over real iroh"
+    );
+}
