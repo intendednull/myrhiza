@@ -90,3 +90,67 @@ fn cli_binary_increment_loop_yields_final_state_via_stdout_views() {
         output.stderr
     );
 }
+
+/// Covers: mvp.md §15.1 #3
+///
+/// Closes E2E-1 design §3.5 row 2. A `--bundle` path that does not
+/// exist must produce a non-zero exit code and a diagnostic on stderr
+/// — not a panic, not a hang. clap accepts the path because it's just
+/// a string, then `myrhiza_cli::run` hits an `open()` failure that
+/// propagates as `Err(_)` through `?` in `main`, causing the binary
+/// to exit non-zero.
+#[test]
+fn cli_binary_missing_bundle_exits_nonzero_with_diagnostic() {
+    let output = run_cli(
+        std::path::Path::new("/nonexistent/bundle/path-that-does-not-exist"),
+        0,
+        b"quit\n",
+    );
+
+    assert_ne!(
+        output.status,
+        Some(0),
+        "exit code must be non-zero for missing bundle; got {:?}; stderr={:?}",
+        output.status,
+        output.stderr
+    );
+    assert!(
+        !output.stderr.is_empty(),
+        "stderr must contain a diagnostic for missing bundle; got empty stderr"
+    );
+}
+
+/// Covers: mvp.md §15.1 #3
+///
+/// Closes E2E-1 design §3.5 row 3. Mirrors
+/// `tests/e2e.rs::counter_dispatch_rejection_does_not_abort_loop`
+/// through the binary entrypoint: a rejected dispatch must surface
+/// `dispatch rejected:` on stdout and the loop must continue so that
+/// a following valid command (`inc 1`) still applies. Exit code stays
+/// 0 — a rejected dispatch is a recoverable per-line event, not a
+/// fatal error.
+#[test]
+fn cli_binary_dispatch_rejection_does_not_abort_loop() {
+    let (_bundle, addr) = build_signed_counter_bundle_three_components();
+    let output = run_cli(&addr.bundle_dir, 2, b"bogus_action\ninc 1\nquit\n");
+
+    assert_eq!(
+        output.status,
+        Some(0),
+        "exit code must be 0 (rejected dispatch is recoverable); got {:?}; stderr={:?}",
+        output.status,
+        output.stderr
+    );
+    assert!(
+        output.stdout.contains("dispatch rejected:"),
+        "stdout must surface 'dispatch rejected:' for bogus action; got: {:?}",
+        output.stdout
+    );
+    assert!(
+        output
+            .stderr
+            .contains("final state: [0, 0, 0, 0, 0, 0, 0, 1]"),
+        "stderr must contain final state [0,0,0,0,0,0,0,1] (inc 1 applied after rejection); got: {:?}",
+        output.stderr
+    );
+}

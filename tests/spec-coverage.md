@@ -231,7 +231,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/iroh_convergence.rs:92
 
 ## mvp.md §15.1 #3
+- crates/myrhiza-cli/tests/cli_binary.rs:123
 - crates/myrhiza-cli/tests/cli_binary.rs:50
+- crates/myrhiza-cli/tests/cli_binary.rs:94
 
 ## mvp.md §15.1 #4
 - crates/kernel/tests/convergence.rs:204
