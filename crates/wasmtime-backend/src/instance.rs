@@ -45,7 +45,7 @@ use crate::engine::{HostState, StateApply, myrhiza::kernel::types::Verdict as Wi
 /// Takes `&wasmtime::Error` rather than the value so callers can keep
 /// the original error around if they need to log it; we only need to
 /// inspect the downcast and format.
-fn map_wasmtime_error(e: &wasmtime::Error) -> BackendError {
+pub(crate) fn map_wasmtime_error(e: &wasmtime::Error) -> BackendError {
     if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
         return match trap {
             wasmtime::Trap::OutOfFuel => BackendError::FuelExhausted,
