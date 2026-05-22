@@ -13,6 +13,10 @@ pub const STATE_APPLY_FUEL_BUDGET_V1: u64 = 10_000_000;
 /// Per-event propose fuel budget per determinism.md §5.3 (5x apply).
 pub const STATE_PROPOSE_FUEL_BUDGET_V1: u64 = 50_000_000;
 
+/// Per-view / per-dispatch interaction fuel budget per determinism.md §5.3.
+/// Non-deterministic profile — cross-peer determinism does not apply.
+pub const INTERACTION_FUEL_BUDGET_V1: u64 = 50_000_000;
+
 /// Per-component memory cap per determinism.md §5.3.
 pub const COMPONENT_MEMORY_CAP_V1: usize = 64 * 1024 * 1024;
 

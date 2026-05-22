@@ -53,6 +53,14 @@ const HOST_DETERMINISTIC_INSTANCE: &str = "myrhiza:kernel/host-deterministic@1.0
 /// silently bypassing the deterministic-helper gate.
 const SHARED_TYPES_INSTANCE: &str = "myrhiza:kernel/types@1.0.0";
 
+/// WIT instance name for the ui-surfaces interface. Interaction world
+/// `use`s ui-element / panel / button / etc. from this interface, which
+/// surfaces as a top-level component import. The instance is types-only
+/// in v1 — no callable functions — so the prewalk permits `Type` and
+/// `Resource` items and rejects any `ComponentFunc`. Mirrors the rule
+/// already applied to `myrhiza:kernel/types@1.0.0`.
+pub(crate) const HOST_UI_SURFACES_INSTANCE: &str = "myrhiza:kernel/host-ui-surfaces@1.0.0";
+
 /// `host.log` is unconditionally bound on state-apply per
 /// determinism.md §5.1 — the manifest does not need to declare it. The
 /// pre-walk treats it as always-on so a manifest that omits it doesn't
@@ -117,51 +125,76 @@ fn prewalk_state_apply_imports(
     component: &Component,
     bound_imports: &std::collections::BTreeSet<String>,
 ) -> Result<(), BackendError> {
+    prewalk_imports_inner(engine, component, bound_imports, false)
+}
+
+/// Walk the component's top-level instance imports against `bound_imports`
+/// for the state-propose profile. Allowlist: `host-deterministic@1.0.0`
+/// and `types@1.0.0`. Same rule as state-apply; non-deterministic and async
+/// instances surface as `UnauthorizedImport`.
+///
+/// Called by `instantiate_state_propose` (B-7.3).
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnauthorizedImport`] for the first import that
+/// is not in the state-propose ambient set.
+pub(crate) fn prewalk_state_propose_imports(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+) -> Result<(), BackendError> {
+    prewalk_imports_inner(engine, component, bound_imports, false)
+}
+
+/// Walk the component's top-level instance imports against `bound_imports`
+/// for the interaction profile. Allowlist: `host-deterministic@1.0.0`,
+/// `types@1.0.0`, PLUS `host-ui-surfaces@1.0.0` (types-only — same audit
+/// rule as `types@1.0.0`). Non-deterministic and async instances surface
+/// as `UnauthorizedImport`.
+///
+/// Called by `instantiate_interaction` (B-7.4).
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnauthorizedImport`] for the first import that
+/// is not in the interaction ambient set.
+pub(crate) fn prewalk_interaction_imports(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+) -> Result<(), BackendError> {
+    prewalk_imports_inner(engine, component, bound_imports, true)
+}
+
+/// Shared prewalk implementation used by all three profiles.
+///
+/// `allow_ui_surfaces` enables the `host-ui-surfaces@1.0.0` types-only
+/// instance (interaction profile only). When false, that instance
+/// produces `UnauthorizedImport` — matching state-apply and state-propose.
+fn prewalk_imports_inner(
+    engine: &Engine,
+    component: &Component,
+    bound_imports: &std::collections::BTreeSet<String>,
+    allow_ui_surfaces: bool,
+) -> Result<(), BackendError> {
     use wasmtime::component::types::ComponentItem;
 
     let component_type = component.component_type();
     for (import_name, item) in component_type.imports(engine) {
-        // The shared `types` instance carries only type definitions
-        // and resource declarations — no callable functions — so it
-        // is permitted but still walked: any callable inside this
-        // instance is treated as unauthorized so a future WIT bump
-        // that adds a method to one of `types.wit`'s resources fails
-        // closed instead of silently surfacing a capability the
-        // manifest never declared. Components that `use types.{...}`
-        // in their world surface this as a top-level instance import,
-        // and wit-parser today renders only `type` / `resource`
-        // declarations inside it (see
-        // `tests/snapshots/state-apply-world.bindgen.txt`).
-        //
-        // wasmtime exposes resources opaquely as
-        // `ComponentItem::Resource(_)` here — there is no method
-        // introspection at this level. Method-on-resource imports
-        // surface separately as `ComponentItem::ComponentFunc` items
-        // in the parent instance with mangled names of the shape
-        // `[method]resource.method-name`. The callable rejection
-        // below catches them.
-        if import_name == SHARED_TYPES_INSTANCE {
+        // types-only instances: SHARED_TYPES_INSTANCE and (for interaction)
+        // HOST_UI_SURFACES_INSTANCE. Walk contents: Type/Resource allowed,
+        // any callable rejected.
+        let is_types_only = import_name == SHARED_TYPES_INSTANCE
+            || (allow_ui_surfaces && import_name == HOST_UI_SURFACES_INSTANCE);
+
+        if is_types_only {
             let ComponentItem::ComponentInstance(inst) = item else {
-                // The shared `types` import is declared as an
-                // instance in the WIT; anything else is a malformed
-                // or future-shape import we have not audited.
                 return Err(BackendError::UnauthorizedImport(import_name.into()));
             };
             for (item_name, child_item) in inst.exports(engine) {
                 match child_item {
-                    // Pure type aliases (verdict, hlc, log-level,
-                    // identity-scope, instance-binding, instance-kind)
-                    // and resource declarations (identity-handle,
-                    // peer-handle, key-handle, request-token) are the
-                    // only items today; both are fine.
                     ComponentItem::Type(_) | ComponentItem::Resource(_) => {}
-                    // Any callable on a types-only instance is
-                    // unauthorized: types.wit declares no functions,
-                    // so a `ComponentFunc` here is either a future
-                    // method on a resource or a future top-level
-                    // function. Either way, it bypasses the
-                    // deterministic-helper gate; reject fail-closed.
-                    // The qualified name pinpoints the audit site.
                     ComponentItem::ComponentFunc(_)
                     | ComponentItem::CoreFunc(_)
                     | ComponentItem::Module(_)
@@ -175,29 +208,15 @@ fn prewalk_state_apply_imports(
             }
             continue;
         }
+
         if import_name != HOST_DETERMINISTIC_INSTANCE {
-            // Any non-`host-deterministic` instance is outside the
-            // state-apply ambient set per architecture.md §3.5.
             return Err(BackendError::UnauthorizedImport(import_name.into()));
         }
-        // Walk the items inside the deterministic-helper instance.
-        // Only `ComponentInstance` carries function-typed exports we
-        // can iterate; other shapes (functions, types, resources at
-        // the top level) are not produced by the state-apply WIT
-        // world, but we treat them defensively as unauthorized.
+
         let ComponentItem::ComponentInstance(inst) = item else {
             return Err(BackendError::UnauthorizedImport(import_name.into()));
         };
         for (item_name, child_item) in inst.exports(engine) {
-            // Today's state-apply WIT world surfaces only
-            // `ComponentFunc` items inside `host-deterministic` — the
-            // host-bound deterministic helpers. A future WIT change
-            // surfacing a resource, type, or nested instance import
-            // here would be a new capability surface we haven't
-            // audited; reject fail-closed instead of skipping. This
-            // is the inverse of the previous "skip non-functions"
-            // behavior, which silently bypassed the gate. The
-            // qualified name pinpoints the audit site.
             if !matches!(child_item, ComponentItem::ComponentFunc(_)) {
                 return Err(BackendError::UnauthorizedImport(format!(
                     "{import_name}.{item_name}"
@@ -481,18 +500,46 @@ impl Backend for WasmtimeBackend {
 
     fn instantiate_state_propose(
         &self,
-        _component_bytes: &[u8],
-        _manifest: &Manifest,
+        component_bytes: &[u8],
+        manifest: &Manifest,
     ) -> Result<Box<dyn ProposeInstance>, BackendError> {
-        Err(BackendError::Instantiation("not yet wired in B-7.1".into()))
+        use crate::gating::{
+            state_propose_bound_imports, validate_state_propose_manifest, wire_state_propose_linker,
+        };
+
+        validate_state_propose_manifest(manifest)?;
+        let bound_imports = state_propose_bound_imports(manifest);
+        let component = Component::from_binary(&self.engine, component_bytes)
+            .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
+        prewalk_state_propose_imports(&self.engine, &component, &bound_imports)?;
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wire_state_propose_linker(&mut linker, &bound_imports)?;
+        // Bindgen and propose_instance wiring land in B-7.3.
+        Err(BackendError::Instantiation(
+            "state-propose instance type not yet wired (B-7.3)".into(),
+        ))
     }
 
     fn instantiate_interaction(
         &self,
-        _component_bytes: &[u8],
-        _manifest: &Manifest,
+        component_bytes: &[u8],
+        manifest: &Manifest,
     ) -> Result<Box<dyn InteractionInstance>, BackendError> {
-        Err(BackendError::Instantiation("not yet wired in B-7.1".into()))
+        use crate::gating::{
+            interaction_bound_imports, validate_interaction_manifest, wire_interaction_linker,
+        };
+
+        validate_interaction_manifest(manifest)?;
+        let bound_imports = interaction_bound_imports(manifest);
+        let component = Component::from_binary(&self.engine, component_bytes)
+            .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
+        prewalk_interaction_imports(&self.engine, &component, &bound_imports)?;
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wire_interaction_linker(&mut linker, &bound_imports)?;
+        // Bindgen and interaction_instance wiring land in B-7.4.
+        Err(BackendError::Instantiation(
+            "interaction instance type not yet wired (B-7.4)".into(),
+        ))
     }
 }
 

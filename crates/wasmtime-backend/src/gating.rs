@@ -59,50 +59,7 @@ const DEFERRED_TO_PLAN_B: &[&str] = &["host.install-key", "host.verify-payload-m
 /// declared capability is in the vocabulary but not part of the
 /// state-apply ambient set (i.e. any non-deterministic import).
 pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
-    let ambient = state_apply_ambient_set();
-
-    // Any value in capabilities.host_imports = true that is not a
-    // DeterministicHelper is a hard error (state-apply cannot bind it).
-    for (cap, &enabled) in &m.capabilities.host_imports {
-        if !enabled {
-            continue;
-        }
-        // Defer-check fires first so install-key / verify-payload-mac
-        // get the specific "deferred" verdict even though the class
-        // check below would otherwise treat them as accepted helpers.
-        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
-            return Err(BackendError::DeferredToPlanB(cap.clone()));
-        }
-        match classify(cap) {
-            None => return Err(BackendError::UnknownImport(cap.clone())),
-            Some(CapabilityClass::DeterministicHelper) => {
-                // The deterministic-helper class minus the deferred
-                // entries is exactly the state-apply ambient set (see
-                // `state_apply_ambient_set`), so no further membership
-                // check is needed.
-            }
-            Some(_) => {
-                return Err(BackendError::UnauthorizedImport(cap.clone()));
-            }
-        }
-    }
-
-    // capabilities.deterministic_helpers = true entries are
-    // self-documenting only — they must all be in the ambient set.
-    // Deferred entries are checked first for the same reason as above.
-    for (cap, &enabled) in &m.capabilities.deterministic_helpers {
-        if !enabled {
-            continue;
-        }
-        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
-            return Err(BackendError::DeferredToPlanB(cap.clone()));
-        }
-        if !ambient.contains(cap) {
-            return Err(BackendError::UnknownImport(cap.clone()));
-        }
-    }
-
-    Ok(())
+    validate_against_ambient(m, &state_apply_ambient_set())
 }
 
 /// Register host functions on the Wasmtime linker for the imports
@@ -246,11 +203,215 @@ pub fn state_apply_bound_imports(m: &Manifest) -> BTreeSet<String> {
     bound
 }
 
+// ── state-propose gating ─────────────────────────────────────────────────────
+
+/// The state-propose ambient set is identical to state-apply's v1 ambient
+/// set per spec §3.1: deterministic helpers only. Non-deterministic and
+/// async helpers declared in the state-propose WIT are unbound in v1;
+/// a component importing them fails at prewalk with `UnauthorizedImport`.
+#[must_use]
+pub fn state_propose_ambient_set() -> BTreeSet<String> {
+    state_apply_ambient_set()
+}
+
+/// Compute the set of host imports that should be bound on the
+/// state-propose linker for `manifest`. Mirrors `state_apply_bound_imports`.
+#[must_use]
+pub fn state_propose_bound_imports(m: &Manifest) -> BTreeSet<String> {
+    state_apply_bound_imports(m)
+}
+
+/// Validate that the manifest's declared imports are a subset of the
+/// state-propose ambient set. Structurally identical to
+/// `validate_state_apply_manifest` because the v1 ambient sets are the same.
+///
+/// # Errors
+///
+/// Returns [`BackendError::DeferredToPlanB`] if a declared capability is
+/// registered but not bindable in v1. Returns [`BackendError::UnknownImport`]
+/// if a declared capability is not in the v1 vocabulary. Returns
+/// [`BackendError::UnauthorizedImport`] if a declared capability is in the
+/// vocabulary but not part of the state-propose ambient set.
+pub fn validate_state_propose_manifest(m: &Manifest) -> Result<(), BackendError> {
+    validate_against_ambient(m, &state_propose_ambient_set())
+}
+
+// ── interaction gating ───────────────────────────────────────────────────────
+
+/// The interaction ambient set is the state-propose ambient set plus
+/// `host-ui-surfaces@1.0.0` (types-only — no callable functions) per
+/// spec §3.1. Non-deterministic and async helpers are unbound in v1.
+#[must_use]
+pub fn interaction_ambient_set() -> BTreeSet<String> {
+    // For v1 the callable-function ambient set is identical: the
+    // deterministic helpers. `host-ui-surfaces` carries only type
+    // definitions and is not a callable-function import — the prewalk
+    // handles its types-only audit separately.
+    state_apply_ambient_set()
+}
+
+/// Compute the set of host imports that should be bound on the interaction
+/// linker for `manifest`. Same callable-function set as state-apply/propose.
+#[must_use]
+pub fn interaction_bound_imports(m: &Manifest) -> BTreeSet<String> {
+    state_apply_bound_imports(m)
+}
+
+/// Validate that the manifest's declared imports are a subset of the
+/// interaction ambient set. For v1, the callable-function ambient set is
+/// identical to state-apply's, so this delegates to the shared helper.
+///
+/// # Errors
+///
+/// Returns [`BackendError::DeferredToPlanB`] if a declared capability is
+/// registered but not bindable in v1. Returns [`BackendError::UnknownImport`]
+/// if a declared capability is not in the v1 vocabulary. Returns
+/// [`BackendError::UnauthorizedImport`] if a declared capability is in the
+/// vocabulary but not part of the interaction ambient set.
+pub fn validate_interaction_manifest(m: &Manifest) -> Result<(), BackendError> {
+    validate_against_ambient(m, &interaction_ambient_set())
+}
+
+/// Register host functions on the Wasmtime linker for state-propose.
+/// Wires the same deterministic helpers as state-apply; state-propose is
+/// a non-deterministic profile so the float-ban is not applied, but the
+/// callable host surface is identical in v1.
+///
+/// # Errors
+///
+/// Returns [`BackendError::Instantiation`] if the linker rejects an
+/// `instance(...)` lookup or `func_wrap(...)` registration.
+pub fn wire_state_propose_linker(
+    linker: &mut wasmtime::component::Linker<crate::engine::HostState>,
+    bound_imports: &BTreeSet<String>,
+) -> Result<(), BackendError> {
+    wire_state_apply_linker(linker, bound_imports)
+}
+
+/// Register host functions on the Wasmtime linker for interaction.
+/// Wires the same deterministic helpers as state-apply. The
+/// `host-ui-surfaces@1.0.0` instance is types-only — no `func_wrap` calls
+/// are needed; bindgen treats types-only imports as auto-satisfied.
+///
+/// # Errors
+///
+/// Returns [`BackendError::Instantiation`] if the linker rejects an
+/// `instance(...)` lookup or `func_wrap(...)` registration.
+pub fn wire_interaction_linker(
+    linker: &mut wasmtime::component::Linker<crate::engine::HostState>,
+    bound_imports: &BTreeSet<String>,
+) -> Result<(), BackendError> {
+    wire_state_apply_linker(linker, bound_imports)
+}
+
+// ── shared validation helper ─────────────────────────────────────────────────
+
+/// Validate that `manifest`'s declared imports are a subset of `ambient`.
+/// Factored out so state-apply, state-propose, and interaction validation
+/// are mechanically identical — each just passes its profile's ambient set.
+fn validate_against_ambient(m: &Manifest, ambient: &BTreeSet<String>) -> Result<(), BackendError> {
+    for (cap, &enabled) in &m.capabilities.host_imports {
+        if !enabled {
+            continue;
+        }
+        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
+            return Err(BackendError::DeferredToPlanB(cap.clone()));
+        }
+        match classify(cap) {
+            None => return Err(BackendError::UnknownImport(cap.clone())),
+            Some(CapabilityClass::DeterministicHelper) => {}
+            Some(_) => {
+                return Err(BackendError::UnauthorizedImport(cap.clone()));
+            }
+        }
+    }
+    for (cap, &enabled) in &m.capabilities.deterministic_helpers {
+        if !enabled {
+            continue;
+        }
+        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
+            return Err(BackendError::DeferredToPlanB(cap.clone()));
+        }
+        if !ambient.contains(cap) {
+            return Err(BackendError::UnknownImport(cap.clone()));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use myrhiza_manifest::vocabulary::CapabilityClass;
+
+    // ── B-7.2.1 ──────────────────────────────────────────────────────────────
+
+    /// Covers: architecture.md §3.5, capabilities.md §7.1
+    ///
+    /// State-propose ambient set equals state-apply's ambient set
+    /// (deterministic helpers only). Non-deterministic helpers declared in
+    /// the state-propose WIT are NOT in the ambient set in v1.
+    #[test]
+    fn state_propose_ambient_set_contains_deterministic_helpers_only() {
+        let propose_ambient = state_propose_ambient_set();
+        let apply_ambient = state_apply_ambient_set();
+        assert_eq!(
+            propose_ambient, apply_ambient,
+            "v1 state-propose ambient set must equal state-apply ambient set"
+        );
+        // Every member must be DeterministicHelper.
+        for cap in &propose_ambient {
+            let class = myrhiza_manifest::vocabulary::classify(cap)
+                .expect("ambient cap must be in vocabulary");
+            assert_eq!(
+                class,
+                CapabilityClass::DeterministicHelper,
+                "{cap} must be DeterministicHelper for state-propose ambient"
+            );
+        }
+        // Known non-det helpers must not appear.
+        assert!(
+            !propose_ambient.contains("host.author-event"),
+            "host.author-event (HostImport) must not be in propose ambient"
+        );
+        assert!(
+            !propose_ambient.contains("host.broadcast"),
+            "host.broadcast (HostImport) must not be in propose ambient"
+        );
+    }
+
+    // ── B-7.2.6 ──────────────────────────────────────────────────────────────
+
+    /// Covers: architecture.md §3.5, capabilities.md §7.2
+    ///
+    /// A manifest declaring `host.author-event` (classified `HostImport`,
+    /// non-deterministic) under `host_imports` must be rejected by
+    /// `validate_state_propose_manifest` with `UnauthorizedImport`.
+    /// Verifies the gating fires on the propose path, not just state-apply.
+    #[test]
+    fn manifest_with_apply_only_capability_declared_for_propose_rejects() {
+        // Pre-condition: verify host.author-event is classified as
+        // HostImport (non-deterministic) so the test documents the
+        // vocabulary contract it relies on.
+        assert_eq!(
+            myrhiza_manifest::vocabulary::classify("host.author-event"),
+            Some(CapabilityClass::HostImport),
+            "host.author-event must be HostImport for this test to be meaningful"
+        );
+
+        let mut m = sample_state_apply_manifest();
+        m.capabilities
+            .host_imports
+            .insert("host.author-event".into(), true);
+        let res = validate_state_propose_manifest(&m);
+        assert!(
+            matches!(res, Err(BackendError::UnauthorizedImport(_))),
+            "non-det host.author-event must be rejected as unauthorized for propose: {res:?}"
+        );
+    }
+
+    // ── existing state-apply tests ────────────────────────────────────────────
 
     /// Covers: determinism.md §5.1, capabilities.md §7.1
     ///
@@ -503,5 +664,53 @@ mod tests_wire {
         bound.insert("host.now-hlc-from-event".into());
         bound.insert("host.log".into());
         wire_state_apply_linker(&mut linker, &bound).expect("wire OK");
+    }
+
+    // ── B-7.2.3 — propose/interaction linker smoke tests ─────────────────────
+
+    /// Covers spec §3.1: `wire_state_propose_linker` accepts the same
+    /// bound set as state-apply. The two linkers share the deterministic
+    /// helper set; the propose linker delegates to `wire_state_apply_linker`.
+    #[test]
+    fn wire_state_propose_linker_accepts_deterministic_set() {
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(true);
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).expect("engine");
+        let mut linker: wasmtime::component::Linker<HostState> =
+            wasmtime::component::Linker::new(&engine);
+        let mut bound = BTreeSet::new();
+        bound.insert("host.hash".into());
+        bound.insert("host.log".into());
+        wire_state_propose_linker(&mut linker, &bound).expect("wire propose OK");
+    }
+
+    /// Covers spec §3.1: `wire_interaction_linker` accepts the deterministic
+    /// set. `host-ui-surfaces@1.0.0` is types-only — no `func_wrap` calls
+    /// are registered for it, so the linker wiring is identical to propose.
+    #[test]
+    fn wire_interaction_linker_accepts_deterministic_set() {
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(true);
+        config.wasm_component_model(true);
+        let engine = wasmtime::Engine::new(&config).expect("engine");
+        let mut linker: wasmtime::component::Linker<HostState> =
+            wasmtime::component::Linker::new(&engine);
+        let mut bound = BTreeSet::new();
+        bound.insert("host.hash".into());
+        bound.insert("host.log".into());
+        wire_interaction_linker(&mut linker, &bound).expect("wire interaction OK");
+    }
+
+    /// Covers spec §3.1: `HOST_UI_SURFACES_INSTANCE` constant matches the
+    /// WIT package/interface name `myrhiza:kernel/host-ui-surfaces@1.0.0`.
+    /// The prewalk in `prewalk_interaction_imports` matches by string; this
+    /// test locks the constant so a typo surfaces immediately.
+    #[test]
+    fn host_ui_surfaces_instance_constant_matches_wit_name() {
+        assert_eq!(
+            crate::engine::HOST_UI_SURFACES_INSTANCE,
+            "myrhiza:kernel/host-ui-surfaces@1.0.0",
+        );
     }
 }
