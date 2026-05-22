@@ -88,3 +88,36 @@ fn counter_stdout_shows_progressive_views() {
         "stdout should contain final view 'counter: 8'; got: {text:?}"
     );
 }
+
+/// Rejection-path coverage: bogus action triggers `dispatch rejected`
+/// without aborting the loop; the next legitimate `inc 1` still applies.
+///
+/// Exercises the `InteractionError::DispatchRejected` branch in
+/// `myrhiza_cli::run` plus the continued-loop semantics.
+#[test]
+fn counter_dispatch_rejection_does_not_abort_loop() {
+    let key = AuthorKeypair::deterministic(2);
+    let (_bundle, addr) = build_signed_counter_bundle_three_components();
+
+    let input = b"bogus_action\ninc 1\nquit\n".to_vec();
+    let mut output: Vec<u8> = Vec::new();
+
+    let (state, log) = myrhiza_cli::run(&addr.bundle_dir, &key, Cursor::new(input), &mut output)
+        .expect("harness run completes; rejected dispatch is not a hard error");
+
+    assert_eq!(
+        state,
+        1_i64.to_be_bytes().to_vec(),
+        "rejected dispatch consumes no seq; final state should be 1"
+    );
+    assert_eq!(
+        log.len(),
+        1,
+        "exactly one accepted step (the inc 1 after the rejection)"
+    );
+    let text = std::str::from_utf8(&output).expect("stdout is valid UTF-8");
+    assert!(
+        text.contains("dispatch rejected:"),
+        "stdout should surface the rejection message; got: {text:?}"
+    );
+}
