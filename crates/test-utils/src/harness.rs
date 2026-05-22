@@ -357,6 +357,7 @@ impl InProcessHarness {
             peer_key,
             author_key,
             cfg,
+            vec![],
         )
         .await
         .expect("Runtime::start");

@@ -575,12 +575,10 @@ impl Runtime {
         peer_key: PeerKeypair,
         author_key: Option<AuthorKeypair>,
         cfg: RuntimeCfg,
+        bootstrap: Vec<PeerPubkey>,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let erased = NetworkErased::new(network);
-        // B-4.* will plumb peer-discovery into Runtime::start; for
-        // now pass an empty bootstrap. MemNetwork ignores it;
-        // IrohNetwork (B-4.1) accepts it and waits for inbound joins.
-        let sub = erased.subscribe(topic, vec![]).await?;
+        let sub = erased.subscribe(topic, bootstrap).await?;
 
         let (author_tx, author_rx) = mpsc::channel(64);
 

@@ -124,6 +124,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         kp_a,
         Some(AuthorKeypair::deterministic(101)),
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -140,6 +141,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         kp_b,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -226,6 +228,7 @@ async fn direct_backfill_target_peer_unreachable_logs_warning() {
         kp_b,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -304,6 +307,7 @@ async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
         kp_a,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -416,6 +420,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         kp_a,
         Some(AuthorKeypair::deterministic(601)),
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -435,6 +440,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         kp_b,
         Some(AuthorKeypair::deterministic(602)),
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -451,6 +457,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         kp_c,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_c start");

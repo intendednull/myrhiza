@@ -275,6 +275,7 @@ async fn two_apps_coexist_no_event_crossing() {
         peer_key_for_counter,
         Some(AuthorKeypair::deterministic(501)), // seed MUST match kp_counter_author above.
         cfg.clone(),
+        vec![],
     )
     .await
     .expect("runtime_counter start");
@@ -292,6 +293,7 @@ async fn two_apps_coexist_no_event_crossing() {
         peer_key_for_echo,
         Some(AuthorKeypair::deterministic(502)), // seed MUST match kp_echo_author above.
         cfg,
+        vec![],
     )
     .await
     .expect("runtime_echo start");

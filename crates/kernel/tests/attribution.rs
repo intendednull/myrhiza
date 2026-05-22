@@ -252,6 +252,7 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
         peer_kp_b_t7,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -340,6 +341,7 @@ async fn runtime_drops_drift_with_bad_signature() {
         peer_kp_b,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -445,6 +447,7 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         kp_a_for_runtime,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(15)),
         cfg_a,
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -461,6 +464,7 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         kp_for_b_runtime,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -546,6 +550,7 @@ async fn runtime_loopback_filter_skips_own_heads_summary_verify() {
         peer_kp_t10,
         None,
         cfg,
+        vec![],
     )
     .await
     .expect("runtime start");
