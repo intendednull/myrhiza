@@ -9,7 +9,7 @@
 
 The post-B-4 gap analysis (`docs/reports/2026-05-21-mvp-gap-analysis.md`) listed mvp.md §15.1 criterion 2 (multi-peer convergence on same WASM bytes) as 🟡 partial. **This was wrong**: `helpers::counter_handle()` (used by every B-1 + B-4 convergence test) loads the real `counter-state-apply.wasm` fixture via `WasmtimeBackend::instantiate_state_apply` — it is NOT an in-Rust native helper. Every existing convergence test already proves criterion 2 against real WASM bytes. Criterion 2 is ✅ shipped.
 
-The actual next-priority gap is criterion 4: **"A second app instance (different state component, different topic) coexists on the same peer; events do not cross."** The existing `coexistence_two_topics_no_event_crossing` test (`crates/kernel/tests/convergence.rs:206`) uses the SAME counter app on both topics — it proves topic isolation but not the "different state component" half of the criterion.
+The actual next-priority gap is criterion 4: **"A second app instance (different state component, different topic) coexists on the same peer; events do not cross."** The existing `coexistence_two_topics_no_event_crossing` test (`crates/kernel/tests/convergence.rs:206`) covers only PART of criterion 4: same-app + two-topics + **DIFFERENT peers** (`peer_key_1` + `peer_key_2`, `convergence.rs:223,239`). It proves topic isolation across peers but fails criterion 4 on TWO counts: (a) same app, not different; (b) different peers, not same. B-5 closes both gaps.
 
 B-5 closes criterion 4 by:
 
@@ -34,7 +34,7 @@ B-5 closes criterion 4 by:
 | **Echo over Poll as the second app** | New fixture `echo-state-apply` with semantics: state = the most recently applied event payload (genesis sets it; each subsequent event overwrites). | (a) Build the full Poll app (item 16 from implementation.md §20); (b) Trivial constant-state app (always returns `[]`). | Poll requires multi-author vote-tally logic and is much larger than just "second state component." (b) doesn't exercise the state-transition path. Echo is minimal but real: state actually CHANGES on each event, so coexistence asserts both "B's topic events don't reach A's runtime" AND "A's events that DO reach A produce the expected state." Builds in <50 LoC of state-apply. Poll lands as a separate slice (B-6 or B-7). |
 | **Echo fixture as a sibling Cargo project**, not a workspace member | Same pattern as `counter-state-apply-fixture`: separate Cargo.toml under `tests/fixtures/echo-state-apply/`, excluded from the workspace via the root `Cargo.toml`'s `workspace.exclude` list. | Add to workspace. | The counter fixture is intentionally NOT a workspace member because it builds for `wasm32-unknown-unknown` and needs different lint defaults (no-std + manual bump allocator + float-Display avoidance). The new echo fixture inherits the same constraints; matching the existing pattern is the obviously-correct call. |
 | **Reuse the counter fixture's WIT verbatim** | `tests/fixtures/echo-state-apply/wit/world.wit` is identical to the counter fixture's WIT. Re-declares `myrhiza:kernel@1.0.0` package with the `state-apply` world. | Share via a relative include. | wit-bindgen 0.30 requires the WIT to live inside the fixture crate. Duplication is the existing pattern; not worth restructuring for this slice. |
-| **Echo state-apply ABI: state = payload bytes** | On `apply(prior, event)`: decode `Event` from canonical bincode; for genesis (seq=1), state = `GenesisV1::app_payload`; for non-genesis, state = `event.payload`. `state-digest`: SHA-256 over state bytes (matches counter's pattern). | Constant state, append-only log, etc. | "State is the most recent event's payload" is the simplest non-trivial state transition. The state-digest changes with each event, so convergence is observable. Crucially, the GENESIS application matches counter's pattern (extracts `GenesisV1.app_payload`), so the fixture exercises the same Genesis decode path the counter does. |
+| **Echo state-apply ABI: state = payload bytes** | On `apply(prior, event)`: decode `Event` from canonical bincode; **for genesis (`seq == 1 && prior_state.is_empty()`)**, state = `GenesisV1::app_payload`; for non-genesis events, state = `event.payload`. `state-digest`: returns state verbatim (matches counter's pattern at `tests/fixtures/counter-state-apply/src/lib.rs:239-244`). | Constant state, append-only log, hash-the-state-bytes. | "State is the most recent event's payload" is the simplest non-trivial state transition. The state-digest changes with each event (digest = state, so different states → different digests). Crucially, the GENESIS application matches counter's exact discriminator pattern: per-author chains each start at `seq == 1`, so a non-founder author's first event also has `seq == 1` but arrives against a non-empty `prior_state` — counter handles this via the `&& prior_state.is_empty()` guard (`lib.rs:127-132` + `lib.rs:191`), and echo mirrors verbatim. Without this guard, multi-author topics would misclassify joiner-author seq-1 events as genesis and try to parse their payloads as `GenesisV1`, corrupting state. |
 | **`test-utils::bundle::build_signed_echo_bundle()` mirrors `build_signed_counter_bundle`** | New helper in `crates/test-utils/src/bundle.rs` that builds a signed bundle from the echo fixture (analogous to the existing counter helper). Uses the same manifest shape (helpers-only state-apply manifest). | Pass paths to a generic builder. | The counter pattern is well-established (5 fixtures, all with their own helpers). One more helper is mechanical; introducing a generic builder is unnecessary refactoring for this slice. |
 | **`helpers::echo_handle()` mirrors `counter_handle()`** | New helper in `crates/kernel/tests/helpers/mod.rs` returning a `StateApplyHandle` backed by a fresh wasmtime instance of the echo fixture. | Pass instances as test arguments. | Existing tests use module-scoped helpers; matches the pattern. |
 | **Coexistence test = same peer, two runtimes** | New test in `crates/kernel/tests/coexistence.rs` (or extend `convergence.rs`). Construct one `PeerKeypair`; spawn two `Runtime` instances with different state-apply handles (counter + echo) on different topics. Author an event on each; assert the OTHER runtime's digest does NOT change and the OTHER runtime's dropped_at_apply / peer_warnings counts stay clean. | Same test file as `coexistence_two_topics_no_event_crossing`. | A new file under `coexistence.rs` makes the intent obvious and gives the criterion-4 test its own home. The existing test stays as the "different peers, different topics, same app" check — both are valuable. |
@@ -54,13 +54,22 @@ Files to create:
   ```text
   apply(prior, event_bytes):
       decode Event from event_bytes
-      if event.seq == 1:
+      if event.seq == 1 && prior.is_empty():
+          # Genesis: extract initial state from GenesisV1::app_payload.
+          # The prior.is_empty() guard distinguishes the founder's
+          # genesis from a joiner-author's seq=1 event arriving against
+          # the post-genesis state (per-author chains all start at
+          # seq=1). Mirror of counter's lib.rs:191 pattern.
           decode GenesisV1 from event.payload
           return (Accept, GenesisV1.app_payload)
       else:
+          # Non-genesis: state = event payload (overwrite semantics).
           return (Accept, event.payload)
   state-digest(state):
-      return blake3(state) [32 bytes]
+      # Identity — return state verbatim. Mirrors counter's lib.rs:239-244
+      # pattern. Different state bytes ⇒ different digest bytes; the
+      # acceptance test relies on this to assert per-runtime independence.
+      return state
   ```
 
 The lib.rs structure copies the counter's bump allocator + wit-bindgen scaffolding, replaces only the `apply` body.
@@ -70,6 +79,8 @@ The lib.rs structure copies the counter's bump allocator + wit-bindgen scaffoldi
 Add an entry for echo to the existing `build-fixtures` recipe. Identical shape to the counter entry (`cargo build` + `wasm-tools component embed` + `wasm-tools component new`).
 
 Output: `tests/fixtures/built/echo-state-apply.wasm`.
+
+**Also update the recipe's trailing `@echo "Built 5 fixtures into ..."` message** — bump to "Built 6 fixtures" to match the new total. The string literal is a known item that needs a tracking edit per `Justfile:47`.
 
 ### 3.3 test-utils bundle helper — `crates/test-utils/src/bundle.rs`
 
@@ -132,13 +143,22 @@ async fn two_apps_coexist_no_event_crossing() {
     let topic_echo    = Topic::derive(&app_bundle_echo,    &[0x22; 32], "main");
     assert_ne!(topic_counter, topic_echo);
 
-    // Both MemNetworks share the same bus + peer_pubkey (since they are
-    // the same peer); the bus's request-handler registry collides on
-    // peer_pubkey, but the LAST install wins per B-4.4 contract — only
-    // the echo runtime's handler is reachable post-startup. That is
-    // acceptable for this test because we never issue request_heads
-    // against either runtime; the assertion is on no-event-crossing
-    // via the gossip path.
+    // Both MemNetworks share the same bus + peer_pubkey (since they
+    // are the same peer); the bus's request_handlers registry
+    // (memory.rs:266-273) does a plain `handlers.insert(self.peer_pubkey,
+    // handler)` — last write wins per B-4.4 contract, so only the
+    // echo runtime's handler is reachable post-startup.
+    //
+    // ARCHITECTURAL CONSTRAINT (do NOT remove without restructuring):
+    // this test is intentionally limited to gossip-path assertions
+    // (no event crossing via topic broadcast). Adding a `request_heads`
+    // call to this test would silently mis-route — the counter
+    // runtime's handler would be invisible to any direct-stream
+    // requester targeting `peer_pubkey`. If criterion-4-style
+    // direct-stream coverage is ever needed, restructure to use two
+    // distinct peer pubkeys (which would violate criterion 4's "same
+    // peer" clause) OR add a per-runtime handler-routing key. Neither
+    // is in B-5 scope.
     let net_counter = MemNetwork::new(bus.clone(), peer_kp_counter.public);
     let net_echo    = MemNetwork::new(bus.clone(), peer_kp_echo.public);
 
