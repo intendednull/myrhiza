@@ -419,42 +419,30 @@ impl BundleDistribution {
                 })?;
         let state_apply_bytes = self.fetch_blob(state_apply_hash, &endpoint_ids).await?;
 
-        let state_propose_bytes = match (
-            manifest.components.state_propose.as_deref(),
-            manifest.components.state_propose_hash,
-        ) {
-            (Some(_), Some(h)) => Some(self.fetch_blob(h, &endpoint_ids).await?),
-            (Some(_), None) => {
-                return Err(FetchError::ComponentMissingHash {
-                    profile: "state-propose",
-                });
-            }
-            _ => None,
-        };
-        let interaction_bytes = match (
-            manifest.components.interaction.as_deref(),
-            manifest.components.interaction_hash,
-        ) {
-            (Some(_), Some(h)) => Some(self.fetch_blob(h, &endpoint_ids).await?),
-            (Some(_), None) => {
-                return Err(FetchError::ComponentMissingHash {
-                    profile: "interaction",
-                });
-            }
-            _ => None,
-        };
-        let behavior_bytes = match (
-            manifest.components.behavior.as_deref(),
-            manifest.components.behavior_hash,
-        ) {
-            (Some(_), Some(h)) => Some(self.fetch_blob(h, &endpoint_ids).await?),
-            (Some(_), None) => {
-                return Err(FetchError::ComponentMissingHash {
-                    profile: "behavior",
-                });
-            }
-            _ => None,
-        };
+        let state_propose_bytes = self
+            .fetch_optional_component(
+                manifest.components.state_propose.as_deref(),
+                manifest.components.state_propose_hash,
+                "state-propose",
+                &endpoint_ids,
+            )
+            .await?;
+        let interaction_bytes = self
+            .fetch_optional_component(
+                manifest.components.interaction.as_deref(),
+                manifest.components.interaction_hash,
+                "interaction",
+                &endpoint_ids,
+            )
+            .await?;
+        let behavior_bytes = self
+            .fetch_optional_component(
+                manifest.components.behavior.as_deref(),
+                manifest.components.behavior_hash,
+                "behavior",
+                &endpoint_ids,
+            )
+            .await?;
 
         // 4. Write the materialized layout into a tempdir mirroring
         //    the disk-bundle layout (see
@@ -500,6 +488,29 @@ impl BundleDistribution {
             _tempdir: tempdir,
             address,
         })
+    }
+
+    /// Fetch an optional component: if the manifest declares a path
+    /// for the slot, the matching `*_hash` field MUST also be populated
+    /// for the iroh path. Returns `Ok(None)` for "slot not declared",
+    /// `Ok(Some(bytes))` for a fetched component, or
+    /// [`FetchError::ComponentMissingHash`] when the path is declared
+    /// without the hash (malformed manifest for iroh fetch).
+    ///
+    /// `profile` is the `"state-propose"` / `"interaction"` / `"behavior"`
+    /// label embedded in the error variant when the manifest is malformed.
+    async fn fetch_optional_component(
+        &self,
+        path: Option<&str>,
+        hash: Option<BlobHash>,
+        profile: &'static str,
+        peers: &[iroh::EndpointId],
+    ) -> Result<Option<Vec<u8>>, FetchError> {
+        match (path, hash) {
+            (Some(_), Some(h)) => Ok(Some(self.fetch_blob(h, peers).await?)),
+            (Some(_), None) => Err(FetchError::ComponentMissingHash { profile }),
+            _ => Ok(None),
+        }
     }
 
     /// Fetch a single blob by hash. Reads from the local store if
