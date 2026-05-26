@@ -814,9 +814,9 @@ Per [CLAUDE.md](../../CLAUDE.md): cite folder + section, name runner-up paradigm
 
 ## 9. Estimate
 
-**2-3 days** focused work, matching the [post-B-7 gap analysis](../reports/2026-05-21-mvp-gap-analysis.md#b-8-sdk-ergonomics--examples-wiring) estimate.
+**2-3 days inline / 3-5 days under full subagent-driven review cadence**, framing the [post-B-7 gap analysis](../reports/2026-05-21-mvp-gap-analysis.md#b-8-sdk-ergonomics--examples-wiring) figure as the inline-execution case. The subagent-driven figure accounts for review-round overhead — observed ~20 minutes per round across this session's data points, adding roughly one day spread across the 10-task sequence.
 
-Breakdown:
+Breakdown (inline focused work):
 
 - B-8.0 (SDK scaffold + WIT in-sync test): 0.5 day
 - B-8.1 (`myrhiza_app!` + `local_wit_dir!` macros): 0.5 day
