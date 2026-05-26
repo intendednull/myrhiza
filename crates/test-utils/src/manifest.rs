@@ -160,7 +160,7 @@ pub fn sign_manifest_three_components(
 /// regardless of what the underlying component actually imports.
 /// The counter fixture itself does not import `host.broadcast`; the
 /// rejection comes from the manifest gating step in
-/// `validate_state_apply_manifest`, not from the linker.
+/// `validate_manifest`, not from the linker.
 #[must_use]
 pub fn helpers_only_state_apply_manifest_with_extra_cap(extra_cap: &str) -> Manifest {
     let mut m = helpers_only_state_apply_manifest();

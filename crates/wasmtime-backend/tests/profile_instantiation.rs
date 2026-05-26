@@ -45,7 +45,7 @@ use myrhiza_manifest::schema::{
 use myrhiza_wasmtime_backend::WasmtimeBackend;
 
 /// Build a minimal valid manifest with the `interaction` slot set so
-/// `validate_interaction_manifest` does not short-circuit on a missing
+/// `validate_manifest` does not short-circuit on a missing
 /// interaction path. No capability helpers are declared.
 fn empty_interaction_manifest() -> Manifest {
     let mut m = Manifest {
@@ -93,7 +93,7 @@ fn empty_interaction_manifest() -> Manifest {
 
 /// Build a minimal valid manifest for a component that declares no
 /// propose-specific helpers. The `state_propose` field is set so
-/// `validate_state_propose_manifest` does not short-circuit.
+/// `validate_manifest` does not short-circuit.
 fn empty_manifest() -> Manifest {
     let mut m = Manifest {
         app: AppSection {

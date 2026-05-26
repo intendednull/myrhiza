@@ -1,4 +1,4 @@
-//! Capability gating logic for state-apply.
+//! Capability gating logic.
 //!
 //! Per architecture.md §3.5: state-apply may bind ONLY the
 //! deterministic helper set. Per capabilities.md §7.2: the kernel
@@ -6,6 +6,15 @@
 //! For state-apply specifically, "what the app declares" must be a
 //! subset of the deterministic helper set — declaring any
 //! non-deterministic import is a hard error regardless of kernel-major.
+//!
+//! In v1, state-propose and interaction share the same callable-function
+//! ambient set as state-apply (the deterministic helpers). The three
+//! profiles diverge only in (a) prewalk's `host-ui-surfaces@1.0.0`
+//! types-only allowlist (interaction only), (b) float-ban gating
+//! (state-apply only), (c) fuel budget — none of which are this
+//! module's concern. The functions here therefore take a [`Profile`]
+//! parameter but in v1 do not actually branch on it; the parameter is
+//! the documented extension point for when the surfaces diverge.
 
 use std::collections::BTreeSet;
 
@@ -13,18 +22,32 @@ use myrhiza_backend::BackendError;
 use myrhiza_manifest::Manifest;
 use myrhiza_manifest::vocabulary::{CapabilityClass, classify};
 
-/// The state-apply ambient set is the v1 subset of the deterministic
-/// helper set per architecture.md §3.5.
+use crate::Profile;
+
+/// The ambient host-callable-function set for `profile`.
+///
+/// In v1 all three profiles share the same callable-function ambient
+/// set: the deterministic-helper subset of the vocabulary per
+/// architecture.md §3.5 / spec §3.1.
 ///
 /// `host.install-key` and `host.verify-payload-mac` are vocabulary-
 /// registered authored capabilities (still `DeterministicHelper`
 /// classified) but are intentionally NOT in the v1 ambient set: their
 /// signatures take a `key-handle` resource whose infrastructure lands
 /// in plan B (per determinism.md §5.1 v1 deferral). Manifests that
-/// declare them for state-apply are rejected at install with
+/// declare them are rejected at install with
 /// [`BackendError::DeferredToPlanB`].
+///
+/// The `host-ui-surfaces@1.0.0` instance carries only type definitions
+/// and is not a callable-function import — the prewalk handles its
+/// types-only audit separately (per [`Profile::allow_ui_surfaces`]).
 #[must_use]
-pub fn state_apply_ambient_set() -> BTreeSet<String> {
+pub fn ambient_set(profile: Profile) -> BTreeSet<String> {
+    // v1: all three profiles share the deterministic-helper set. A
+    // future profile-divergent ambient (e.g. propose getting
+    // `host.author-event` when the author-event resource lands) would
+    // match on `profile` here.
+    let _ = profile;
     let mut s = BTreeSet::new();
     s.insert("host.hash".into());
     s.insert("host.verify-signature".into());
@@ -34,13 +57,13 @@ pub fn state_apply_ambient_set() -> BTreeSet<String> {
 }
 
 /// Capabilities deferred to plan B — registered in the vocabulary as
-/// `DeterministicHelper` but not bindable in v1 state-apply. Declared
-/// here so `validate_state_apply_manifest` can short-circuit before
-/// the class check rejects them as "non-deterministic".
+/// `DeterministicHelper` but not bindable in v1. Declared here so
+/// [`validate_manifest`] can short-circuit before the class check
+/// rejects them as "non-deterministic".
 const DEFERRED_TO_PLAN_B: &[&str] = &["host.install-key", "host.verify-payload-mac"];
 
 /// Validate that the manifest's declared imports are a subset of the
-/// state-apply ambient set. Any declared host-imports row that is not
+/// `profile`'s ambient set. Any declared host-imports row that is not
 /// a `DeterministicHelper` rejects.
 ///
 /// `host.install-key` and `host.verify-payload-mac` are vocabulary-
@@ -53,27 +76,93 @@ const DEFERRED_TO_PLAN_B: &[&str] = &["host.install-key", "host.verify-payload-m
 /// # Errors
 ///
 /// Returns [`BackendError::DeferredToPlanB`] if a declared capability
-/// is registered but not bindable in v1 state-apply. Returns
+/// is registered but not bindable in v1. Returns
 /// [`BackendError::UnknownImport`] if a declared capability is not in
 /// the v1 vocabulary. Returns [`BackendError::UnauthorizedImport`] if a
 /// declared capability is in the vocabulary but not part of the
-/// state-apply ambient set (i.e. any non-deterministic import).
-pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
-    validate_against_ambient(m, &state_apply_ambient_set())
+/// `profile`'s ambient set (i.e. any non-deterministic import).
+pub fn validate_manifest(m: &Manifest, profile: Profile) -> Result<(), BackendError> {
+    let ambient = ambient_set(profile);
+    for (cap, &enabled) in &m.capabilities.host_imports {
+        if !enabled {
+            continue;
+        }
+        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
+            return Err(BackendError::DeferredToPlanB(cap.clone()));
+        }
+        match classify(cap) {
+            None => return Err(BackendError::UnknownImport(cap.clone())),
+            Some(CapabilityClass::DeterministicHelper) => {}
+            Some(_) => {
+                return Err(BackendError::UnauthorizedImport(cap.clone()));
+            }
+        }
+    }
+    for (cap, &enabled) in &m.capabilities.deterministic_helpers {
+        if !enabled {
+            continue;
+        }
+        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
+            return Err(BackendError::DeferredToPlanB(cap.clone()));
+        }
+        if !ambient.contains(cap) {
+            return Err(BackendError::UnknownImport(cap.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Compute the set of host imports that should be bound on `profile`'s
+/// linker for `manifest`. Returns the manifest-declared subset of the
+/// profile's ambient set. Imports outside this set are NOT bound, so a
+/// component attempting to import them fails to link.
+///
+/// In v1, this is profile-invariant (all three profiles share the
+/// deterministic-helper ambient set). The `profile` parameter is the
+/// documented extension point for when ambient sets diverge.
+#[must_use]
+pub fn bound_imports(m: &Manifest, profile: Profile) -> BTreeSet<String> {
+    let ambient = ambient_set(profile);
+    let mut bound = BTreeSet::new();
+
+    // Declared deterministic_helpers entries are merged in.
+    for (cap, &enabled) in &m.capabilities.deterministic_helpers {
+        if enabled && ambient.contains(cap) {
+            bound.insert(cap.clone());
+        }
+    }
+    // Declared host_imports entries (validated DeterministicHelper) too.
+    for (cap, &enabled) in &m.capabilities.host_imports {
+        if enabled && ambient.contains(cap) {
+            bound.insert(cap.clone());
+        }
+    }
+
+    // host.log is always available (output-only sink per
+    // determinism.md §5.1; no peer-divergence risk).
+    bound.insert("host.log".into());
+
+    bound
 }
 
 /// Register host functions on the Wasmtime linker for the imports
 /// listed in `bound_imports`. Imports not listed are not registered;
-/// a state-apply component attempting to import them will fail to
-/// link (this is the load-bearing gating mechanic for plan A's
-/// acceptance criterion #5 per capabilities.md §7.2).
+/// a component attempting to import them will fail to link (this is
+/// the load-bearing gating mechanic for plan A's acceptance criterion
+/// #5 per capabilities.md §7.2).
+///
+/// In v1 the wiring is profile-invariant: all three profiles bind the
+/// same deterministic-helper instance. The `profile` parameter is the
+/// documented extension point for when wiring diverges. For interaction
+/// the `host-ui-surfaces@1.0.0` instance is types-only — no `func_wrap`
+/// calls are needed; bindgen treats types-only imports as auto-satisfied.
 ///
 /// `host.install-key` and `host.verify-payload-mac` are intentionally
 /// not bound here — they take a `key-handle` resource whose
 /// infrastructure lands in plan B. They are also rejected up-front by
-/// [`validate_state_apply_manifest`] with [`BackendError::DeferredToPlanB`]
-/// when declared in a manifest, so a state-apply component that imports
-/// them never reaches link time on the v1 happy path.
+/// [`validate_manifest`] with [`BackendError::DeferredToPlanB`] when
+/// declared in a manifest, so a v1 component that imports them never
+/// reaches link time on the happy path.
 ///
 /// # Errors
 ///
@@ -81,14 +170,20 @@ pub fn validate_state_apply_manifest(m: &Manifest) -> Result<(), BackendError> {
 /// `instance(...)` lookup or `func_wrap(...)` registration. This
 /// surface should not fail in practice; it would indicate a bindgen
 /// / WIT mismatch at workspace build time.
-pub fn wire_state_apply_linker(
+pub fn wire_linker(
     linker: &mut wasmtime::component::Linker<crate::engine::HostState>,
     bound_imports: &BTreeSet<String>,
+    profile: Profile,
 ) -> Result<(), BackendError> {
     use crate::engine::myrhiza::kernel::types::{Hlc as WitHlc, LogLevel as WitLogLevel};
     use crate::helpers::{
         LogLevel, host_hash_impl, host_now_hlc_from_event_impl, host_verify_signature_impl,
     };
+
+    // v1: identical wiring for all three profiles. The match arm
+    // exists to keep the parameter live (and to be the place where a
+    // future profile-specific instance lands).
+    let _ = profile;
 
     // Per the bindgen-generated `add_to_linker` for the
     // `host-deterministic` interface the WIT instance name is
@@ -142,15 +237,15 @@ pub fn wire_state_apply_linker(
             })?;
     }
 
-    // host.log is always available to state-apply per
-    // determinism.md §5.1 (output-only sink; not part of state-digest).
-    // The bound set computed by `state_apply_bound_imports` always
-    // injects "host.log"; the assert locks that invariant so a future
-    // refactor that drops the unconditional insertion fails fast in
-    // debug builds rather than silently regressing always-on logging.
+    // host.log is always available per determinism.md §5.1 (output-only
+    // sink; not part of state-digest). The bound set computed by
+    // `bound_imports` always injects "host.log"; the assert locks that
+    // invariant so a future refactor that drops the unconditional
+    // insertion fails fast in debug builds rather than silently
+    // regressing always-on logging.
     debug_assert!(
         bound_imports.contains("host.log"),
-        "host.log must be in bound_imports — state_apply_bound_imports always injects it",
+        "host.log must be in bound_imports — bound_imports always injects it",
     );
     iface
         .func_wrap(
@@ -174,171 +269,6 @@ pub fn wire_state_apply_linker(
     Ok(())
 }
 
-/// Compute the set of host imports that should be bound on the
-/// state-apply linker for `manifest`. Returns the manifest-declared
-/// subset of the ambient set. Imports outside this set are NOT bound,
-/// so a component attempting to import them fails to link.
-#[must_use]
-pub fn state_apply_bound_imports(m: &Manifest) -> BTreeSet<String> {
-    let ambient = state_apply_ambient_set();
-    let mut bound = BTreeSet::new();
-
-    // Declared deterministic_helpers entries are merged in.
-    for (cap, &enabled) in &m.capabilities.deterministic_helpers {
-        if enabled && ambient.contains(cap) {
-            bound.insert(cap.clone());
-        }
-    }
-    // Declared host_imports entries (validated DeterministicHelper) too.
-    for (cap, &enabled) in &m.capabilities.host_imports {
-        if enabled && ambient.contains(cap) {
-            bound.insert(cap.clone());
-        }
-    }
-
-    // host.log is always available to state-apply (output-only sink
-    // per determinism.md §5.1; no peer-divergence risk).
-    bound.insert("host.log".into());
-
-    bound
-}
-
-// ── state-propose gating ─────────────────────────────────────────────────────
-
-/// The state-propose ambient set is identical to state-apply's v1 ambient
-/// set per spec §3.1: deterministic helpers only. Non-deterministic and
-/// async helpers declared in the state-propose WIT are unbound in v1;
-/// a component importing them fails at prewalk with `UnauthorizedImport`.
-#[must_use]
-pub fn state_propose_ambient_set() -> BTreeSet<String> {
-    state_apply_ambient_set()
-}
-
-/// Compute the set of host imports that should be bound on the
-/// state-propose linker for `manifest`. Mirrors `state_apply_bound_imports`.
-#[must_use]
-pub fn state_propose_bound_imports(m: &Manifest) -> BTreeSet<String> {
-    state_apply_bound_imports(m)
-}
-
-/// Validate that the manifest's declared imports are a subset of the
-/// state-propose ambient set. Structurally identical to
-/// `validate_state_apply_manifest` because the v1 ambient sets are the same.
-///
-/// # Errors
-///
-/// Returns [`BackendError::DeferredToPlanB`] if a declared capability is
-/// registered but not bindable in v1. Returns [`BackendError::UnknownImport`]
-/// if a declared capability is not in the v1 vocabulary. Returns
-/// [`BackendError::UnauthorizedImport`] if a declared capability is in the
-/// vocabulary but not part of the state-propose ambient set.
-pub fn validate_state_propose_manifest(m: &Manifest) -> Result<(), BackendError> {
-    validate_against_ambient(m, &state_propose_ambient_set())
-}
-
-// ── interaction gating ───────────────────────────────────────────────────────
-
-/// The interaction ambient set is the state-propose ambient set plus
-/// `host-ui-surfaces@1.0.0` (types-only — no callable functions) per
-/// spec §3.1. Non-deterministic and async helpers are unbound in v1.
-#[must_use]
-pub fn interaction_ambient_set() -> BTreeSet<String> {
-    // For v1 the callable-function ambient set is identical: the
-    // deterministic helpers. `host-ui-surfaces` carries only type
-    // definitions and is not a callable-function import — the prewalk
-    // handles its types-only audit separately.
-    state_apply_ambient_set()
-}
-
-/// Compute the set of host imports that should be bound on the interaction
-/// linker for `manifest`. Same callable-function set as state-apply/propose.
-#[must_use]
-pub fn interaction_bound_imports(m: &Manifest) -> BTreeSet<String> {
-    state_apply_bound_imports(m)
-}
-
-/// Validate that the manifest's declared imports are a subset of the
-/// interaction ambient set. For v1, the callable-function ambient set is
-/// identical to state-apply's, so this delegates to the shared helper.
-///
-/// # Errors
-///
-/// Returns [`BackendError::DeferredToPlanB`] if a declared capability is
-/// registered but not bindable in v1. Returns [`BackendError::UnknownImport`]
-/// if a declared capability is not in the v1 vocabulary. Returns
-/// [`BackendError::UnauthorizedImport`] if a declared capability is in the
-/// vocabulary but not part of the interaction ambient set.
-pub fn validate_interaction_manifest(m: &Manifest) -> Result<(), BackendError> {
-    validate_against_ambient(m, &interaction_ambient_set())
-}
-
-/// Register host functions on the Wasmtime linker for state-propose.
-/// Wires the same deterministic helpers as state-apply; state-propose is
-/// a non-deterministic profile so the float-ban is not applied, but the
-/// callable host surface is identical in v1.
-///
-/// # Errors
-///
-/// Returns [`BackendError::Instantiation`] if the linker rejects an
-/// `instance(...)` lookup or `func_wrap(...)` registration.
-pub fn wire_state_propose_linker(
-    linker: &mut wasmtime::component::Linker<crate::engine::HostState>,
-    bound_imports: &BTreeSet<String>,
-) -> Result<(), BackendError> {
-    wire_state_apply_linker(linker, bound_imports)
-}
-
-/// Register host functions on the Wasmtime linker for interaction.
-/// Wires the same deterministic helpers as state-apply. The
-/// `host-ui-surfaces@1.0.0` instance is types-only — no `func_wrap` calls
-/// are needed; bindgen treats types-only imports as auto-satisfied.
-///
-/// # Errors
-///
-/// Returns [`BackendError::Instantiation`] if the linker rejects an
-/// `instance(...)` lookup or `func_wrap(...)` registration.
-pub fn wire_interaction_linker(
-    linker: &mut wasmtime::component::Linker<crate::engine::HostState>,
-    bound_imports: &BTreeSet<String>,
-) -> Result<(), BackendError> {
-    wire_state_apply_linker(linker, bound_imports)
-}
-
-// ── shared validation helper ─────────────────────────────────────────────────
-
-/// Validate that `manifest`'s declared imports are a subset of `ambient`.
-/// Factored out so state-apply, state-propose, and interaction validation
-/// are mechanically identical — each just passes its profile's ambient set.
-fn validate_against_ambient(m: &Manifest, ambient: &BTreeSet<String>) -> Result<(), BackendError> {
-    for (cap, &enabled) in &m.capabilities.host_imports {
-        if !enabled {
-            continue;
-        }
-        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
-            return Err(BackendError::DeferredToPlanB(cap.clone()));
-        }
-        match classify(cap) {
-            None => return Err(BackendError::UnknownImport(cap.clone())),
-            Some(CapabilityClass::DeterministicHelper) => {}
-            Some(_) => {
-                return Err(BackendError::UnauthorizedImport(cap.clone()));
-            }
-        }
-    }
-    for (cap, &enabled) in &m.capabilities.deterministic_helpers {
-        if !enabled {
-            continue;
-        }
-        if DEFERRED_TO_PLAN_B.contains(&cap.as_str()) {
-            return Err(BackendError::DeferredToPlanB(cap.clone()));
-        }
-        if !ambient.contains(cap) {
-            return Err(BackendError::UnknownImport(cap.clone()));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -354,8 +284,8 @@ mod tests {
     /// the state-propose WIT are NOT in the ambient set in v1.
     #[test]
     fn state_propose_ambient_set_contains_deterministic_helpers_only() {
-        let propose_ambient = state_propose_ambient_set();
-        let apply_ambient = state_apply_ambient_set();
+        let propose_ambient = ambient_set(Profile::StatePropose);
+        let apply_ambient = ambient_set(Profile::StateApply);
         assert_eq!(
             propose_ambient, apply_ambient,
             "v1 state-propose ambient set must equal state-apply ambient set"
@@ -387,7 +317,7 @@ mod tests {
     ///
     /// A manifest declaring `host.author-event` (classified `HostImport`,
     /// non-deterministic) under `host_imports` must be rejected by
-    /// `validate_state_propose_manifest` with `UnauthorizedImport`.
+    /// `validate_manifest(_, StatePropose)` with `UnauthorizedImport`.
     /// Verifies the gating fires on the propose path, not just state-apply.
     #[test]
     fn manifest_with_apply_only_capability_declared_for_propose_rejects() {
@@ -404,7 +334,7 @@ mod tests {
         m.capabilities
             .host_imports
             .insert("host.author-event".into(), true);
-        let res = validate_state_propose_manifest(&m);
+        let res = validate_manifest(&m, Profile::StatePropose);
         assert!(
             matches!(res, Err(BackendError::UnauthorizedImport(_))),
             "non-det host.author-event must be rejected as unauthorized for propose: {res:?}"
@@ -423,7 +353,7 @@ mod tests {
     /// that capabilities.md §7.1 builds on.
     #[test]
     fn state_apply_ambient_is_only_deterministic_helpers() {
-        let ambient = state_apply_ambient_set();
+        let ambient = ambient_set(Profile::StateApply);
         for cap in &ambient {
             let class = myrhiza_manifest::vocabulary::classify(cap)
                 .expect("ambient cap must be in vocabulary");
@@ -490,7 +420,7 @@ mod tests {
         m.capabilities
             .host_imports
             .insert("host.broadcast".into(), true);
-        let res = validate_state_apply_manifest(&m);
+        let res = validate_manifest(&m, Profile::StateApply);
         assert!(
             matches!(res, Err(BackendError::UnauthorizedImport(_))),
             "non-det import must be rejected as unauthorized: {res:?}"
@@ -503,7 +433,7 @@ mod tests {
         m.capabilities
             .host_imports
             .insert("host.install-key".into(), true);
-        let res = validate_state_apply_manifest(&m);
+        let res = validate_manifest(&m, Profile::StateApply);
         match res {
             Err(BackendError::DeferredToPlanB(name)) => {
                 assert_eq!(name, "host.install-key");
@@ -518,7 +448,7 @@ mod tests {
         m.capabilities
             .host_imports
             .insert("host.verify-payload-mac".into(), true);
-        let res = validate_state_apply_manifest(&m);
+        let res = validate_manifest(&m, Profile::StateApply);
         match res {
             Err(BackendError::DeferredToPlanB(name)) => {
                 assert_eq!(name, "host.verify-payload-mac");
@@ -537,7 +467,7 @@ mod tests {
         m.capabilities
             .deterministic_helpers
             .insert("host.install-key".into(), true);
-        let res = validate_state_apply_manifest(&m);
+        let res = validate_manifest(&m, Profile::StateApply);
         assert!(
             matches!(&res, Err(BackendError::DeferredToPlanB(name)) if name == "host.install-key"),
             "deterministic_helpers declaration must also defer: {res:?}"
@@ -553,15 +483,15 @@ mod tests {
         m.capabilities
             .deterministic_helpers
             .insert("host.log".into(), true);
-        validate_state_apply_manifest(&m).expect("helper-set-only must validate");
+        validate_manifest(&m, Profile::StateApply).expect("helper-set-only must validate");
     }
 
     /// Covers: determinism.md §5.1, capabilities.md §7.1
     ///
     /// `host.log` is always-on for state-apply per determinism.md §5.1
     /// — manifests need not (and historically did not) declare it. The
-    /// `state_apply_bound_imports` function unconditionally inserts it
-    /// even when the manifest omits both `host_imports` and
+    /// `bound_imports` function unconditionally inserts it even when
+    /// the manifest omits both `host_imports` and
     /// `deterministic_helpers` entries for it. This test locks that
     /// behavior so a future refactor that drops the unconditional
     /// insertion (or makes log declaration mandatory) fails fast.
@@ -577,7 +507,7 @@ mod tests {
                 .contains_key("host.log")
         );
 
-        let bound = state_apply_bound_imports(&m);
+        let bound = bound_imports(&m, Profile::StateApply);
         assert!(
             bound.contains("host.log"),
             "host.log must be bound even when manifest omits it (always-on per §5.1): {bound:?}"
@@ -650,10 +580,10 @@ mod tests_wire {
         let mut bound = BTreeSet::new();
         bound.insert("host.hash".into());
         bound.insert("host.log".into());
-        // Smoke check — `wire_state_apply_linker` accepts the call
-        // without erroring. Component-level link failure of an
-        // unbound import is exercised in the e2e test (Task 37+).
-        wire_state_apply_linker(&mut linker, &bound).expect("wire OK");
+        // Smoke check — `wire_linker` accepts the call without
+        // erroring. Component-level link failure of an unbound import
+        // is exercised in the e2e test (Task 37+).
+        wire_linker(&mut linker, &bound, Profile::StateApply).expect("wire OK");
     }
 
     #[test]
@@ -665,20 +595,20 @@ mod tests_wire {
         let mut linker: wasmtime::component::Linker<HostState> =
             wasmtime::component::Linker::new(&engine);
         // host.install-key and host.verify-payload-mac are not bound
-        // by wire_state_apply_linker (plan B), so excluding them.
+        // by wire_linker (plan B), so excluding them.
         let mut bound = BTreeSet::new();
         bound.insert("host.hash".into());
         bound.insert("host.verify-signature".into());
         bound.insert("host.now-hlc-from-event".into());
         bound.insert("host.log".into());
-        wire_state_apply_linker(&mut linker, &bound).expect("wire OK");
+        wire_linker(&mut linker, &bound, Profile::StateApply).expect("wire OK");
     }
 
     // ── B-7.2.3 — propose/interaction linker smoke tests ─────────────────────
 
-    /// Covers spec §3.1: `wire_state_propose_linker` accepts the same
-    /// bound set as state-apply. The two linkers share the deterministic
-    /// helper set; the propose linker delegates to `wire_state_apply_linker`.
+    /// Covers spec §3.1: `wire_linker(_, _, Profile::StatePropose)` accepts
+    /// the same bound set as state-apply. The two linkers share the
+    /// deterministic helper set in v1.
     #[test]
     fn wire_state_propose_linker_accepts_deterministic_set() {
         let mut config = wasmtime::Config::new();
@@ -690,12 +620,13 @@ mod tests_wire {
         let mut bound = BTreeSet::new();
         bound.insert("host.hash".into());
         bound.insert("host.log".into());
-        wire_state_propose_linker(&mut linker, &bound).expect("wire propose OK");
+        wire_linker(&mut linker, &bound, Profile::StatePropose).expect("wire propose OK");
     }
 
-    /// Covers spec §3.1: `wire_interaction_linker` accepts the deterministic
-    /// set. `host-ui-surfaces@1.0.0` is types-only — no `func_wrap` calls
-    /// are registered for it, so the linker wiring is identical to propose.
+    /// Covers spec §3.1: `wire_linker(_, _, Profile::Interaction)` accepts
+    /// the deterministic set. `host-ui-surfaces@1.0.0` is types-only — no
+    /// `func_wrap` calls are registered for it, so the linker wiring is
+    /// identical to propose.
     #[test]
     fn wire_interaction_linker_accepts_deterministic_set() {
         let mut config = wasmtime::Config::new();
@@ -707,13 +638,13 @@ mod tests_wire {
         let mut bound = BTreeSet::new();
         bound.insert("host.hash".into());
         bound.insert("host.log".into());
-        wire_interaction_linker(&mut linker, &bound).expect("wire interaction OK");
+        wire_linker(&mut linker, &bound, Profile::Interaction).expect("wire interaction OK");
     }
 
     /// Covers spec §3.1: `HOST_UI_SURFACES_INSTANCE` constant matches the
     /// WIT package/interface name `myrhiza:kernel/host-ui-surfaces@1.0.0`.
-    /// The prewalk in `prewalk_interaction_imports` matches by string; this
-    /// test locks the constant so a typo surfaces immediately.
+    /// The prewalk matches by string; this test locks the constant so a
+    /// typo surfaces immediately.
     #[test]
     fn host_ui_surfaces_instance_constant_matches_wit_name() {
         assert_eq!(

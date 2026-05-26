@@ -412,7 +412,7 @@ fn float_banned_fixture_rejected_at_install() {
 /// linker refuses to bind. This test covers the manifest-side gate:
 /// the counter fixture itself does not import `host.broadcast`, but
 /// declaring it in `capabilities.host_imports` is still rejected
-/// up-front by [`validate_state_apply_manifest`] before the linker
+/// up-front by `validate_manifest` before the linker
 /// runs. Bundle signing is intact (signature verifies) — the failure
 /// surfaces from the backend's manifest gating step.
 #[test]
@@ -444,7 +444,7 @@ fn manifest_declaring_non_deterministic_cap_rejects_at_install() {
     };
 
     // `host.broadcast` is `HostImport`-classified in the v1 vocabulary,
-    // so `validate_state_apply_manifest` rejects it as
+    // so `validate_manifest` rejects it as
     // `UnauthorizedImport`. Plan-B-deferred caps (e.g. `host.install-key`)
     // would surface as `DeferredToPlanB` instead — both arms are
     // load-bearing for §15.1 #5 manifest gating, so we accept either.

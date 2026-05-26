@@ -16,22 +16,22 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/tests/profile_instantiation.rs:204
 
 ## architecture.md §3.5
-- crates/wasmtime-backend/src/gating.rs:350
-- crates/wasmtime-backend/src/gating.rs:386
+- crates/wasmtime-backend/src/gating.rs:280
+- crates/wasmtime-backend/src/gating.rs:316
 - crates/wasmtime-backend/tests/wit_freeze.rs:50
 - crates/wasmtime-backend/tests/wit_freeze.rs:62
 - crates/wasmtime-backend/tests/wit_freeze.rs:68
 - crates/wasmtime-backend/tests/wit_freeze.rs:74
 
 ## capabilities.md §7.1
-- crates/wasmtime-backend/src/gating.rs:350
-- crates/wasmtime-backend/src/gating.rs:416
-- crates/wasmtime-backend/src/gating.rs:559
+- crates/wasmtime-backend/src/gating.rs:280
+- crates/wasmtime-backend/src/gating.rs:346
+- crates/wasmtime-backend/src/gating.rs:489
 
 ## capabilities.md §7.2
 - crates/kernel/tests/acceptance.rs:190
 - crates/kernel/tests/acceptance.rs:404
-- crates/wasmtime-backend/src/gating.rs:386
+- crates/wasmtime-backend/src/gating.rs:316
 
 ## convergence.md §4
 - crates/kernel/src/state_apply.rs:263
@@ -174,8 +174,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## determinism.md §5.1
 - crates/kernel/src/state_apply.rs:263
-- crates/wasmtime-backend/src/gating.rs:416
-- crates/wasmtime-backend/src/gating.rs:559
+- crates/wasmtime-backend/src/gating.rs:346
+- crates/wasmtime-backend/src/gating.rs:489
 
 ## determinism.md §5.2
 - crates/kernel/tests/acceptance.rs:371
