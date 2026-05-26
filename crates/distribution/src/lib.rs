@@ -33,4 +33,4 @@ pub use revocation::{
 };
 
 #[cfg(feature = "network-iroh")]
-pub use blobs::{BundleDistribution, PublishError};
+pub use blobs::{BundleDistribution, FetchError, MaterializedBundle, PublishError};

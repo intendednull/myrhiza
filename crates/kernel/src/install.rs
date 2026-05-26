@@ -14,8 +14,6 @@
 //! of the artifact post-signing fails as a signature error rather
 //! than a separate content-hash mismatch.
 
-use std::path::PathBuf;
-
 use bincode::Options;
 use myrhiza_manifest::{
     ParseError, SignatureError, bundle_content_hash,
@@ -23,7 +21,7 @@ use myrhiza_manifest::{
     schema::{Manifest, Signature},
     verify_signature,
 };
-use myrhiza_types::{EventHash, canonical_bincode};
+use myrhiza_types::{BundleAddress, EventHash, canonical_bincode};
 use thiserror::Error;
 
 /// The kernel-major value this build of the runtime implements. The
@@ -31,44 +29,6 @@ use thiserror::Error;
 /// distribution.md §10.5: a major-bump is a hard ABI change, not a
 /// soft kernel-minor extension. Plan A pins `KERNEL_MAJOR_V1 = 1`.
 const KERNEL_MAJOR_V1: u32 = 1;
-
-/// Locator for a bundle.
-///
-/// Two variants per spec §3.5:
-///
-/// - `Disk` — bundle is already materialized in a local directory.
-///   Used by tests, the CLI dev harness, and (post-fetch) the
-///   production path after `BundleDistribution::fetch` extracts an
-///   iroh-blob bundle into a tempdir.
-/// - `IrohBlob` — production fetch path. Carries the iroh-blobs
-///   hash of the canonical-bincode-encoded manifest. The embedder
-///   must materialize this into a `Disk` variant via
-///   `BundleDistribution::fetch` before calling [`InstallFlow::load`].
-#[derive(Debug, Clone)]
-pub enum BundleAddress {
-    /// On-disk bundle. The `bundle_dir` contains `manifest.bincode`
-    /// and the `components/` artifact tree; `manifest_path` is the
-    /// path of the manifest file (canonical-bincode-encoded) relative
-    /// to `bundle_dir`. v1 file naming is `manifest.bincode`. The TOML
-    /// human-readable form is canonicalized at publish time; the
-    /// kernel only consumes the canonical bytes.
-    Disk {
-        /// Root of the bundle directory.
-        bundle_dir: PathBuf,
-        /// Manifest path relative to `bundle_dir`.
-        manifest_path: PathBuf,
-    },
-    /// Iroh-blob bundle identified by the BLAKE3 hash of its
-    /// canonical-bincode-encoded manifest. The kernel does not fetch
-    /// directly — the embedder calls `BundleDistribution::fetch`
-    /// (which lives outside this crate) to materialize the blob tree
-    /// into a tempdir and produce a `Disk` variant that
-    /// [`InstallFlow::load`] consumes.
-    IrohBlob {
-        /// Manifest hash — the identifier the author shares out of band.
-        manifest_hash: myrhiza_types::BlobHash,
-    },
-}
 
 /// Errors returned by [`InstallFlow::load`].
 #[derive(Debug, Error)]

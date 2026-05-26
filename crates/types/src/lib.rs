@@ -11,6 +11,9 @@ pub mod serde_helpers;
 pub mod hash;
 pub use hash::{BlobHash, BundleHash, EventHash};
 
+pub mod bundle_address;
+pub use bundle_address::BundleAddress;
+
 pub mod hlc;
 pub use hlc::Hlc;
 
