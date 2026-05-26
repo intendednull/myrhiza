@@ -116,7 +116,7 @@ fn read_fixture(name: &str) -> Vec<u8> {
 /// docs/specs/2026-05-26-b-8-sdk-design.md §3.3). Returns the
 /// [`TestBundle`] (with on-disk artifacts retained via the inner
 /// [`TempDir`]) and its [`BundleAddress`] (suitable for
-/// [`myrhiza_kernel::InstallFlow::load`]).
+/// [`myrhiza_kernel::install::load`]).
 ///
 /// Requires `just build-fixtures` to have produced the wasm artifact.
 /// Used by both plan-A acceptance tests and plan-B-1 convergence tests.
@@ -151,7 +151,7 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
 /// reproducibly-built fixture at `tests/fixtures/built/echo-state-apply.wasm`.
 /// Returns the [`TestBundle`] (with on-disk artifacts retained via the
 /// inner [`TempDir`]) and its [`BundleAddress`] (suitable for
-/// [`myrhiza_kernel::InstallFlow::load`]).
+/// [`myrhiza_kernel::install::load`]).
 ///
 /// Requires `just build-fixtures` to have produced the wasm artifact.
 /// Used by plan-B-5 coexistence tests (two distinct WASM state-apply
@@ -291,7 +291,7 @@ pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddr
 /// reproducibly-built fixture at `tests/fixtures/built/poll-state-apply.wasm`.
 /// Returns the [`TestBundle`] (with on-disk artifacts retained via the
 /// inner [`TempDir`]) and its [`BundleAddress`] (suitable for
-/// [`myrhiza_kernel::InstallFlow::load`]).
+/// [`myrhiza_kernel::install::load`]).
 ///
 /// Requires `just build-fixtures` to have produced the wasm artifact.
 /// Used by plan-B-6 poll-app state-tier + kernel-tier tests.

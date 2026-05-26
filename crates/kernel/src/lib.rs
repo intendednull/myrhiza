@@ -10,7 +10,7 @@
 #![deny(missing_docs)]
 
 pub mod install;
-pub use install::{InstallError, InstallFlow, LoadedBundle};
+pub use install::{InstallError, LoadedBundle};
 
 // `BundleAddress` moved to `crates/types/` in B-10 T8 per spec §4.6
 // declared dep direction (so `crates/distribution::BundleDistribution::fetch`
@@ -51,7 +51,7 @@ pub use interaction::{InteractionError, InteractionHandle};
 // Re-export the `BundleDistribution::fetch` API surface so embedders
 // (including the CLI) reach iroh-blob bundle materialization through
 // `myrhiza_kernel::...`. The kernel itself does not call `fetch` — the
-// embedder threads a `MaterializedBundle` into `InstallFlow::load`
+// embedder threads a `MaterializedBundle` into `install::load`
 // per spec §3.5 (the kernel's role is to dispatch on `BundleAddress`
 // and run the existing disk-load path).
 #[cfg(feature = "network-iroh")]

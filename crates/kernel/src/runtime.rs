@@ -608,11 +608,7 @@ impl Runtime {
         let (digest_watch_tx, digest_watch) = watch::channel(Vec::<u8>::new());
         let (halt_watch_tx, halt_watch) = watch::channel(None::<String>);
 
-        let rate_limit = DriftRateLimit::new(
-            std::time::Instant::now(),
-            cfg.drift_min_interval,
-            cfg.drift_daily_cap,
-        );
+        let rate_limit = DriftRateLimit::new(cfg.drift_min_interval, cfg.drift_daily_cap);
         let dag = EventDag::new(topic, app_bundle_hash, topic_name.clone());
         let pending = PendingBuffer::new(cfg.pending_cfg.clone());
 

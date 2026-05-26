@@ -49,15 +49,8 @@ pub struct DriftRateLimit {
 
 impl DriftRateLimit {
     /// Construct a rate-limit with the given minimum interval and daily cap.
-    ///
-    /// `now` is accepted for symmetry with [`try_emit`] — it allows callers
-    /// to inject a deterministic clock reading rather than the previous
-    /// implementation's hidden `Instant::now()` (review-finding N-14).
     #[must_use]
-    pub fn new(now: Instant, min_interval: Duration, daily_cap: u32) -> Self {
-        // `now` is accepted for symmetry; the sliding-window state is
-        // entirely event-driven (eviction happens on each `try_emit`).
-        let _ = now;
+    pub fn new(min_interval: Duration, daily_cap: u32) -> Self {
         Self {
             min_interval,
             daily_cap,
@@ -189,8 +182,7 @@ mod tests {
 
     #[test]
     fn rate_limit_blocks_on_min_interval() {
-        let now = Instant::now();
-        let mut rl = DriftRateLimit::new(now, Duration::from_mins(1), 1024);
+        let mut rl = DriftRateLimit::new(Duration::from_mins(1), 1024);
         let t0 = Instant::now();
         rl.try_emit(t0).expect("first ok");
         let r = rl.try_emit(t0 + Duration::from_secs(30));
@@ -199,8 +191,7 @@ mod tests {
 
     #[test]
     fn rate_limit_blocks_on_daily_cap() {
-        let now = Instant::now();
-        let mut rl = DriftRateLimit::new(now, Duration::from_secs(0), 2);
+        let mut rl = DriftRateLimit::new(Duration::from_secs(0), 2);
         let t0 = Instant::now();
         rl.try_emit(t0).expect("1");
         rl.try_emit(t0).expect("2");
@@ -218,7 +209,6 @@ mod tests {
     #[test]
     fn daily_cap_does_not_admit_double_burst_across_rollover() {
         let mut rl = DriftRateLimit::new(
-            Instant::now(),
             Duration::from_mins(1), // min_interval
             4,                      // daily_cap
         );

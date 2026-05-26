@@ -10,10 +10,10 @@
 //!   hash of the canonical-bincode-encoded manifest. The embedder
 //!   must materialize this into a `Disk` variant via
 //!   `BundleDistribution::fetch` (in `crates/distribution`) before
-//!   calling `myrhiza_kernel::InstallFlow::load`.
+//!   calling `myrhiza_kernel::install::load`.
 //!
 //! Lives in `crates/types/` (a leaf crate) so both `crates/kernel/`
-//! (which consumes `BundleAddress` in `InstallFlow::load`) and
+//! (which consumes `BundleAddress` in `install::load`) and
 //! `crates/distribution/` (which constructs `BundleAddress::Disk` as
 //! the output of `BundleDistribution::fetch`) can reach it without
 //! inducing a circular dep. The dep direction is
@@ -50,7 +50,7 @@ pub enum BundleAddress {
     /// directly — the embedder calls `BundleDistribution::fetch`
     /// (which lives in `crates/distribution`) to materialize the blob
     /// tree into a tempdir and produce a `Disk` variant that
-    /// `myrhiza_kernel::InstallFlow::load` consumes.
+    /// `myrhiza_kernel::install::load` consumes.
     IrohBlob {
         /// Manifest hash — the identifier the author shares out of band.
         manifest_hash: BlobHash,

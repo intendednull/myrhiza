@@ -345,8 +345,8 @@ async fn equivocating_author_chain_first_seen_wins() {
     let kp = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
     let builder = EventBuilder::new(&kp);
 
-    let g1 = builder.genesis(&bundle_hash, seed, "main", vec![0xAA]);
-    let g2 = builder.genesis(&bundle_hash, seed, "main", vec![0xBB]);
+    let g1 = builder.genesis(seed, vec![0xAA]);
+    let g2 = builder.genesis(seed, vec![0xBB]);
     assert_ne!(g1.wire_hash(), g2.wire_hash());
 
     dag.insert(g1.clone()).expect("first genesis");
@@ -590,7 +590,7 @@ async fn pending_event_triggers_heads_summary_nudge_when_index_empty() {
     let kp_a = AuthorKeypair::deterministic(1);
     let builder = EventBuilder::new(&kp_a);
     let g_payload = 0_i64.to_be_bytes().to_vec();
-    let e1 = builder.genesis(&app_bundle_hash, seed, &topic_name, g_payload);
+    let e1 = builder.genesis(seed, g_payload);
     let e2 = builder.next(
         &e1,
         std::collections::BTreeSet::new(),
@@ -731,8 +731,8 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
     // second one an equivocation against the first.
     let kp = AuthorKeypair::deterministic(1);
     let builder = EventBuilder::new(&kp);
-    let g1 = builder.genesis(&app_bundle_hash, seed, &topic_name, vec![0xAA]);
-    let g2 = builder.genesis(&app_bundle_hash, seed, &topic_name, vec![0xBB]);
+    let g1 = builder.genesis(seed, vec![0xAA]);
+    let g2 = builder.genesis(seed, vec![0xBB]);
     assert_ne!(
         g1.wire_hash(),
         g2.wire_hash(),
@@ -946,12 +946,7 @@ async fn dropped_at_apply_records_rejected_events() {
     // deployment too).
     let kp_a = AuthorKeypair::deterministic(1);
     let builder = EventBuilder::new(&kp_a);
-    let genesis = builder.genesis(
-        &app_bundle_hash,
-        seed,
-        &topic_name,
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let genesis = builder.genesis(seed, 0_i64.to_be_bytes().to_vec());
     let genesis_hash = genesis.wire_hash();
 
     // Publish the event directly onto the bus. B's recv loop will pick

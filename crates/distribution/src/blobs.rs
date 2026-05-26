@@ -138,11 +138,11 @@ pub enum FetchError {
 
 /// Output of `BundleDistribution::fetch`: a verified bundle materialized
 /// into a tempdir, addressable as `BundleAddress::Disk` for
-/// `myrhiza_kernel::InstallFlow::load`.
+/// `myrhiza_kernel::install::load`.
 ///
 /// The tempdir is owned via RAII — the bundle bytes live only as long
 /// as `MaterializedBundle` lives. The kernel embedder must keep the
-/// `MaterializedBundle` alive across the call to `InstallFlow::load`.
+/// `MaterializedBundle` alive across the call to `install::load`.
 ///
 /// Per B-10 spec §3.5 (`IrohBlob → Disk` materialization) + §4.3
 /// (`MaterializedBundle` shape).
@@ -163,7 +163,7 @@ pub struct MaterializedBundle {
     /// `MaterializedBundle` cleans up the tempdir.
     pub _tempdir: tempfile::TempDir,
     /// `BundleAddress::Disk` pointing into `_tempdir`. Pass to
-    /// `myrhiza_kernel::InstallFlow::load(&address)`.
+    /// `myrhiza_kernel::install::load(&address)`.
     pub address: BundleAddress,
 }
 
@@ -342,7 +342,7 @@ impl BundleDistribution {
     /// verify each blob's BLAKE3 hash via `iroh-blobs` verified
     /// streaming, materialize into a tempdir mirroring the disk-bundle
     /// layout, return a [`MaterializedBundle`] ready for
-    /// `myrhiza_kernel::InstallFlow::load`.
+    /// `myrhiza_kernel::install::load`.
     ///
     /// Per B-10 spec §3.2 (6-step fetch-side auth chain) + §3.5
     /// (`IrohBlob → Disk` materialization story) + §4.3
@@ -366,7 +366,7 @@ impl BundleDistribution {
     ///    bundle layout (`manifest.bincode` + `components/state-apply.wasm`
     ///    etc.).
     /// 6. Caller hands the tempdir's `BundleAddress::Disk` to
-    ///    `myrhiza_kernel::InstallFlow::load`, which re-derives
+    ///    `myrhiza_kernel::install::load`, which re-derives
     ///    `bundle_content_hash` over the component bytes and verifies
     ///    the manifest signature — that step is unchanged from the
     ///    disk path.
@@ -848,7 +848,7 @@ mod tests {
     /// `BundleDistribution`, then fetch via the same instance.
     /// Verifies the full publish → fetch → materialize chain produces
     /// a tempdir layout that matches what `crates/test-utils/src/bundle.rs`
-    /// emits — i.e. `InstallFlow::load(Disk)` can consume it unchanged.
+    /// emits — i.e. `install::load(Disk)` can consume it unchanged.
     ///
     /// The `peers` slice is empty: same-store fetch uses the fast path
     /// (skip downloader, read locally via `Store::get_bytes`). This is
@@ -904,8 +904,8 @@ mod tests {
         assert!(bundle_dir.is_dir(), "bundle_dir must exist on disk");
 
         // 4. Re-read the materialized files and assert byte equality
-        //    to what publish saw — this is the structural "InstallFlow
-        //    can load it" check without dragging the kernel into a
+        //    to what publish saw — this is the structural "install::load
+        //    can consume it" check without dragging the kernel into a
         //    state-tier test. The fact that the read succeeds also
         //    proves the tempdir is alive (i.e. the RAII discipline is
         //    holding the dir open while `materialized` is owned).
@@ -942,7 +942,7 @@ mod tests {
     ///
     /// We construct the manifest by hand (not via `publish`) so we
     /// reach the fetch-side gate. In practice, a manifest like this
-    /// would also fail signature verification at `InstallFlow::load`
+    /// would also fail signature verification at `install::load`
     /// — but that's a second-order check; the fetch path must catch
     /// this structural defect first.
     #[tokio::test]
