@@ -71,12 +71,6 @@ const GENESIS_SEED: [u8; 32] = [0x11; 32];
 /// can deterministically build a payload with `MAX_OPTIONS + 1` entries.
 const MAX_OPTIONS: usize = 16;
 
-/// Install + instantiate a fresh poll-state-apply handle. Thin wrapper
-/// around `helpers::poll_handle()` (Task 5 of plan B-6).
-fn build_poll_apply_handle() -> StateApplyHandle {
-    helpers::poll_handle()
-}
-
 /// Encode the CreatePoll body — `Vec<String>` of option labels — using
 /// the SAME canonical layout the fixture's `decode_options` consumes:
 ///   options_len : u64 BE
@@ -274,7 +268,7 @@ fn apply_genesis_and_unwrap(
 /// or alters the encoder's byte layout, this test fails first.
 #[test]
 fn genesis_create_poll_accepts() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let options = vec!["Yes".to_string(), "No".to_string()];
 
@@ -298,7 +292,7 @@ fn genesis_create_poll_accepts() {
 /// votes BTreeMap gains a single entry keyed by the voter's pubkey.
 #[test]
 fn vote_records_choice() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let bob = AuthorKeypair::deterministic(2);
     let options = vec!["Yes".to_string(), "No".to_string()];
@@ -335,7 +329,7 @@ fn vote_records_choice() {
 /// state's `votes[bob]` is 1.
 #[test]
 fn vote_replay_overwrites_prior_choice() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let bob = AuthorKeypair::deterministic(2);
     let options = vec!["Yes".to_string(), "No".to_string()];
@@ -374,7 +368,7 @@ fn vote_replay_overwrites_prior_choice() {
 /// state's `ended` flag is true and no other fields change.
 #[test]
 fn end_poll_by_creator_accepts() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let options = vec!["Yes".to_string(), "No".to_string()];
 
@@ -402,7 +396,7 @@ fn end_poll_by_creator_accepts() {
 /// poll; state-apply emits Reject and the state is unchanged.
 #[test]
 fn end_poll_by_non_creator_rejects() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let bob = AuthorKeypair::deterministic(2);
     let options = vec!["Yes".to_string(), "No".to_string()];
@@ -446,7 +440,7 @@ fn end_poll_by_non_creator_rejects() {
 /// alice ends poll; carol then attempts to vote — Reject.
 #[test]
 fn vote_after_end_poll_rejects() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let carol = AuthorKeypair::deterministic(3);
     let options = vec!["Yes".to_string(), "No".to_string()];
@@ -535,7 +529,7 @@ fn vote_replay_out_of_order_converges_to_lex_last() {
     let apply_sorted = |events: Vec<Vec<u8>>| -> Vec<u8> {
         let mut sorted = events;
         sorted.sort_by(|a, b| wire_hash(a).as_bytes().cmp(wire_hash(b).as_bytes()));
-        let mut handle = build_poll_apply_handle();
+        let mut handle = helpers::poll_handle();
         let mut state = apply_genesis_and_unwrap(
             &mut handle,
             &alice,
@@ -588,7 +582,7 @@ fn vote_replay_out_of_order_converges_to_lex_last() {
 /// Test 7: Vote with option_index >= options.len() Rejects.
 #[test]
 fn vote_out_of_range_option_rejects() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let bob = AuthorKeypair::deterministic(2);
     let options = vec!["Yes".to_string(), "No".to_string()]; // 2 options
@@ -622,7 +616,7 @@ fn vote_out_of_range_option_rejects() {
 /// attempt; state-apply is the only authority on this rejection.
 #[test]
 fn non_genesis_create_poll_rejects() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
     let options = vec!["Yes".to_string(), "No".to_string()];
 
@@ -659,7 +653,7 @@ fn non_genesis_create_poll_rejects() {
 /// is structurally meaningless; state-apply must reject.
 #[test]
 fn genesis_zero_options_rejects() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
 
     let envelope = make_genesis_envelope(&alice, Vec::new());
@@ -680,7 +674,7 @@ fn genesis_zero_options_rejects() {
 /// MAX_OPTIONS = 16 per spec §4.2.
 #[test]
 fn genesis_too_many_options_rejects() {
-    let mut handle = build_poll_apply_handle();
+    let mut handle = helpers::poll_handle();
     let alice = AuthorKeypair::deterministic(1);
 
     // Build MAX_OPTIONS + 1 = 17 options.

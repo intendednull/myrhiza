@@ -75,36 +75,34 @@ pub fn write_bundle(m: &Manifest, component_bytes: &[u8]) -> std::io::Result<Tes
     })
 }
 
-/// Path to the echo-state-apply fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/echo-state-apply.wasm`
-/// via `CARGO_MANIFEST_DIR`. Test-utils sits at `crates/test-utils/`, so
-/// walking up two ancestors reaches the workspace root — same shape as
-/// every other crate under `crates/`.
+/// Resolve a built-fixture path by name. Test-utils sits at
+/// `crates/test-utils/`, so walking up two ancestors reaches the
+/// workspace root; the fixture name (without `.wasm`) is joined under
+/// `tests/fixtures/built/`. Consolidates per-fixture path helpers so
+/// each fixture only contributes a `build_signed_*` function.
 #[allow(clippy::expect_used)]
-fn echo_fixture_path() -> PathBuf {
+fn fixture_path(name: &str) -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
         .ancestors()
         .nth(2)
         .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/echo-state-apply.wasm")
+        .join("tests/fixtures/built")
+        .join(format!("{name}.wasm"))
 }
 
-/// Path to the counter-state-apply fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/counter-state-apply.wasm`
-/// via `CARGO_MANIFEST_DIR`. Test-utils sits at `crates/test-utils/`, so
-/// walking up two ancestors reaches the workspace root — same shape as
-/// every other crate under `crates/`.
-#[allow(clippy::expect_used)]
-fn counter_fixture_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/counter-state-apply.wasm")
+/// Read a built fixture by name, panicking with a `just build-fixtures`
+/// hint if the file is missing. Consolidates the per-`build_signed_*`
+/// fixture-reading boilerplate.
+#[allow(clippy::panic)]
+fn read_fixture(name: &str) -> Vec<u8> {
+    let path = fixture_path(name);
+    std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "{name} fixture missing at {}: {e} — run `just build-fixtures`",
+            path.display()
+        )
+    })
 }
 
 /// Build a signed counter-state-apply bundle from the
@@ -125,12 +123,7 @@ fn counter_fixture_path() -> PathBuf {
 /// `Cargo.toml` — `test-utils` is dev-only (`publish = false`).
 #[allow(clippy::expect_used, clippy::panic)]
 pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
-    let component_bytes = std::fs::read(counter_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "counter fixture missing at {}: {e} — run `just build-fixtures`",
-            counter_fixture_path().display()
-        )
-    });
+    let component_bytes = read_fixture("counter-state-apply");
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(7);
@@ -161,12 +154,7 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
 /// runtime condition the test should recover from.
 #[allow(clippy::expect_used, clippy::panic)]
 pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
-    let component_bytes = std::fs::read(echo_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "echo fixture missing at {}: {e} — run `just build-fixtures`",
-            echo_fixture_path().display()
-        )
-    });
+    let component_bytes = read_fixture("echo-state-apply");
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(11);
@@ -178,32 +166,6 @@ pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
         manifest_path: test_bundle.manifest_path.clone(),
     };
     (test_bundle, addr)
-}
-
-/// Path to the counter-state-propose fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/counter-state-propose.wasm`.
-#[allow(clippy::expect_used)]
-fn counter_state_propose_fixture_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/counter-state-propose.wasm")
-}
-
-/// Path to the counter-interaction fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/counter-interaction.wasm`.
-#[allow(clippy::expect_used)]
-fn counter_interaction_fixture_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/counter-interaction.wasm")
 }
 
 /// Write a three-component bundle (state-apply + state-propose + interaction)
@@ -284,24 +246,9 @@ pub fn write_three_component_bundle(
 /// fails. Both indicate a broken test environment.
 #[allow(clippy::expect_used, clippy::panic)]
 pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddress) {
-    let apply_bytes = std::fs::read(counter_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "counter-state-apply fixture missing at {}: {e} — run `just build-fixtures`",
-            counter_fixture_path().display()
-        )
-    });
-    let propose_bytes = std::fs::read(counter_state_propose_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "counter-state-propose fixture missing at {}: {e} — run `just build-fixtures`",
-            counter_state_propose_fixture_path().display()
-        )
-    });
-    let interaction_bytes = std::fs::read(counter_interaction_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "counter-interaction fixture missing at {}: {e} — run `just build-fixtures`",
-            counter_interaction_fixture_path().display()
-        )
-    });
+    let apply_bytes = read_fixture("counter-state-apply");
+    let propose_bytes = read_fixture("counter-state-propose");
+    let interaction_bytes = read_fixture("counter-interaction");
 
     let mut manifest = helpers_only_three_component_manifest();
     let key = deterministic_signing_key(7);
@@ -321,48 +268,6 @@ pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddr
         manifest_path: test_bundle.manifest_path.clone(),
     };
     (test_bundle, addr)
-}
-
-/// Path to the poll-state-apply fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/poll-state-apply.wasm`
-/// via `CARGO_MANIFEST_DIR`. Test-utils sits at `crates/test-utils/`, so
-/// walking up two ancestors reaches the workspace root — same shape as
-/// every other crate under `crates/`.
-#[allow(clippy::expect_used)]
-fn poll_fixture_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/poll-state-apply.wasm")
-}
-
-/// Path to the poll-state-propose fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/poll-state-propose.wasm`.
-#[allow(clippy::expect_used)]
-fn poll_state_propose_fixture_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/poll-state-propose.wasm")
-}
-
-/// Path to the poll-interaction fixture built by `just build-fixtures`.
-///
-/// Resolves to `<workspace_root>/tests/fixtures/built/poll-interaction.wasm`.
-#[allow(clippy::expect_used)]
-fn poll_interaction_fixture_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root is two levels above test-utils crate manifest")
-        .join("tests/fixtures/built/poll-interaction.wasm")
 }
 
 /// Build a signed poll-state-apply bundle from the
@@ -387,12 +292,7 @@ fn poll_interaction_fixture_path() -> PathBuf {
 /// `Cargo.toml` — `test-utils` is dev-only (`publish = false`).
 #[allow(clippy::expect_used, clippy::panic)]
 pub fn build_signed_poll_bundle() -> (TestBundle, BundleAddress) {
-    let component_bytes = std::fs::read(poll_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "poll fixture missing at {}: {e} — run `just build-fixtures`",
-            poll_fixture_path().display()
-        )
-    });
+    let component_bytes = read_fixture("poll-state-apply");
 
     let mut manifest = helpers_only_state_apply_manifest();
     let key = deterministic_signing_key(13);
@@ -420,24 +320,9 @@ pub fn build_signed_poll_bundle() -> (TestBundle, BundleAddress) {
 /// fails. Both indicate a broken test environment.
 #[allow(clippy::expect_used, clippy::panic)]
 pub fn build_signed_poll_bundle_three_components() -> (TestBundle, BundleAddress) {
-    let apply_bytes = std::fs::read(poll_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "poll-state-apply fixture missing at {}: {e} — run `just build-fixtures`",
-            poll_fixture_path().display()
-        )
-    });
-    let propose_bytes = std::fs::read(poll_state_propose_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "poll-state-propose fixture missing at {}: {e} — run `just build-fixtures`",
-            poll_state_propose_fixture_path().display()
-        )
-    });
-    let interaction_bytes = std::fs::read(poll_interaction_fixture_path()).unwrap_or_else(|e| {
-        panic!(
-            "poll-interaction fixture missing at {}: {e} — run `just build-fixtures`",
-            poll_interaction_fixture_path().display()
-        )
-    });
+    let apply_bytes = read_fixture("poll-state-apply");
+    let propose_bytes = read_fixture("poll-state-propose");
+    let interaction_bytes = read_fixture("poll-interaction");
 
     let mut manifest = helpers_only_three_component_manifest();
     let key = deterministic_signing_key(13);
