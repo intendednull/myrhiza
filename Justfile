@@ -82,3 +82,9 @@ spec-coverage-check: spec-coverage
     fi
 
 ci: fmt-check lint test test-iroh spec-coverage-check
+
+# Sync `crates/sdk/wit/` from the canonical `wit/myrhiza-kernel/wit/`.
+# Run when the kernel WIT changes; CI test asserts bit-equality.
+sync-wit:
+    cp -p wit/myrhiza-kernel/wit/*.wit crates/sdk/wit/
+    @echo "WIT files synced from wit/myrhiza-kernel/wit/ → crates/sdk/wit/"
