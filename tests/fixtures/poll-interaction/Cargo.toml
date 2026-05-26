@@ -1,0 +1,39 @@
+[package]
+name = "poll-interaction-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Intentionally NOT a workspace member — see root `Cargo.toml`'s
+# `[workspace.exclude]`. The fixture builds for `wasm32-unknown-unknown`
+# and is wrapped into a component by `just build-fixtures`.
+
+# Empty [workspace] table makes this crate its own workspace root so
+# cargo's manifest walk-up terminates here. Without it, when the
+# fixture is built from inside a git worktree nested under the main
+# repo (e.g. `<repo>/.claude/worktrees/<name>/tests/fixtures/...`),
+# cargo's resolver finds the worktree's own Cargo.toml but then
+# continues up to the main repo's Cargo.toml — whose `exclude` list
+# uses paths relative to itself and does not match the worktree-
+# relative path — producing the misleading "current package believes
+# it's in a workspace when it's not" error.
+#
+# Mirrors the same one-liner on `poll-state-apply`'s and
+# `poll-state-propose`'s Cargo.toml.
+[workspace]
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.30"
+
+# panic=abort + aggressive size opts to keep the binary lean.
+# The interaction profile does not run the float-ban lint (it's a
+# non-deterministic profile per spec §3.3), but we still size-opt
+# to avoid pulling in float-Display dispatch tables unnecessarily.
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+strip = "symbols"

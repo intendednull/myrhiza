@@ -23,6 +23,9 @@ exclude = [
     "tests/fixtures/float-banned",
     "tests/fixtures/counter-state-propose",
     "tests/fixtures/counter-interaction",
+    "tests/fixtures/poll-state-apply",
+    "tests/fixtures/poll-state-propose",
+    "tests/fixtures/poll-interaction",
 ]
 
 [workspace.package]

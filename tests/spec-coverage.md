@@ -90,7 +90,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/src/digest.rs:70
 
 ## convergence.md §4.3 (deterministic topo-sort under arbitrary
-- crates/kernel/src/dag.rs:844
+- crates/kernel/src/dag.rs:857
 
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:276
@@ -133,6 +133,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.6
 - crates/kernel/tests/attribution.rs:137
 - crates/kernel/tests/attribution.rs:82
+- crates/kernel/tests/coexistence.rs:506
 - crates/kernel/tests/convergence.rs:190
 
 ## convergence.md §4.6 (topic identity)
@@ -220,6 +221,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:406
 - crates/kernel/tests/acceptance.rs:49
 - crates/kernel/tests/acceptance.rs:73
+- crates/kernel/tests/coexistence.rs:506
 
 ## mvp.md §15.1 #1+#2
 - crates/kernel/tests/convergence.rs:15
@@ -238,6 +240,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## mvp.md §15.1 #4
 - crates/kernel/tests/convergence.rs:190
 - crates/kernel/tests/iroh_coexistence.rs:25
+
+## mvp.md §15.2
+- crates/kernel/tests/coexistence.rs:506
 
 ## networking.md §11.1
 - crates/kernel/tests/attribution.rs:569

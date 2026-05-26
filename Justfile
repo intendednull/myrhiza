@@ -48,8 +48,11 @@ build-fixtures: \
     (_build-fixture "infinite-loop" "infinite_loop_fixture" "state-apply") \
     (_build-fixture "float-banned" "float_banned_fixture" "state-apply") \
     (_build-fixture "counter-state-propose" "counter_state_propose_fixture" "state-propose") \
-    (_build-fixture "counter-interaction" "counter_interaction_fixture" "interaction")
-    @echo "Built 8 fixtures into tests/fixtures/built/"
+    (_build-fixture "counter-interaction" "counter_interaction_fixture" "interaction") \
+    (_build-fixture "poll-state-apply" "poll_state_apply_fixture" "state-apply") \
+    (_build-fixture "poll-state-propose" "poll_state_propose_fixture" "state-propose") \
+    (_build-fixture "poll-interaction" "poll_interaction_fixture" "interaction")
+    @echo "Built 11 fixtures into tests/fixtures/built/"
 
 # Compile a single fixture into a wasm component. `crate_name` is the
 # Rust crate name with hyphens replaced by underscores (cargo's artifact

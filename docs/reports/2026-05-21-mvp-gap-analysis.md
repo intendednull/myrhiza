@@ -27,7 +27,7 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 | 13. Crypto primitives (host imports) | 🟡 partial | `myrhiza_manifest::verify_signature` (Ed25519) exists, but no `crates/crypto/` and no full host-import surface for app components. WIT files declare crypto host imports but the binding crate is missing. |
 | 14. Bundle distribution + signing | 🟡 partial | Bundle install/load works (acceptance tests at `crates/kernel/tests/acceptance.rs` use real signed bundles). Revocation topic / per-author publishing flow not implemented. |
 | 15. Counter app (state-apply + propose + interaction + manifest) | ❌ | Only the `counter-state-apply.wasm` fixture exists (`tests/fixtures/counter-state-apply/`). No propose/interaction components, no `examples/counter/` workspace member. |
-| 16. Poll app | ❌ | Not started. |
+| 16. Poll app | ✅ | **Shipped in B-6 (2026-05-26)**: four-component poll bundle (state-apply + propose + interaction + manifest) at `tests/fixtures/poll-*/`; 11 state-tier tests + 3 kernel-tier tests + coexistence-with-counter test green. Not v1-blocking (criterion 4 already satisfied by counter + echo) — shipped as second MVP demo app per [mvp.md §15.2](../specs/2026-05-09-myrhiza-master-design/mvp.md). |
 | 17. State-tier tests | ❌ | Per-app state-apply unit tests not present — current tests use the in-Rust `counter_handle()` test helper, not real-app state-apply. |
 | 18. Kernel-tier tests (convergence, coexistence, capability gating) | 🟡 partial | Convergence tested via B-1 + B-4. Capability gating tested in `crates/kernel/tests/acceptance.rs`. **Coexistence test (two apps in same kernel) missing** — load-bearing v1 demo per mvp.md §15.3. |
 | 19. E2E test suite | 🟡 partial | In-process iroh integration tests landed in E2E-1 (2026-05-22) — `crates/kernel/tests/iroh_convergence.rs` + `iroh_coexistence.rs` route real `IrohNetwork` through real `Runtime` through real WASM; `crates/myrhiza-cli/tests/cli_binary.rs` exercises the binary entrypoint via subprocess. Remaining gap: cross-OS-process iroh convergence (deferred to E2E-2). See [docs/specs/2026-05-22-e2e-test-coverage-design.md](../specs/2026-05-22-e2e-test-coverage-design.md). |
@@ -37,7 +37,7 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 | 23. v1.1 behavior profile + criterion #6 | ❌ | Deferable per mvp.md §15.5. |
 | 24. Dependency-direction CI check | ❌ | No examples yet to enforce direction against. |
 
-**Tally**: 12 items ✅, 4 items 🟡, 8 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback).
+**Tally**: 13 items ✅, 4 items 🟡, 7 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback). Update 2026-05-26: item 16 (Poll app) flipped from ❌ to ✅ with B-6 (4-component poll bundle landed).
 
 ## v1 acceptance criteria status
 
@@ -61,13 +61,11 @@ Each slice = one PR, sized at ~B-4-slice cadence (1–3 days of focused work). S
 
 The original B-5 scope was based on the incorrect read of criterion 2's status (see the dated correction above). The corrected B-5 scope shipped: built an `echo-state-apply` WASM fixture as the second app + a same-peer two-runtime acceptance test (`coexistence.rs::two_apps_coexist_no_event_crossing`). Closes criterion 4.
 
-### B-6: Poll app (deferred slice; not v1-blocking)
+### ~~B-6: Poll app (not v1-blocking)~~ → SHIPPED 2026-05-26
 
-**Scope**: build the poll example (state-apply + propose + interaction + manifest with `EndPoll` admin gate). Per [mvp.md §15.2](../specs/2026-05-09-myrhiza-master-design/mvp.md), poll is the second of two MVP demo apps. Criterion 4 ("two apps coexist") is now satisfied by counter + echo, so poll is no longer v1-blocking — it remains valuable as a non-trivial demo app for the v1 release showcase.
+**Scope** (as shipped): four-component poll bundle (state-apply + state-propose + interaction + manifest with `EndPoll` admin gate) at `tests/fixtures/poll-*/`. Per [mvp.md §15.2](../specs/2026-05-09-myrhiza-master-design/mvp.md), poll is the second of two MVP demo apps. Criterion 4 ("two apps coexist") was already satisfied by counter + echo in B-5, so poll was not v1-blocking — it ships as a non-trivial demo app for the v1 release showcase. First fixture exercising non-empty `deps` (which surfaced a parent-dedup bug in `EventDag::topo_sort_subset` fixed in `c96ffa7`) and first fixture using non-empty `peer_state` (harness now populates with local `AuthorPubkey`).
 
-**Closes**: implementation.md §20 item 16; mvp.md §15.2 (second app for the v1 release).
-
-**Estimate**: 2-3 days.
+**Closes**: implementation.md §20 item 16; mvp.md §15.2 (second app for the v1 release). See [spec B-6](../specs/2026-05-26-b-6-poll-app-design.md) + [plan B-6](../plans/2026-05-26-b-6-poll-app.md).
 
 ### B-7: Native interaction harness + counter-interaction E2E
 

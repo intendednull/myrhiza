@@ -13,7 +13,32 @@ use std::io::Cursor;
 
 use myrhiza_kernel::event_builder::AuthorKeypair;
 use myrhiza_kernel::state_apply::ApplyOutcome;
-use myrhiza_test_utils::bundle::build_signed_counter_bundle_three_components;
+use myrhiza_test_utils::bundle::{
+    build_signed_counter_bundle_three_components, build_signed_poll_bundle_three_components,
+};
+
+/// Counter genesis `app_payload`: 8-byte BE i64 initial value (0).
+/// Counter-state-apply's genesis path stores these bytes verbatim as
+/// the initial state — see `tests/fixtures/counter-state-apply/src/lib.rs`
+/// genesis arm.
+fn counter_genesis_app_payload() -> Vec<u8> {
+    0_i64.to_be_bytes().to_vec()
+}
+
+/// Poll genesis `app_payload`: `[0x00] ++ canonical(options)` per B-6
+/// spec §4.3 — `CreatePoll` discriminator followed by the canonical
+/// `Vec<String>` encoding `tests/fixtures/poll-state-apply::decode_options`
+/// expects (u64-BE count + per-entry u64-BE label-len + UTF-8 bytes).
+fn poll_genesis_app_payload(options: &[&str]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(0x00_u8); // DISCRIMINATOR_CREATE_POLL
+    out.extend_from_slice(&(options.len() as u64).to_be_bytes());
+    for label in options {
+        out.extend_from_slice(&(label.len() as u64).to_be_bytes());
+        out.extend_from_slice(label.as_bytes());
+    }
+    out
+}
 
 /// Drives the harness with `"inc 5\ninc 3\nquit\n"`.
 ///
@@ -29,8 +54,14 @@ fn counter_inc_5_inc_3_yields_final_state_8() {
     let input = b"inc 5\ninc 3\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
-    let (state, log) = myrhiza_cli::run(&addr.bundle_dir, &key, Cursor::new(input), &mut output)
-        .expect("harness run completes without error");
+    let (state, log) = myrhiza_cli::run(
+        &addr.bundle_dir,
+        &key,
+        counter_genesis_app_payload(),
+        Cursor::new(input),
+        &mut output,
+    )
+    .expect("harness run completes without error");
 
     assert_eq!(
         state,
@@ -71,8 +102,14 @@ fn counter_stdout_shows_progressive_views() {
     let input = b"inc 5\ninc 3\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
-    myrhiza_cli::run(&addr.bundle_dir, &key, Cursor::new(input), &mut output)
-        .expect("harness run completes");
+    myrhiza_cli::run(
+        &addr.bundle_dir,
+        &key,
+        counter_genesis_app_payload(),
+        Cursor::new(input),
+        &mut output,
+    )
+    .expect("harness run completes");
 
     let text = std::str::from_utf8(&output).expect("stdout is valid UTF-8");
     assert!(
@@ -102,8 +139,14 @@ fn counter_dispatch_rejection_does_not_abort_loop() {
     let input = b"bogus_action\ninc 1\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
-    let (state, log) = myrhiza_cli::run(&addr.bundle_dir, &key, Cursor::new(input), &mut output)
-        .expect("harness run completes; rejected dispatch is not a hard error");
+    let (state, log) = myrhiza_cli::run(
+        &addr.bundle_dir,
+        &key,
+        counter_genesis_app_payload(),
+        Cursor::new(input),
+        &mut output,
+    )
+    .expect("harness run completes; rejected dispatch is not a hard error");
 
     assert_eq!(
         state,
@@ -119,5 +162,50 @@ fn counter_dispatch_rejection_does_not_abort_loop() {
     assert!(
         text.contains("dispatch rejected:"),
         "stdout should surface the rejection message; got: {text:?}"
+    );
+}
+
+/// B-6 spec §4.1.4 "Harness contract addition (normative — owned by this spec)":
+/// the harness MUST populate `peer_state` with the local `AuthorPubkey` (32
+/// raw bytes) on every `view` call. The poll-interaction component surfaces
+/// a per-peer "your vote: <opt> (<label>)" line when it sees a 32-byte
+/// `peer_state`; this test is the regression for that contract.
+///
+/// Setup: a `CreatePoll{options=["Yes","No"]}` is applied as the bundle's
+/// genesis via the new `genesis_app_payload` parameter — poll genesis must
+/// embed the `CreatePoll` body per spec §4.3, and the v1 harness has no
+/// "first dispatched action becomes genesis" mode (counter relied on the
+/// same parameter-driven pattern; this slice generalises it). The driver
+/// then dispatches `vote 0` to record the local author's vote against the
+/// initialised poll. The interaction component's view renders
+/// `your vote: 0 (Yes)` (per the §4.1.4 sample layout — index AND label)
+/// once the local `AuthorPubkey` appears in the votes map.
+///
+/// Asserts `contains("your vote: 0")` per the plan T9 brief and spec
+/// §4.1.4 — a substring match per the plan T4 risks-note (assertions
+/// intentionally tolerate whitespace artifacts in the surrounding text
+/// block).
+#[test]
+fn poll_dispatch_displays_per_peer_vote() {
+    let key = AuthorKeypair::deterministic(3);
+    let (_bundle, addr) = build_signed_poll_bundle_three_components();
+
+    let input = b"vote 0\nquit\n".to_vec();
+    let mut output: Vec<u8> = Vec::new();
+
+    myrhiza_cli::run(
+        &addr.bundle_dir,
+        &key,
+        poll_genesis_app_payload(&["Yes", "No"]),
+        Cursor::new(input),
+        &mut output,
+    )
+    .expect("harness run completes without error");
+
+    let text = std::str::from_utf8(&output).expect("stdout is valid UTF-8");
+    assert!(
+        text.contains("your vote: 0"),
+        "stdout must contain the per-peer 'your vote: 0' line per spec §4.1.4; \
+         got: {text:?}"
     );
 }
