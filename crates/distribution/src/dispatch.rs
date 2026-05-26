@@ -20,16 +20,25 @@
 //! we don't want a 10 MB `reason` field reaching deserialize-validate
 //! at the state tier if we can drop it at the wire boundary.
 //!
+//! ## Shared verify path
+//!
+//! Both helpers delegate to [`crate::signed_envelope::verify`]; their
+//! distinct existence at this surface is just a typed-call-site
+//! convenience (so callers can't accidentally hand a `RevocationEvent`
+//! to the publication path or vice versa) — the per-envelope
+//! `MAX_*_LEN` cap and the `DOMAIN_SEP_*` constant travel with each
+//! type via its `SignedEnvelope` impl and `signing_target()`.
+//!
 //! `DispatchReject` variants map 1:1 onto `PeerWarning::SignatureInvalid
 //! { reason }` consistent with B-4.8 — the kernel-tier subscription
 //! wiring (a future task — see spec §6.4) will translate these into
 //! `PeerWarning` and emit them via the warnings channel.
 
-use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
 use myrhiza_types::AuthorPubkey;
 
-use crate::publication::{MAX_VERSION_LEN, PublicationEvent};
-use crate::revocation::{MAX_REASON_LEN, RevocationEvent};
+use crate::publication::PublicationEvent;
+use crate::revocation::RevocationEvent;
+use crate::signed_envelope;
 
 /// Reasons the dispatch layer dropped an inbound envelope before it
 /// reached the state machine. Maps 1:1 onto `PeerWarning::SignatureInvalid
@@ -52,9 +61,14 @@ pub enum DispatchReject {
 /// [`crate::revocation::RevocationLog::apply`]; returns
 /// `Err(DispatchReject::*)` to surface as `PeerWarning::SignatureInvalid`.
 ///
+/// Thin typed wrapper over [`crate::signed_envelope::verify`] —
+/// preserved at this surface so callers can't accidentally route a
+/// `RevocationEvent` through the publication path.
+///
 /// # Errors
 ///
-/// - [`DispatchReject::FieldTooLong`] — `reason` exceeds [`MAX_REASON_LEN`].
+/// - [`DispatchReject::FieldTooLong`] — `reason` exceeds
+///   [`crate::revocation::MAX_REASON_LEN`].
 /// - [`DispatchReject::AuthorPubkeyMalformed`] — `author` is not a
 ///   valid Ed25519 curve point.
 /// - [`DispatchReject::SignatureInvalid`] — Ed25519 verification failed
@@ -63,16 +77,7 @@ pub fn verify_revocation(
     event: &RevocationEvent,
     author: &AuthorPubkey,
 ) -> Result<(), DispatchReject> {
-    if event.reason.len() > MAX_REASON_LEN {
-        return Err(DispatchReject::FieldTooLong);
-    }
-    let vk = VerifyingKey::from_bytes(author.as_bytes())
-        .map_err(|_| DispatchReject::AuthorPubkeyMalformed)?;
-    let sig = DalekSignature::from_bytes(&event.signature);
-    let target = event.signing_target();
-    vk.verify_strict(&target, &sig)
-        .map_err(|_| DispatchReject::SignatureInvalid)?;
-    Ok(())
+    signed_envelope::verify(event, author)
 }
 
 /// Verify a `PublicationEvent` envelope at the gossip-receive boundary.
@@ -83,9 +88,14 @@ pub fn verify_revocation(
 /// [`crate::publication::PublicationLog::apply`]; returns
 /// `Err(DispatchReject::*)` to surface as `PeerWarning::SignatureInvalid`.
 ///
+/// Thin typed wrapper over [`crate::signed_envelope::verify`] —
+/// preserved at this surface so callers can't accidentally route a
+/// `PublicationEvent` through the revocation path.
+///
 /// # Errors
 ///
-/// - [`DispatchReject::FieldTooLong`] — `version` exceeds [`MAX_VERSION_LEN`].
+/// - [`DispatchReject::FieldTooLong`] — `version` exceeds
+///   [`crate::publication::MAX_VERSION_LEN`].
 /// - [`DispatchReject::AuthorPubkeyMalformed`] — `author` is not a
 ///   valid Ed25519 curve point.
 /// - [`DispatchReject::SignatureInvalid`] — Ed25519 verification failed
@@ -94,16 +104,7 @@ pub fn verify_publication(
     event: &PublicationEvent,
     author: &AuthorPubkey,
 ) -> Result<(), DispatchReject> {
-    if event.version.len() > MAX_VERSION_LEN {
-        return Err(DispatchReject::FieldTooLong);
-    }
-    let vk = VerifyingKey::from_bytes(author.as_bytes())
-        .map_err(|_| DispatchReject::AuthorPubkeyMalformed)?;
-    let sig = DalekSignature::from_bytes(&event.signature);
-    let target = event.signing_target();
-    vk.verify_strict(&target, &sig)
-        .map_err(|_| DispatchReject::SignatureInvalid)?;
-    Ok(())
+    signed_envelope::verify(event, author)
 }
 
 #[cfg(test)]
@@ -112,6 +113,9 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use myrhiza_types::BlobHash;
+
+    use crate::publication::MAX_VERSION_LEN;
+    use crate::revocation::MAX_REASON_LEN;
 
     fn fixture() -> (SigningKey, AuthorPubkey) {
         let sk = SigningKey::from_bytes(&[7u8; 32]);

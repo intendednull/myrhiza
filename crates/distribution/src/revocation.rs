@@ -10,10 +10,12 @@
 use std::collections::BTreeSet;
 
 use bincode::Options;
-use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
 use myrhiza_types::{AuthorPubkey, BlobHash, canonical_bincode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::dispatch::DispatchReject;
+use crate::signed_envelope::{self, SignedEnvelope, serde_bytes_64};
 
 /// Domain-separator string for revocation signatures. Mirrors the
 /// manifest-signature framing in `crates/manifest/src/canonical.rs`
@@ -55,48 +57,6 @@ pub struct RevocationEvent {
     pub signature: [u8; 64],
 }
 
-mod serde_bytes_64 {
-    use core::fmt;
-
-    use serde::{
-        Deserializer, Serializer,
-        de::{SeqAccess, Visitor},
-        ser::SerializeTuple,
-    };
-
-    pub fn serialize<S: Serializer>(bytes: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
-        let mut t = s.serialize_tuple(64)?;
-        for b in bytes {
-            t.serialize_element(b)?;
-        }
-        t.end()
-    }
-
-    struct ArrayVisitor;
-
-    impl<'de> Visitor<'de> for ArrayVisitor {
-        type Value = [u8; 64];
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "an array of 64 bytes")
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut out = [0u8; 64];
-            for (i, slot) in out.iter_mut().enumerate() {
-                *slot = seq
-                    .next_element::<u8>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
-            }
-            Ok(out)
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
-        d.deserialize_tuple(64, ArrayVisitor)
-    }
-}
-
 #[derive(Serialize)]
 struct RevocationSignedFields<'a> {
     revoked_bundle_hash: &'a BlobHash,
@@ -135,6 +95,20 @@ impl RevocationEvent {
             .expect("canonical bincode of RevocationSignedFields never fails");
         out.extend_from_slice(&body);
         out
+    }
+}
+
+impl SignedEnvelope for RevocationEvent {
+    fn signing_target(&self) -> Vec<u8> {
+        RevocationEvent::signing_target(self)
+    }
+
+    fn signature(&self) -> &[u8; 64] {
+        &self.signature
+    }
+
+    fn field_too_long(&self) -> bool {
+        self.reason.len() > MAX_REASON_LEN
     }
 }
 
@@ -215,6 +189,12 @@ impl RevocationLog {
         event: &RevocationEvent,
         author: &AuthorPubkey,
     ) -> Result<Self, RevocationError> {
+        // Validation sequence per B-10 spec §4.4: length check →
+        // seq-monotonic → seq-jump cap → pubkey-decode → verify_strict.
+        // The length check is repeated by `signed_envelope::verify`
+        // below but must run *first* so its typed error precedes any
+        // seq-check error; the verify-side check is a guaranteed
+        // no-op once we've passed this gate.
         if event.reason.len() > MAX_REASON_LEN {
             return Err(RevocationError::ReasonTooLong {
                 got: event.reason.len(),
@@ -231,12 +211,17 @@ impl RevocationLog {
             return Err(RevocationError::SeqJumpTooLarge { jump });
         }
 
-        let vk = VerifyingKey::from_bytes(author.as_bytes())
-            .map_err(|_| RevocationError::AuthorPubkeyMalformed)?;
-        let sig = DalekSignature::from_bytes(&event.signature);
-        let target = event.signing_target();
-        vk.verify_strict(&target, &sig)
-            .map_err(|_| RevocationError::SignatureInvalid)?;
+        signed_envelope::verify(event, author).map_err(|reject| match reject {
+            // FieldTooLong is unreachable here — already gated above
+            // with the typed `ReasonTooLong` error. Map defensively
+            // to the typed variant so a future reorder of the gates
+            // doesn't silently drop the field-length signal.
+            DispatchReject::FieldTooLong => RevocationError::ReasonTooLong {
+                got: event.reason.len(),
+            },
+            DispatchReject::AuthorPubkeyMalformed => RevocationError::AuthorPubkeyMalformed,
+            DispatchReject::SignatureInvalid => RevocationError::SignatureInvalid,
+        })?;
 
         self.revoked_bundles.insert(event.revoked_bundle_hash);
         self.last_observed_seq = event.revocation_seq;
