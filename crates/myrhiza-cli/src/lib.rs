@@ -83,9 +83,13 @@ pub struct StepLog {
 /// bundle at `bundle_path`.
 ///
 /// `bundle_path` must be the directory containing `manifest.bincode` and the
-/// `components/` subtree. `stdin` is read line-by-line for action commands;
-/// `stdout` receives the interaction component's `view` output plus any
-/// error messages. An empty line is skipped; `"quit"` or EOF exits the loop.
+/// `components/` subtree. `genesis_app_payload` is the application-specific
+/// payload bytes wrapped inside the `GenesisV1` envelope that initialises
+/// the bundle's state (counter: `0_i64.to_be_bytes()`; poll:
+/// `[0x00] ++ canonical(options)` per B-6 spec §4.3). `stdin` is read
+/// line-by-line for action commands; `stdout` receives the interaction
+/// component's `view` output plus any error messages. An empty line is
+/// skipped; `"quit"` or EOF exits the loop.
 ///
 /// Returns `(final_state, step_log)` on clean exit.
 ///
@@ -101,6 +105,7 @@ pub struct StepLog {
 pub fn run<R: BufRead, W: Write>(
     bundle_path: &Path,
     author_key: &AuthorKeypair,
+    genesis_app_payload: Vec<u8>,
     mut stdin: R,
     mut stdout: W,
 ) -> Result<(Vec<u8>, Vec<StepLog>), HarnessError> {
@@ -133,19 +138,16 @@ pub fn run<R: BufRead, W: Write>(
         backend.instantiate_interaction(&interaction_bytes, &bundle.manifest)?,
     );
 
-    // 3. Apply genesis: counter starts at 0.
-    //    Genesis payload: seed=[0;32], app_payload=0_i64 BE (8 bytes).
+    // 3. Apply genesis. The caller supplies the application-specific
+    //    `app_payload` bytes (counter: `0_i64.to_be_bytes()`; poll:
+    //    `[0x00] ++ canonical(options)` per B-6 spec §4.3). The harness
+    //    wraps these in a `GenesisV1` envelope with a placeholder seed
+    //    and topic name; the v1 single-peer harness does not fetch a
+    //    real on-chain bundle hash, so those arguments are informational
+    //    only.
     let builder = EventBuilder::new(author_key);
-    // BundleHash is a placeholder for v1 single-peer harness (the harness
-    // does not fetch a real on-chain bundle hash; the genesis EventBuilder
-    // arg is informational-only for now).
     let bundle_hash = BundleHash::from_bytes([0u8; 32]);
-    let genesis_event = builder.genesis(
-        &bundle_hash,
-        [0u8; 32],
-        "counter",
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let genesis_event = builder.genesis(&bundle_hash, [0u8; 32], "topic", genesis_app_payload);
     let genesis_envelope = canonical_envelope(&genesis_event);
     let genesis_result = apply_handle.apply(&[], &genesis_envelope)?;
     if !matches!(genesis_result.outcome, ApplyOutcome::Accepted) {
@@ -156,7 +158,11 @@ pub fn run<R: BufRead, W: Write>(
         return Err(HarnessError::GenesisRejected(msg));
     }
     let mut state = genesis_result.new_state;
-    let peer_state: Vec<u8> = Vec::new();
+    // peer_state contract per B-6 spec §4.1.4 "Harness contract addition"
+    // (normative — owned by the poll-app spec). Populated with the local
+    // AuthorPubkey (32 raw bytes) on every view call. Counter's interaction
+    // ignores it; poll surfaces the per-peer "your vote" line keyed by it.
+    let peer_state: Vec<u8> = author_key.author.as_bytes().to_vec();
     let mut last_event = genesis_event;
     let mut step_log: Vec<StepLog> = Vec::new();
 
