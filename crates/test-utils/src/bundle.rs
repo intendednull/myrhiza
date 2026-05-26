@@ -369,7 +369,7 @@ pub fn build_signed_poll_bundle_three_components() -> (TestBundle, BundleAddress
 /// The manifest is signed with [`deterministic_signing_key`] keyed on
 /// `seed` so the install flow accepts the bundle (signature verifies);
 /// the rejection then surfaces from the backend's
-/// `validate_state_apply_manifest` step rather than from the install
+/// `validate_manifest` step rather than from the install
 /// loader. The component itself does not need to import `extra_cap` —
 /// the manifest gating fires regardless.
 ///

@@ -3,7 +3,7 @@
 //! `wasmtime::component::bindgen!` generates host trait skeletons
 //! and a `StateApply` instantiation type from the state-apply WIT
 //! world. Plan A binds the deterministic helper set manually via
-//! per-method `linker.func_wrap` (see [`crate::gating::wire_state_apply_linker`])
+//! per-method `linker.func_wrap` (see [`crate::gating::wire_linker`])
 //! so the kernel can intersect the manifest-declared subset against
 //! the ambient set at link time, rejecting components that import
 //! anything outside that subset.
@@ -14,19 +14,15 @@ use myrhiza_backend::{
     Backend, BackendError, ComponentInstance, InteractionInstance, ProposeInstance,
 };
 use myrhiza_manifest::Manifest;
-use myrhiza_types::limits::{
-    COMPONENT_MEMORY_CAP_V1, INTERACTION_FUEL_BUDGET_V1, MAX_WASM_STACK_V1,
-    STATE_APPLY_FUEL_BUDGET_V1, STATE_PROPOSE_FUEL_BUDGET_V1,
-};
+use myrhiza_types::limits::{COMPONENT_MEMORY_CAP_V1, MAX_WASM_STACK_V1};
 use wasmtime::{
     Config, Engine, Store,
     component::{Component, Linker, ResourceTable},
 };
 
+use crate::Profile;
 use crate::float_ban::scan_component_for_floats;
-use crate::gating::{
-    state_apply_bound_imports, validate_state_apply_manifest, wire_state_apply_linker,
-};
+use crate::gating::{bound_imports, validate_manifest, wire_linker};
 use crate::helpers::LogSink;
 use crate::instance::StateApplyInstance;
 use crate::interaction_instance::InteractionInstanceImpl;
@@ -64,10 +60,10 @@ const SHARED_TYPES_INSTANCE: &str = "myrhiza:kernel/types@1.0.0";
 /// already applied to `myrhiza:kernel/types@1.0.0`.
 pub(crate) const HOST_UI_SURFACES_INSTANCE: &str = "myrhiza:kernel/host-ui-surfaces@1.0.0";
 
-/// `host.log` is unconditionally bound on state-apply per
-/// determinism.md §5.1 — the manifest does not need to declare it. The
-/// pre-walk treats it as always-on so a manifest that omits it doesn't
-/// cause a spurious `UnauthorizedImport`.
+/// `host.log` is unconditionally bound per determinism.md §5.1 — the
+/// manifest does not need to declare it. The pre-walk treats it as
+/// always-on so a manifest that omits it doesn't cause a spurious
+/// `UnauthorizedImport`.
 fn is_always_on_helper(cap: &str) -> bool {
     cap == "host.log"
 }
@@ -76,10 +72,10 @@ fn is_always_on_helper(cap: &str) -> bool {
 /// `bound_imports` (the manifest-allowed subset of the deterministic
 /// helper ambient set, plus the always-on `host.log`). Returns
 /// [`BackendError::UnauthorizedImport`] for the first import that the
-/// state-apply ambient set does not provide.
+/// `profile`'s ambient set does not provide.
 ///
-/// This pre-walk replaces the previous string-match fallback in
-/// [`StateApplyInstance::instantiate`]: by enumerating
+/// This pre-walk replaces the previous string-match fallback in the
+/// bindgen-instantiate path: by enumerating
 /// [`wasmtime::component::Component::component_type().imports()`]
 /// before linker construction we can attribute capability rejections
 /// deterministically without depending on the wording of wasmtime's
@@ -87,9 +83,11 @@ fn is_always_on_helper(cap: &str) -> bool {
 ///
 /// Four kinds of unauthorized imports surface:
 /// 1. An unknown WIT instance (anything other than
-///    `myrhiza:kernel/host-deterministic@1.0.0` or the types-only
-///    `myrhiza:kernel/types@1.0.0`). The error carries the full
-///    versioned WIT instance name so logs are unambiguous.
+///    `myrhiza:kernel/host-deterministic@1.0.0`,
+///    `myrhiza:kernel/types@1.0.0`, or — for the interaction profile
+///    only — `myrhiza:kernel/host-ui-surfaces@1.0.0`). The error
+///    carries the full versioned WIT instance name so logs are
+///    unambiguous.
 /// 2. A known-instance function whose vocabulary-mapped name
 ///    (`host.<wit-fn-name>`) is not in `bound_imports` and is not the
 ///    always-on helper (`host.log`). The error carries the
@@ -97,22 +95,23 @@ fn is_always_on_helper(cap: &str) -> bool {
 ///    declaration vocabulary.
 /// 3. Any non-`ComponentFunc` item appearing inside the
 ///    `host-deterministic` instance (e.g. a resource, type, or
-///    nested instance). The state-apply WIT world surfaces only
-///    function imports inside this instance, so anything else means
-///    a future WIT bump has surfaced a non-function capability we
-///    haven't audited; reject fail-closed rather than silently
-///    skipping it. The error carries the qualified
+///    nested instance). The WIT worlds surface only function imports
+///    inside this instance, so anything else means a future WIT bump
+///    has surfaced a non-function capability we haven't audited;
+///    reject fail-closed rather than silently skipping it. The error
+///    carries the qualified
 ///    `host-deterministic-instance.<item-name>` so the audit point is
 ///    obvious in logs.
-/// 4. Any callable item appearing inside the `types@1.0.0` instance.
-///    The shared types instance is types-only by design — only
+/// 4. Any callable item appearing inside a types-only instance
+///    (`types@1.0.0` or, for interaction, `host-ui-surfaces@1.0.0`).
+///    The types-only instances are types-only by design — only
 ///    `Type` and `Resource` items are permitted. A future WIT bump
-///    that adds a method to a `types.wit` resource would surface as
-///    a `ComponentFunc` item inside this instance (with a mangled
+///    that adds a method to a resource would surface as a
+///    `ComponentFunc` item inside this instance (with a mangled
 ///    `[method]resource.method-name` shape) and bypass the
 ///    deterministic-helper gate; rejecting all callables here closes
 ///    that hole. The error carries the qualified
-///    `types-instance.<item-name>`.
+///    `<instance-name>.<item-name>`.
 ///
 ///    A regression fixture exercising a synthetic component whose
 ///    `host-deterministic@1.0.0` instance carries a non-function
@@ -120,69 +119,17 @@ fn is_always_on_helper(cap: &str) -> bool {
 ///    — building one requires a custom WIT package fork, since the
 ///    production WIT cannot be twisted into that shape. The
 ///    inverted predicate above is the load-bearing security change;
-///    the existing test suite confirms legitimate state-apply
-///    components and the types-only `myrhiza:kernel/types@1.0.0`
-///    allowlist still instantiate.
-fn prewalk_state_apply_imports(
+///    the existing test suite confirms legitimate components and the
+///    types-only allowlist still instantiate.
+pub(crate) fn prewalk_imports(
     engine: &Engine,
     component: &Component,
     bound_imports: &std::collections::BTreeSet<String>,
-) -> Result<(), BackendError> {
-    prewalk_imports_inner(engine, component, bound_imports, false)
-}
-
-/// Walk the component's top-level instance imports against `bound_imports`
-/// for the state-propose profile. Allowlist: `host-deterministic@1.0.0`
-/// and `types@1.0.0`. Same rule as state-apply; non-deterministic and async
-/// instances surface as `UnauthorizedImport`.
-///
-/// Called by `instantiate_state_propose` (B-7.3).
-///
-/// # Errors
-///
-/// Returns [`BackendError::UnauthorizedImport`] for the first import that
-/// is not in the state-propose ambient set.
-pub(crate) fn prewalk_state_propose_imports(
-    engine: &Engine,
-    component: &Component,
-    bound_imports: &std::collections::BTreeSet<String>,
-) -> Result<(), BackendError> {
-    prewalk_imports_inner(engine, component, bound_imports, false)
-}
-
-/// Walk the component's top-level instance imports against `bound_imports`
-/// for the interaction profile. Allowlist: `host-deterministic@1.0.0`,
-/// `types@1.0.0`, PLUS `host-ui-surfaces@1.0.0` (types-only — same audit
-/// rule as `types@1.0.0`). Non-deterministic and async instances surface
-/// as `UnauthorizedImport`.
-///
-/// Called by `instantiate_interaction` (B-7.4).
-///
-/// # Errors
-///
-/// Returns [`BackendError::UnauthorizedImport`] for the first import that
-/// is not in the interaction ambient set.
-pub(crate) fn prewalk_interaction_imports(
-    engine: &Engine,
-    component: &Component,
-    bound_imports: &std::collections::BTreeSet<String>,
-) -> Result<(), BackendError> {
-    prewalk_imports_inner(engine, component, bound_imports, true)
-}
-
-/// Shared prewalk implementation used by all three profiles.
-///
-/// `allow_ui_surfaces` enables the `host-ui-surfaces@1.0.0` types-only
-/// instance (interaction profile only). When false, that instance
-/// produces `UnauthorizedImport` — matching state-apply and state-propose.
-fn prewalk_imports_inner(
-    engine: &Engine,
-    component: &Component,
-    bound_imports: &std::collections::BTreeSet<String>,
-    allow_ui_surfaces: bool,
+    profile: Profile,
 ) -> Result<(), BackendError> {
     use wasmtime::component::types::ComponentItem;
 
+    let allow_ui_surfaces = profile.allow_ui_surfaces();
     let component_type = component.component_type();
     for (import_name, item) in component_type.imports(engine) {
         // types-only instances: SHARED_TYPES_INSTANCE and (for interaction)
@@ -268,8 +215,8 @@ pub(crate) mod interaction_bindings {
 /// Per-instance host state held in the Wasmtime `Store`.
 ///
 /// Wired into the Wasmtime store via [`Store::new`] in
-/// [`WasmtimeBackend::instantiate_state_apply`] and consulted from
-/// inside `func_wrap` closures in [`crate::gating::wire_state_apply_linker`].
+/// `WasmtimeBackend::prepare_instance` and consulted from inside
+/// `func_wrap` closures in [`crate::gating::wire_linker`].
 pub struct HostState {
     /// Per-peer log sink for `host.log` records. Drained by the
     /// kernel; not part of state-digest per determinism.md §5.1.
@@ -291,8 +238,8 @@ pub struct HostState {
 /// Backend impl using Wasmtime's component model.
 ///
 /// Holds a single `wasmtime::Engine` configured for fuel + the
-/// component model. Each `instantiate_state_apply` call builds a
-/// fresh `Store` + `Linker` + `Component` from this engine.
+/// component model. Each `instantiate_*` call builds a fresh `Store`
+/// + `Linker` + `Component` from this engine.
 pub struct WasmtimeBackend {
     engine: Engine,
 }
@@ -469,24 +416,45 @@ impl WasmtimeBackend {
     pub fn engine(&self) -> &Engine {
         &self.engine
     }
-}
 
-impl Backend for WasmtimeBackend {
-    fn instantiate_state_apply(
+    /// Shared instantiation prep for all three profiles.
+    ///
+    /// Runs the mechanically identical steps each `instantiate_*` trait
+    /// method needs before invoking the profile-specific bindgen
+    /// `Instance::instantiate` constructor:
+    ///
+    /// 1. Manifest gating check (`validate_manifest`).
+    /// 2. Float-ban lint — only when [`Profile::float_ban_applies`].
+    /// 3. Compute the bound import set.
+    /// 4. Decode the component.
+    /// 5. Pre-walk imports against the bound set.
+    /// 6. Build the linker, binding ONLY the allowed imports.
+    /// 7. Build the store with profile-specific fuel budget + memory cap.
+    ///
+    /// Returns the prepared `(Store, Component, Linker)` triple ready
+    /// to be fed into the profile-specific bindgen
+    /// `Instance::instantiate(...)` call. That final step differs by
+    /// profile because the bindgen-generated types differ
+    /// (`StateApply` vs `StatePropose` vs `Interaction`); the rest of
+    /// the prep is byte-identical across profiles modulo the
+    /// `Profile`-derived knobs above.
+    fn prepare_instance(
         &self,
+        profile: Profile,
         component_bytes: &[u8],
         manifest: &Manifest,
-    ) -> Result<Box<dyn ComponentInstance>, BackendError> {
+    ) -> Result<(Store<HostState>, Component, Linker<HostState>), BackendError> {
         // 1. Manifest gating check — declared imports must be a
-        //    subset of the deterministic helper ambient set.
-        validate_state_apply_manifest(manifest)?;
+        //    subset of the profile's ambient set.
+        validate_manifest(manifest, profile)?;
 
-        // 2. Float-ban lint — reject the component up front if any
-        //    function body uses an f32/f64/SIMD-float instruction.
-        scan_component_for_floats(component_bytes).map_err(BackendError::BannedInstruction)?;
+        // 2. Float-ban lint — only applied for state-apply.
+        if profile.float_ban_applies() {
+            scan_component_for_floats(component_bytes).map_err(BackendError::BannedInstruction)?;
+        }
 
         // 3. Compute the bound import set (manifest ∩ ambient).
-        let bound_imports = state_apply_bound_imports(manifest);
+        let bound = bound_imports(manifest, profile);
 
         // 4. Decode the component.
         let component = Component::from_binary(&self.engine, component_bytes)
@@ -496,17 +464,17 @@ impl Backend for WasmtimeBackend {
         //    unauthorized imports surface as a typed
         //    `BackendError::UnauthorizedImport` instead of relying on
         //    the wording of the linker's instantiation error.
-        prewalk_state_apply_imports(&self.engine, &component, &bound_imports)?;
+        prewalk_imports(&self.engine, &component, &bound, profile)?;
 
         // 6. Build the linker, binding ONLY the allowed imports.
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
-        wire_state_apply_linker(&mut linker, &bound_imports)?;
+        wire_linker(&mut linker, &bound, profile)?;
 
-        // 7. Build the store with fuel budget + memory cap per
-        //    determinism.md §5.3.
+        // 7. Build the store with profile-specific fuel budget +
+        //    memory cap per determinism.md §5.3.
         let host_state = HostState {
             log_sink: Arc::new(LogSink::default()),
-            bound_imports,
+            bound_imports: bound,
             table: ResourceTable::new(),
             limits: wasmtime::StoreLimitsBuilder::new()
                 .memory_size(COMPONENT_MEMORY_CAP_V1)
@@ -514,15 +482,26 @@ impl Backend for WasmtimeBackend {
         };
         let mut store: Store<HostState> = Store::new(&self.engine, host_state);
         store
-            .set_fuel(STATE_APPLY_FUEL_BUDGET_V1)
+            .set_fuel(profile.fuel_budget())
             .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
-        // Enforce the 64 MB memory cap via the StoreLimits the
-        // host_state already carries. `memory.grow` past the cap
-        // returns the wasm-level "out of memory" sentinel, which
-        // surfaces as a trap in typed function calls.
+        // Enforce the memory cap via the StoreLimits the host_state
+        // already carries. `memory.grow` past the cap returns the
+        // wasm-level "out of memory" sentinel, which surfaces as a
+        // trap in typed function calls.
         store.limiter(|s| &mut s.limits);
 
-        // 8. Instantiate via the bindgen-generated `StateApply` type.
+        Ok((store, component, linker))
+    }
+}
+
+impl Backend for WasmtimeBackend {
+    fn instantiate_state_apply(
+        &self,
+        component_bytes: &[u8],
+        manifest: &Manifest,
+    ) -> Result<Box<dyn ComponentInstance>, BackendError> {
+        let (store, component, linker) =
+            self.prepare_instance(Profile::StateApply, component_bytes, manifest)?;
         let instance = StateApplyInstance::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
     }
@@ -532,50 +511,8 @@ impl Backend for WasmtimeBackend {
         component_bytes: &[u8],
         manifest: &Manifest,
     ) -> Result<Box<dyn ProposeInstance>, BackendError> {
-        use crate::gating::{
-            state_propose_bound_imports, validate_state_propose_manifest, wire_state_propose_linker,
-        };
-
-        // 1. Manifest gating — declared imports must be a subset of the
-        //    state-propose ambient set (deterministic helpers only).
-        validate_state_propose_manifest(manifest)?;
-
-        // 2. No float-ban scan — state-propose is a non-deterministic profile
-        //    per spec §3.3; cross-peer determinism does not apply.
-
-        // 3. Compute the bound import set (manifest ∩ ambient).
-        let bound_imports = state_propose_bound_imports(manifest);
-
-        // 4. Decode the component.
-        let component = Component::from_binary(&self.engine, component_bytes)
-            .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
-
-        // 5. Pre-walk component imports against the bound set.
-        prewalk_state_propose_imports(&self.engine, &component, &bound_imports)?;
-
-        // 6. Build the linker, binding only the allowed imports.
-        let mut linker: Linker<HostState> = Linker::new(&self.engine);
-        wire_state_propose_linker(&mut linker, &bound_imports)?;
-
-        // 7. Build the store with propose fuel budget + memory cap per
-        //    spec §3.3. Fuel budget is 5× state-apply (50M) because
-        //    propose is non-deterministic; the kernel re-checks via
-        //    state-apply dry-run before signing.
-        let host_state = HostState {
-            log_sink: Arc::new(LogSink::default()),
-            bound_imports,
-            table: ResourceTable::new(),
-            limits: wasmtime::StoreLimitsBuilder::new()
-                .memory_size(COMPONENT_MEMORY_CAP_V1)
-                .build(),
-        };
-        let mut store: Store<HostState> = Store::new(&self.engine, host_state);
-        store
-            .set_fuel(STATE_PROPOSE_FUEL_BUDGET_V1)
-            .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
-        store.limiter(|s| &mut s.limits);
-
-        // 8. Instantiate via the bindgen-generated `StatePropose` type.
+        let (store, component, linker) =
+            self.prepare_instance(Profile::StatePropose, component_bytes, manifest)?;
         let instance = StateProposeInstance::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
     }
@@ -585,50 +522,8 @@ impl Backend for WasmtimeBackend {
         component_bytes: &[u8],
         manifest: &Manifest,
     ) -> Result<Box<dyn InteractionInstance>, BackendError> {
-        use crate::gating::{
-            interaction_bound_imports, validate_interaction_manifest, wire_interaction_linker,
-        };
-
-        // 1. Manifest gating — declared imports must be a subset of the
-        //    interaction ambient set.
-        validate_interaction_manifest(manifest)?;
-
-        // 2. No float-ban scan — interaction is a non-deterministic profile
-        //    per spec §3.3; cross-peer determinism does not apply.
-
-        // 3. Compute the bound import set (manifest ∩ ambient).
-        let bound_imports = interaction_bound_imports(manifest);
-
-        // 4. Decode the component.
-        let component = Component::from_binary(&self.engine, component_bytes)
-            .map_err(|e| BackendError::Instantiation(format!("decode component: {e}")))?;
-
-        // 5. Pre-walk component imports against the bound set.
-        prewalk_interaction_imports(&self.engine, &component, &bound_imports)?;
-
-        // 6. Build the linker, binding only the allowed imports.
-        let mut linker: Linker<HostState> = Linker::new(&self.engine);
-        wire_interaction_linker(&mut linker, &bound_imports)?;
-
-        // 7. Build the store with interaction fuel budget + memory cap per
-        //    spec §3.3. Fuel budget is 50M — identical to propose because
-        //    interaction is also a non-deterministic per-peer profile; the
-        //    kernel never replays interaction calls.
-        let host_state = HostState {
-            log_sink: Arc::new(LogSink::default()),
-            bound_imports,
-            table: ResourceTable::new(),
-            limits: wasmtime::StoreLimitsBuilder::new()
-                .memory_size(COMPONENT_MEMORY_CAP_V1)
-                .build(),
-        };
-        let mut store: Store<HostState> = Store::new(&self.engine, host_state);
-        store
-            .set_fuel(INTERACTION_FUEL_BUDGET_V1)
-            .map_err(|e| BackendError::Instantiation(format!("set_fuel: {e}")))?;
-        store.limiter(|s| &mut s.limits);
-
-        // 8. Instantiate via the bindgen-generated `Interaction` type.
+        let (store, component, linker) =
+            self.prepare_instance(Profile::Interaction, component_bytes, manifest)?;
         let instance = InteractionInstanceImpl::instantiate(store, &component, &linker)?;
         Ok(Box::new(instance))
     }
