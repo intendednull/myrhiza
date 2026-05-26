@@ -31,7 +31,7 @@ The counter fixtures' real friction is **not** wit-bindgen — that's already on
 
 - `myrhiza_sdk::types` — re-exports of `Verdict`, `Hlc`, `LogLevel`, `IdentityScope`, plus the manifest-side structs (`Manifest`, `AbiSection`, `CapabilitiesSection`, etc.) so app authors don't depend on `myrhiza-manifest` directly.
 - `myrhiza_sdk::prelude` — `use myrhiza_sdk::prelude::*;` brings the common SDK names into scope (`Verdict`, `LogLevel`, the `manifest!` macro, the `myrhiza_app!` runtime-init macro).
-- A `wit/` subdirectory shipped with the SDK crate, containing the canonical kernel WIT package at the version this SDK release targets. Apps point `wit_bindgen::generate!` at `myrhiza_sdk::wit_dir!()` (a `macro_rules!` returning the absolute path constant at compile time) instead of vendoring their own copy.
+- A `wit/` subdirectory shipped with the SDK crate, containing the canonical kernel WIT package at the version this SDK release targets. Apps point `wit_bindgen::generate!` at `myrhiza_sdk::local_wit_dir!()` (a `macro_rules!` returning the absolute path constant at compile time — note: the macro lives in the SDK but emits the **consumer**'s `wit/` directory path, hence `local_*`) instead of vendoring their own copy.
 - A `manifest!` declarative macro (`macro_rules!`) that takes a structured Rust DSL and emits a `Manifest` struct literal + a function returning the canonical-bincode bytes ready for signing. Used at build time by the example crates and by app authors at publish time.
 - A `myrhiza_app!` runtime-init macro: takes the world name and the `Component` type; expands to `#![no_std]`, `#![no_main]`, the bump allocator, the `#[panic_handler]`, the `wit_bindgen::generate!` invocation, the `export!(Component);` line, and the `#![allow(unsafe_op_in_unsafe_fn)]` workaround for wit-bindgen 0.30. Single macro per fixture replaces ~80 LOC of boilerplate.
 
@@ -59,7 +59,7 @@ crates/sdk/
 │   ├── types.rs              — re-exports of kernel-facing types
 │   ├── manifest.rs           — re-exports of Manifest schema + the manifest! macro
 │   ├── boilerplate.rs        — the bump allocator + panic handler the myrhiza_app! macro emits
-│   └── macros.rs             — manifest!, myrhiza_app!, wit_dir! declarative macros
+│   └── macros.rs             — manifest!, myrhiza_app!, local_wit_dir! declarative macros
 └── wit/                      — copy of wit/myrhiza-kernel/wit/*.wit pinned to the SDK release
 ```
 
@@ -105,7 +105,18 @@ Today's `tests/fixtures/` layout has three categories:
 
 - Root `Cargo.toml` workspace `members` + `exclude` arrays (add `examples/counter`, drop the three counter-* fixture excludes).
 - `Justfile`'s `build-fixtures` recipe (change `(_build-fixture "counter-state-apply" "counter_state_apply_fixture" "state-apply")` to point at the new path; reuse for state-propose and interaction).
-- `crates/test-utils/src/bundle.rs` paths: `counter_fixture_path()`, `counter_state_propose_fixture_path()`, `counter_interaction_fixture_path()` change to read from `examples/counter/target/wasm32-unknown-unknown/release/` or `tests/fixtures/built/counter-{state-apply,state-propose,interaction}.wasm`. Recommended: keep the **output** location at `tests/fixtures/built/` so test-utils paths don't move; only the **source** location moves.
+- `crates/test-utils/src/bundle.rs` paths: `counter_fixture_path()`, `counter_state_propose_fixture_path()`, `counter_interaction_fixture_path()` (3 helpers ~lines 85–208). Per §3.5 step 6 we keep the **output** location at `tests/fixtures/built/counter-*.wasm`, so these helpers' returned paths **do not change**.
+
+Since the output fixture paths don't move, every other consumer of `build_signed_counter_bundle` / `build_signed_counter_bundle_three_components` and the path strings continues to work without code changes. However, several files contain **B-7-era narrative copy** in doc-comments that becomes stale once the source-of-truth moves from `tests/fixtures/counter-*/` to `examples/counter/`. Touch-list:
+
+| File | What changes |
+|---|---|
+| `crates/test-utils/src/bundle.rs` (3 path helpers, lines ~85–208) | Doc-comments referring to "fixture wasm at `tests/fixtures/built/counter-state-apply.wasm`" stay accurate (output path is unchanged); narrative phrasing "reproducibly-built fixture at …" may want a "(produced by `just build-fixtures` from `examples/counter/src/state.rs`)" hint. |
+| `crates/test-utils/src/manifest.rs` (line ~67) | Doc-comment on `helpers_only_three_component_manifest` references `build_signed_counter_bundle_three_components` — call site reference stays correct; no edit strictly required, but flagged for review during slice. |
+| `crates/kernel/tests/acceptance.rs` (line ~46) | Direct path string `"tests/fixtures/built/counter-state-apply.wasm"` — unchanged (output path stable). |
+| `crates/wasmtime-backend/tests/profile_instantiation.rs` (lines 5–23 module-doc, lines 135, 168, 199, 239) | 4 direct path reads — paths unchanged. Module-doc narrative ("the counter-state-propose WASM fixture (built by B-7.5)") references B-7-era build origin; this narrative is stale once the source moves but the fixture-output-name and behaviour are unchanged. |
+| `crates/kernel/src/install.rs` (comment line ~241) | Comment mentions `tests/fixtures/built/counter-state-apply.wasm` as the "real component bytes" — path unchanged, no edit needed; flagged for confirmation only. |
+| `crates/myrhiza-cli/tests/e2e.rs` (line ~16) | Imports `build_signed_counter_bundle_three_components` from `myrhiza_test_utils::bundle` — call-site is stable. |
 
 The negative-test fixtures' `Cargo.toml` files stay in `tests/fixtures/` and continue to be excluded from the workspace. Their `wit/` directories continue to be local subsets because they intentionally diverge from the canonical WIT.
 
@@ -186,7 +197,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 **Why a bespoke script and not cargo-deny**:
 
 - `cargo-deny` has a [`bans`](https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html) table but its `deny = [...]` list is workspace-global; it cannot express "crate X may not depend on Y, but the rest of the workspace may." We need conditional bans keyed on the dependent crate's path, which cargo-deny does not support natively.
-- A 40-LOC Rust script in `xtask/dep-direction/` is auditable, has no third-party-config-language to learn, and runs in CI as `cargo run -p dep-direction-check`.
+- cargo-deny's `bans.deny` entries do support a `wrappers` field, which restricts which crates may reach a banned crate (reverse mapping — "only these wrappers may pull in banned crate X"). This is the inverse of what we need: we want "crates in `examples/*` may NOT reach kernel-internal crate Y," not "only these wrappers may reach Y workspace-wide." The graph cargo-deny operates on is direct deps + transitive bans, not arbitrary cross-cutting path-keyed rules.
+- A 40-LOC Rust script in `xtask/dep-direction/` is auditable, has no third-party-config-language to learn, gives a unit-testable rule surface (synthetic `Metadata` fixtures vs. cargo-deny config-file disputes), and runs in CI as `cargo run -p dep-direction-check`.
 - The script's unit tests can assert "given this synthetic Cargo.toml, the check fails / passes" — a tighter feedback loop than cargo-deny config testing.
 
 **Why a Rust binary and not a shell + `cargo tree | grep`**:
@@ -234,7 +246,7 @@ fn sdk_wit_matches_kernel_wit() {
 
 **Why bit-identical**: the kernel binds against the WIT at `wit/myrhiza-kernel/wit/`. Apps bind against `wit/` shipped in the SDK. If they diverge, the canonical-ABI byte layout differs, the kernel's linker rejects the component at instantiate, and the error message is opaque. Bit-equality + a CI-tested invariant prevents this entire class of error at the source.
 
-**Build-time mechanism for the SDK to ship its `wit/` directory**: the SDK crate's `wit/` directory is part of the crate's source tree (committed to git). `cargo package` would include it (the SDK is `publish = false` for v1, but the directory layout matches what a publishable crate would need). The path is exposed via a `wit_dir!()` macro that resolves to `concat!(env!("CARGO_MANIFEST_DIR"), "/../sdk/wit")` from the **example's** crate manifest dir — that's hacky.
+**Build-time mechanism for the SDK to ship its `wit/` directory**: the SDK crate's `wit/` directory is part of the crate's source tree (committed to git). `cargo package` would include it (the SDK is `publish = false` for v1, but the directory layout matches what a publishable crate would need). The path is exposed via a `local_wit_dir!()` macro that resolves to `concat!(env!("CARGO_MANIFEST_DIR"), "/../sdk/wit")` from the **example's** crate manifest dir — that's hacky.
 
 **Alternative — a build script**: SDK ships a build.rs that copies the SDK's `wit/` directory to `OUT_DIR/wit`, and a `pub const WIT_PATH: &str = env!("MYRHIZA_SDK_WIT_DIR");` that's set by SDK's build.rs and re-exposed via... no, this also requires the example's build to know about the SDK's OUT_DIR.
 
@@ -283,6 +295,8 @@ pub fn build() -> Manifest {
 
 The macro expands to a `Manifest` struct literal with the canonical fields populated from the DSL. Defaults: `determinism = { allow_floats: false, drift_detection: { interval_events: 1024 } }`, `modules.dep = []`, `author_policy = AuthorPolicy::Deny`. Missing required fields are compile errors (the macro pattern-matches on the DSL structure).
 
+**On the helper-macro layer (`__author_class!`, `__sdf!`, etc.)**: the `manifest!` macro delegates ident → enum-variant translation to internal helper sub-macros (e.g., `__author_class!(third_party)` → `AuthorIdentityClass::ThirdParty`). The helper-macro layer adds an indirection step that obscures error messages slightly when a contributor mis-spells an ident; an alternative is to use `$($variant:tt)*` and let the call site spell the enum variant verbatim (`author_class: AuthorIdentityClass::ThirdParty`). We picked tt-based recognition for compile-time enum-mismatch failures with author-friendly snake-case spellings; fall back to verbatim variant spelling if the helper-macro maintenance burden grows.
+
 **Why a declarative macro and not TOML + parser**:
 
 - App authors write code, not TOML. The macro lives next to the app's source; the `cargo build` step type-checks the manifest against the `Manifest` struct schema.
@@ -313,7 +327,7 @@ crates/sdk/
 │   ├── prelude.rs        — re-export Verdict, LogLevel, Manifest, manifest!, myrhiza_app!
 │   ├── types.rs          — re-exports from myrhiza-types (BundleHash, EventHash, Hlc)
 │   ├── manifest.rs       — re-exports from myrhiza-manifest::schema
-│   ├── macros.rs         — `manifest!`, `myrhiza_app!`, `wit_dir!` declarative macros
+│   ├── macros.rs         — `manifest!`, `myrhiza_app!`, `local_wit_dir!` declarative macros
 │   └── boilerplate.rs    — bump allocator + panic handler emitted by myrhiza_app!
 ├── wit/                  — sibling-synced copy of wit/myrhiza-kernel/wit/*.wit
 └── tests/
@@ -392,6 +406,8 @@ pub use crate::manifest::{
 pub use crate::manifest;        // the manifest! macro
 pub use crate::myrhiza_app;     // the myrhiza_app! macro
 ```
+
+**cfg-gate note**: `manifest.rs` and the `manifest!` macro expansion below use `std::collections::BTreeMap`. The `boilerplate` module is cfg-gated to `target_arch = "wasm32"` (no `std`), but `manifest.rs` is **only ever compiled host-side** — never for `wasm32-unknown-unknown` — because manifest authoring is a publishing-side activity. Accordingly, the `manifest!` macro emits `std::*` paths unconditionally; this is safe given the host-side-only consumption context.
 
 ```rust
 // crates/sdk/src/macros.rs (excerpt — the manifest! macro)
@@ -483,7 +499,7 @@ macro_rules! myrhiza_app {
         use $crate::__boilerplate::*;
         wit_bindgen::generate!({
             world: "state-apply",
-            path: $crate::wit_dir!(),
+            path: $crate::local_wit_dir!(),
         });
         struct $component;
         export!($component);
@@ -493,15 +509,22 @@ macro_rules! myrhiza_app {
     (behavior, $component:ident) => { /* ... v1.1 stretch ... */ };
 }
 
+/// Resolves to the **consumer** crate's local `wit/` directory.
+///
+/// Lives in the SDK but expands to `concat!(env!("CARGO_MANIFEST_DIR"), "/wit")`,
+/// where `CARGO_MANIFEST_DIR` is set by Cargo to the caller's manifest dir at
+/// compile time. The `local_` prefix is a reminder that the bytes consumed are
+/// the consumer crate's local copy (kept in sync with `crates/sdk/wit/` via
+/// `just sync-wit` — see §2.5).
 #[macro_export]
-macro_rules! wit_dir {
+macro_rules! local_wit_dir {
     () => {
         concat!(env!("CARGO_MANIFEST_DIR"), "/wit")
     };
 }
 ```
 
-**Note on `wit_dir!`**: this resolves to the **example crate's** `wit/` directory (not the SDK's), because `CARGO_MANIFEST_DIR` is the consumer crate's manifest. The `wit/` directory must be present in the consumer crate. This is the same pattern fixtures use today; the `just sync-wit` recipe (§2.5) copies from `crates/sdk/wit/` into `examples/*/wit/` and the in-sync test asserts equality.
+**Note on `local_wit_dir!`**: this resolves to the **example crate's** `wit/` directory (not the SDK's), because `CARGO_MANIFEST_DIR` is the consumer crate's manifest. The `wit/` directory must be present in the consumer crate. The `local_` prefix encodes this "lives-in-SDK, emits-consumer-path" semantic asymmetry that would otherwise surprise readers expecting `myrhiza_sdk::wit_dir!()` to return the SDK's own dir. This is the same pattern fixtures use today; the `just sync-wit` recipe (§2.5) copies from `crates/sdk/wit/` into `examples/*/wit/` and the in-sync test asserts equality.
 
 **Caveat with concat! and env!**: `wit_bindgen::generate!` takes a `path` that's evaluated at macro-expansion time. Using `concat!(env!("CARGO_MANIFEST_DIR"), "/wit")` works because `env!` is also expanded at macro time, but the path is interpreted relative to wit-bindgen's expectation (which is an absolute path or a path relative to the workspace root). This pattern works in the existing fixtures (`wit_bindgen::generate!({ world: "state-apply" })` defaults to `./wit` relative to `CARGO_MANIFEST_DIR`); the macro is just making the path explicit. Verify at slice time.
 
@@ -579,7 +602,9 @@ strip = "symbols"
 
 **Caveat — multiple components per crate**: Rust's component-build story prefers **one cdylib per crate** because each `[lib]` block has one `crate-type` set and global allocator. The `[[bin]] + required-features` shape is the workaround: each component is a separate `[[bin]]` artifact, gated by a feature so only one component compiles per `cargo build --features ...` invocation. The Justfile recipe runs `cargo build --target wasm32-unknown-unknown --features state-apply --bin counter-state-apply` three times (once per component).
 
-**Runner-up — three separate crates `examples/counter-state-apply/`, `examples/counter-state-propose/`, `examples/counter-interaction/`**: simpler from a Cargo-mechanics standpoint, but loses the "one app, three components, one manifest" narrative. The `[[bin]] + required-features` pattern preserves the single-crate-per-app shape that's pedagogically right and matches the mvp.md layout exactly. If the `[[bin]] + required-features + wasm32-unknown-unknown` interaction proves brittle at slice time (see §6 risk row 2), fall back to three crates and update the spec.
+**Verify at slice 0**: existing fixtures use `crate-type = ["cdylib"]` on `[lib]` only — no `[[bin]]` precedent in tree today. Before B-8.3 ports any code, B-8.0 must validate that `[[bin]] + required-features + crate-type` inheritance (or explicit cdylib via per-target config) actually behaves on `wasm32-unknown-unknown` by building a minimal empty `[[bin]]` stub. If it does not, fall back to the runner-up below — and acknowledge in the slice-0 commit message that the fallback re-introduces the per-crate boilerplate the SDK is meant to consolidate.
+
+**Runner-up — three separate crates `examples/counter-state-apply/`, `examples/counter-state-propose/`, `examples/counter-interaction/`**: simpler from a Cargo-mechanics standpoint, but loses the "one app, three components, one manifest" narrative. The `[[bin]] + required-features` pattern preserves the single-crate-per-app shape that's pedagogically right and matches the mvp.md layout exactly. If the `[[bin]] + required-features + wasm32-unknown-unknown` interaction proves brittle at slice time (see §6 risk row "Cargo's `[[bin]] + required-features`"), fall back to three crates and update the spec. **Trade-off worth surfacing**: that fallback effectively re-creates the per-fixture boilerplate problem the SDK is solving — three crates each repeating the `myrhiza-sdk` dep, manifest stub, and `wit/` sync. The `myrhiza_app!` macro still helps, but the "one app = one Cargo.toml" pedagogical line is lost.
 
 ### 3.4 Dep-direction CI mechanism (full spec)
 
@@ -600,7 +625,7 @@ Slice-by-slice (full sequence in §4):
 
 1. Create `examples/counter/Cargo.toml` + `examples/counter/src/lib.rs` (empty stub) + `examples/counter/wit/` (synced from kernel).
 2. Add `examples/counter` to workspace `members`. The dep-direction check identifies example crates by path match (`examples/*` segment in the manifest path) — no explicit allowlist or `[workspace.metadata]` table is needed.
-3. Port `tests/fixtures/counter-state-apply/src/lib.rs` to `examples/counter/src/state.rs`, replacing the bump-allocator + panic-handler + wit-bindgen boilerplate with `myrhiza_app!(state_apply, Component);` and updating `wit_bindgen::generate!`'s path to `myrhiza_sdk::wit_dir!()`.
+3. Port `tests/fixtures/counter-state-apply/src/lib.rs` to `examples/counter/src/state.rs`, replacing the bump-allocator + panic-handler + wit-bindgen boilerplate with `myrhiza_app!(state_apply, Component);` and updating `wit_bindgen::generate!`'s path to `myrhiza_sdk::local_wit_dir!()`.
 4. Port `tests/fixtures/counter-state-propose/src/lib.rs` → `examples/counter/src/propose.rs`.
 5. Port `tests/fixtures/counter-interaction/src/lib.rs` → `examples/counter/src/interaction.rs`.
 6. Update `Justfile`'s `build-fixtures` recipe: replace the three counter-* fixture build invocations with three example-targeted builds; output stays at `tests/fixtures/built/counter-{state-apply,state-propose,interaction}.wasm` so test-utils doesn't move.
@@ -611,10 +636,10 @@ Slice-by-slice (full sequence in §4):
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| `myrhiza_app!` macro expansion differs from hand-rolled boilerplate in subtle ways (e.g., bump allocator alignment, panic handler signature) | Medium | Migrated counter fixture produces different WASM bytes → wasmtime instantiation succeeds but the kernel's content-hash-pinning regression test (B-7.0's bundle-content-hash test) sees different bytes and fails | Bit-for-bit copy of the fixture's `BumpAlloc` + `#[panic_handler]` into `crates/sdk/src/__boilerplate.rs`; the macro's output is structurally identical to the fixture today; CI golden-byte test pins post-migration counter-state-apply.wasm hash. |
+| `myrhiza_app!` macro expansion differs from hand-rolled boilerplate in subtle ways (e.g., bump allocator alignment, panic handler signature) | Medium | Migrated counter fixture produces different WASM bytes; wasmtime instantiation succeeds but behavioural divergence possible | Bit-for-bit copy of the fixture's `BumpAlloc` + `#[panic_handler]` into `crates/sdk/src/__boilerplate.rs`; the macro's output is structurally identical to the fixture today. (Counter WASM byte-drift is not pinned by any test today — see §5.2 note.) |
 | B-7's E2E CLI test (`crates/myrhiza-cli/tests/e2e.rs`) breaks because the fixture path moves | High (if path moves) | B-7's load-bearing acceptance test (criterion 3) breaks | Don't move the **output path** — only the **source path** moves. `tests/fixtures/built/counter-*.wasm` stays canonical; the Justfile recipe just rebuilds them from a different source dir. |
 | `myrhiza-sdk`'s `wit/` directory drifts from `wit/myrhiza-kernel/wit/` | Medium | Apps generate bindings against stale WIT; kernel rejects on instantiate; opaque error | `crates/sdk/tests/wit_in_sync.rs` asserts byte-equality; `just sync-wit` recipe copies kernel → SDK + SDK → examples; CI runs the test |
-| Cargo's `[[bin]] + required-features` doesn't compose with `wasm32-unknown-unknown` target | Low | Migration plan needs restructuring | Verified at slice 1 by building a single-component empty stub; if it fails, fall back to three separate `examples/counter-*` crates per §3.3 runner-up. |
+| Cargo's `[[bin]] + required-features` doesn't compose with `wasm32-unknown-unknown` target (existing fixtures only use `[lib] crate-type = ["cdylib"]` — no `[[bin]]` precedent in tree today) | Low | Migration plan needs restructuring | **Verify at slice 0** by building a single-component empty stub against `wasm32-unknown-unknown` with `[[bin]] + required-features`; if it fails, fall back to three separate `examples/counter-*` crates per §3.3 runner-up — which effectively re-introduces the per-crate boilerplate the SDK is meant to consolidate, a real trade-off to surface in slice-0 commit. |
 
 ### 3.6 Root Cargo.toml diff sketch
 
@@ -666,9 +691,9 @@ Unit tests: type re-exports compile; SDK depends only on `types` + `manifest`; w
 
 **Why first**: every other slice imports `myrhiza-sdk`. Landing the crate as a no-op re-export decouples the SDK landing from the macro and migration work.
 
-### B-8.1 — `myrhiza_app!` boilerplate macro + `wit_dir!` helper
+### B-8.1 — `myrhiza_app!` boilerplate macro + `local_wit_dir!` helper
 
-Add `crates/sdk/src/__boilerplate.rs` (bump allocator + panic handler, gated to wasm32). Add `crates/sdk/src/macros.rs` with `myrhiza_app!` and `wit_dir!` macros. Add `pub use` lines to prelude.
+Add `crates/sdk/src/__boilerplate.rs` (bump allocator + panic handler, gated to wasm32). Add `crates/sdk/src/macros.rs` with `myrhiza_app!` and `local_wit_dir!` macros. Add `pub use` lines to prelude.
 
 Unit tests: build a minimal in-tree wasm test crate that uses `myrhiza_app!` and assert it produces a valid component via wasm-tools (test infrastructure already exists in `tests/fixtures/built/`).
 
@@ -705,9 +730,9 @@ Create the workspace member per §3.4. Wire into `Justfile`'s `ci` target. Unit 
 - The full B-7 acceptance test (`crates/myrhiza-cli/tests/e2e.rs`) re-runs against the new `examples/counter`-sourced WASM artifacts. The test does not change; only the source location changes. Pre-check ≡ apply assertion at every step.
 - The kernel acceptance suite (`crates/kernel/tests/acceptance.rs` + `crates/kernel/tests/coexistence.rs` + the iroh convergence/coexistence tests) all re-run unchanged.
 
-**Acceptance: same number of passing tests; no regression in coverage; byte-pinned regressions (e.g., `wire_freeze.rs`'s bundle-content-hash pin from B-7.0) still pass.**
+**Acceptance: same number of passing tests; no regression in coverage; byte-pinned regressions (e.g., `wire_freeze.rs`'s `bundle_content_hash_three_component_fixture_is_frozen` test from B-7.0) still pass.**
 
-If the migrated WASM differs byte-for-byte from today's WASM, the wire-freeze test fails. The fix is to re-pin the bytes in the test (counter is a fixture, its hash is not a stability commitment — only event/gossip wire format is) and document the new pin. This is the only "test failure that's not a bug" we accept in B-8.
+Note on counter byte-drift coverage: `crates/types/tests/wire_freeze.rs` only pins `bundle_content_hash(Some(b"a"), Some(b"b"), Some(b"c"), None)` — synthetic literals, not counter WASM bytes. No test catches silent byte-drift on the counter fixture today; this PR does not change that. Fixture hashes are not a stability commitment — only event/gossip wire format is. The migration thus has nothing to "re-pin"; it neither regresses nor improves this coverage.
 
 ### 5.3 CI check fails-loud (slice B-8.4)
 
@@ -719,8 +744,7 @@ If the migrated WASM differs byte-for-byte from today's WASM, the wire-freeze te
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Migrated counter WASM differs byte-for-byte from today's fixture WASM, breaking wire-freeze test | Medium | B-8.3 slice can't merge until wire-freeze is re-pinned | Re-pin the counter fixture hashes in B-8.3 as part of the same slice; this is the expected one-time migration cost |
-| `[[bin]] + required-features` doesn't compose cleanly with `cargo build --target wasm32-unknown-unknown` | Low | §3.3 runner-up: split into three crates | Verify at slice B-8.0 by building an empty stub; fall back to three crates if needed |
+| `[[bin]] + required-features` doesn't compose cleanly with `cargo build --target wasm32-unknown-unknown` (existing fixtures use `[lib] crate-type = ["cdylib"]` only — no `[[bin]]` precedent) | Low | §3.3 runner-up: split into three crates | Verify at slice B-8.0 by building an empty stub; fall back to three crates if needed. **Slice-0 verification gate:** if `[[bin]] + required-features` does not work on `wasm32-unknown-unknown`, the runner-up (three crates per app) effectively re-creates the boilerplate problem the SDK is solving — a real trade-off worth surfacing |
 | `myrhiza_app!` macro semantics differ subtly from hand-rolled boilerplate (e.g., bump allocator alignment edge cases) | Low | Subtle determinism bug; per-peer state divergence | Boilerplate is bit-copied from the existing fixture; macro is structural-only; CI golden-byte test on counter pinned to a hash post-migration |
 | Macro proliferation tempts contributors to add more macros to the SDK; surface grows uncontrolled | Medium | SDK becomes a maintenance burden over time | This spec explicitly defers proc-macros and helper macros to a later slice; macro additions require a spec amendment |
 | WIT drift between `crates/sdk/wit/` and `wit/myrhiza-kernel/wit/` despite the in-sync test (e.g., contributor adds a file to kernel-wit and forgets the sync) | Medium | App bindings drift; kernel rejects apps at install | `just sync-wit` runs `cp -r wit/myrhiza-kernel/wit/* crates/sdk/wit/` + `cp -r crates/sdk/wit/* examples/counter/wit/`. Pre-commit hook recommended (out of scope for B-8 spec; flagged as carryover). CI test fails closed. |
@@ -739,7 +763,7 @@ If the migrated WASM differs byte-for-byte from today's WASM, the wire-freeze te
 | Spec-author macro: `manifest!` is for app authors; spec authors may want a `spec_test_manifest!` that builds a synthetic manifest for tests | Likely re-usable from `crates/test-utils/src/manifest.rs`'s `helpers_only_*` patterns. Out of scope for B-8. |
 | `examples/echo/` (or migration of echo to examples) | Echo's role is "second WASM blob for coexistence test." If we ever want it to be a real example, B-6 or later. |
 | Migration of negative-test fixtures (`over-importer`, `pre-check-rejector`, etc.) into a `tests/fixtures/negative/` subfolder | Cosmetic cleanup; no functional benefit |
-| The `wit_dir!()` macro is hacky (relies on `CARGO_MANIFEST_DIR/wit` convention); a future improvement would have the SDK ship its WIT via `include_bytes!` + write it to `OUT_DIR/wit` at SDK consumer build time | When publishing the SDK to crates.io becomes a goal. Out of scope for v1. |
+| The `local_wit_dir!()` macro is hacky (relies on `CARGO_MANIFEST_DIR/wit` convention); a future improvement would have the SDK ship its WIT via `include_bytes!` + write it to `OUT_DIR/wit` at SDK consumer build time | When publishing the SDK to crates.io becomes a goal. Out of scope for v1. |
 
 ## 8. Prior-art citations
 
@@ -795,7 +819,7 @@ Per [CLAUDE.md](../../CLAUDE.md): cite folder + section, name runner-up paradigm
 Breakdown:
 
 - B-8.0 (SDK scaffold + WIT in-sync test): 0.5 day
-- B-8.1 (`myrhiza_app!` + `wit_dir!` macros): 0.5 day
+- B-8.1 (`myrhiza_app!` + `local_wit_dir!` macros): 0.5 day
 - B-8.2 (`manifest!` macro): 0.5 day
 - B-8.3 (migrate counter fixtures): 0.5–1 day (the long pole — Justfile + test-utils + wire-freeze re-pin all touch)
 - B-8.4 (dep-direction CI check): 0.5 day
@@ -808,7 +832,7 @@ B-8 ships when:
 
 - [ ] `crates/sdk/` exists as a workspace member with `lib.rs` re-exports, `wit/` directory (bit-identical to `wit/myrhiza-kernel/wit/`), and a passing `wit_in_sync` test.
 - [ ] `myrhiza_sdk::prelude` brings `Verdict`, `Hlc`, `LogLevel`, `Manifest`, and the `manifest!` / `myrhiza_app!` macros into scope.
-- [ ] `manifest!` macro expands to a canonical `Manifest` struct equivalent to today's hand-rolled `helpers_only_three_component_manifest`.
+- [ ] `manifest!` macro expands to a canonical `Manifest` struct equivalent to today's hand-rolled `helpers_only_three_component_manifest`. (Note: the macro invokes `.canonicalize()` on the emitted struct as its last step, which sorts maps deterministically — the resulting `Manifest` is "as-if signed" minus the signature, so downstream code can hash / serialize it without re-canonicalizing.)
 - [ ] `myrhiza_app!` macro emits the bump allocator + panic handler + `wit_bindgen::generate!` + `export!` boilerplate for `state_apply`, `state_propose`, `interaction`, and `behavior` profile variants.
 - [ ] `examples/counter/` exists as a workspace member with one Cargo.toml, three component slots (`src/state.rs`, `src/propose.rs`, `src/interaction.rs`), one manifest builder (`manifest.rs` using `manifest!`), and a synced `wit/` directory.
 - [ ] `tests/fixtures/counter-state-apply/`, `tests/fixtures/counter-state-propose/`, and `tests/fixtures/counter-interaction/` are deleted; their workspace-exclude entries are removed.
