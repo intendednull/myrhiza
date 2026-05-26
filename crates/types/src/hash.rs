@@ -22,6 +22,24 @@ pub struct EventHash(#[serde(with = "crate::hash::serde_bytes_32_pub")] [u8; 32]
 #[serde(transparent)]
 pub struct BundleHash(#[serde(with = "crate::hash::serde_bytes_32_pub")] [u8; 32]);
 
+/// 32-byte BLAKE3 hash addressing a blob in an iroh-blobs store.
+///
+/// Thin newtype over `[u8; 32]` matching `EventHash` / `BundleHash`
+/// shape so the type system distinguishes "blob content addressing"
+/// from "event hash" from "bundle identity" even though all three
+/// are BLAKE3-sized. Lives in `myrhiza-types` (not `myrhiza-network`
+/// nor `myrhiza-distribution`) so `myrhiza-manifest` can declare
+/// `Option<BlobHash>` fields without taking on iroh as a dependency.
+///
+/// Conversion to/from `iroh_blobs::Hash` lives in
+/// `myrhiza-distribution` as free fns (orphan rule — same shape as
+/// `peer_pubkey_from_iroh` in B-4.0).
+///
+/// Per B-10 spec §4.2 + §4.6.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BlobHash(#[serde(with = "crate::hash::serde_bytes_32_pub")] [u8; 32]);
+
 pub(crate) mod serde_bytes_32_pub {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     pub fn serialize<S: Serializer>(b: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
@@ -84,6 +102,35 @@ impl BundleHash {
     }
 }
 
+impl BlobHash {
+    /// Sentinel zero hash (32 zero bytes). Used by tests; not a
+    /// valid iroh-blobs address.
+    pub const ZERO: BlobHash = BlobHash([0u8; 32]);
+
+    /// Wrap a 32-byte array as a `BlobHash`. No validation —
+    /// caller must have computed it via BLAKE3 over the blob bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the raw 32 bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Compute the `BlobHash` from arbitrary bytes via BLAKE3.
+    ///
+    /// Convenience for tests + publish-side code that has the
+    /// blob bytes in hand. Production fetch path receives the hash
+    /// from the wire and never recomputes it (iroh-blobs verifies).
+    #[must_use]
+    pub fn blake3(input: &[u8]) -> Self {
+        Self(*blake3::hash(input).as_bytes())
+    }
+}
+
 impl fmt::Display for EventHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in &self.0 {
@@ -111,6 +158,21 @@ impl fmt::Display for BundleHash {
 impl fmt::Debug for BundleHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BundleHash({self})")
+    }
+}
+
+impl fmt::Display for BlobHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for BlobHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BlobHash({self})")
     }
 }
 
@@ -166,5 +228,38 @@ mod tests {
         let h = EventHash::from_bytes([0xDE; 32]);
         let s = format!("{h}");
         assert_eq!(s, "de".repeat(32));
+    }
+
+    #[test]
+    fn blob_hash_size_is_32() {
+        assert_eq!(core::mem::size_of::<BlobHash>(), 32);
+    }
+
+    #[test]
+    fn blob_hash_from_bytes_roundtrips_through_canonical_bincode() {
+        let raw = [0x42; 32];
+        let h = BlobHash::from_bytes(raw);
+        let encoded = crate::canonical_bincode().serialize(&h).expect("encode");
+        let decoded: BlobHash = crate::canonical_bincode()
+            .deserialize(&encoded)
+            .expect("decode");
+        assert_eq!(h, decoded);
+        assert_eq!(decoded.as_bytes(), &raw);
+    }
+
+    #[test]
+    fn blob_hash_blake3_matches_blake3_crate() {
+        let h = BlobHash::blake3(b"hello");
+        let expected = blake3::hash(b"hello");
+        assert_eq!(h.as_bytes(), expected.as_bytes());
+    }
+
+    #[test]
+    fn blob_hash_display_is_hex() {
+        let h = BlobHash::from_bytes([0xDE; 32]);
+        let s = format!("{h}");
+        assert_eq!(s.len(), 64);
+        assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(s.chars().all(|c| c == 'd' || c == 'e'));
     }
 }

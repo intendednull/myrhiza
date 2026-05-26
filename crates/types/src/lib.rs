@@ -9,7 +9,7 @@ pub use encoding::{CanonicalOptions, EncodingError, canonical_bincode, decode_ca
 pub mod serde_helpers;
 
 pub mod hash;
-pub use hash::{BundleHash, EventHash};
+pub use hash::{BlobHash, BundleHash, EventHash};
 
 pub mod hlc;
 pub use hlc::Hlc;
