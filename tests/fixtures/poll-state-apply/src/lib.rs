@@ -7,6 +7,8 @@
 #![no_main]
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 
@@ -132,6 +134,8 @@ export!(Component);
 // Genesis discriminator is `seq == 1 && prior_state.is_empty()`, mirroring
 // counter at `tests/fixtures/counter-state-apply/src/lib.rs:191` exactly.
 
+const AUTHOR_OFFSET: usize = 8; // author bytes start at offset 8 (after 8-byte len prefix)
+const AUTHOR_LEN: usize = 32;
 const SEQ_OFFSET: usize = 40;
 const PREV_OFFSET: usize = SEQ_OFFSET + 8;
 const DEPS_LEN_OFFSET: usize = PREV_OFFSET + 40;
@@ -144,13 +148,22 @@ const HLC_LEN: usize = 12;
 const EVENT_ID_WIRE_LEN: usize = 40;
 
 // GenesisV1 payload offsets.
-const GENESIS_APP_PAYLOAD_LEN_OFFSET: usize = 32 + 40; // seed + founder_pubkey
+const GENESIS_SEED_LEN: usize = 32;
+const GENESIS_FOUNDER_PUBKEY_OFFSET: usize = GENESIS_SEED_LEN;
+const GENESIS_FOUNDER_PUBKEY_BYTES_OFFSET: usize = GENESIS_FOUNDER_PUBKEY_OFFSET + 8; // skip 8-byte len prefix
+const GENESIS_APP_PAYLOAD_LEN_OFFSET: usize = 32 + 40; // seed + founder_pubkey (len-prefixed)
+
+// Spec §4.2 bounds for genesis-time validation.
+const MAX_OPTIONS: usize = 16;
+const MAX_OPTION_LABEL_LEN_BYTES: usize = 64;
+
+// Event discriminator bytes per spec §4.3.
+const DISCRIMINATOR_CREATE_POLL: u8 = 0x00;
+const DISCRIMINATOR_VOTE: u8 = 0x01;
+const DISCRIMINATOR_END_POLL: u8 = 0x02;
 
 fn reject(msg: &str) -> (Verdict, Vec<u8>) {
-    (
-        Verdict::Reject(alloc::string::String::from(msg)),
-        Vec::new(),
-    )
+    (Verdict::Reject(String::from(msg)), Vec::new())
 }
 
 fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
@@ -160,15 +173,156 @@ fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
     Some(u64::from_be_bytes(arr))
 }
 
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let slice = bytes.get(offset..end)?;
+    let arr: [u8; 4] = slice.try_into().ok()?;
+    Some(u32::from_be_bytes(arr))
+}
+
+/// Materialized poll state. NOT serialized via serde — the canonical
+/// encoder below hand-rolls a stable byte layout.
+struct PollState {
+    creator: [u8; 32],
+    options: Vec<String>,
+    votes: BTreeMap<[u8; 32], u32>,
+    ended: bool,
+}
+
+/// Canonical encoder for PollState. ~30 LOC per spec §4.5.1 last paragraph.
+///
+/// Layout:
+///   creator       : 32 raw bytes (fixed-size, no length prefix)
+///   options_len   : u64 BE
+///   options[i]    : u64 BE byte-len + raw UTF-8 bytes
+///   votes_len     : u64 BE (BTreeMap iterated in key-sorted order —
+///                          this IS the determinism guarantee per §6.1)
+///   votes[i]      : 32 bytes author + u32 BE option_index
+///   ended         : 1 byte (0 or 1)
+fn encode_state(state: &PollState) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&state.creator);
+    out.extend_from_slice(&(state.options.len() as u64).to_be_bytes());
+    for opt in &state.options {
+        out.extend_from_slice(&(opt.len() as u64).to_be_bytes());
+        out.extend_from_slice(opt.as_bytes());
+    }
+    out.extend_from_slice(&(state.votes.len() as u64).to_be_bytes());
+    // BTreeMap yields entries sorted by key bytes — this is the
+    // load-bearing determinism property per spec §6.1. Two peers with
+    // the same `votes` set always produce identical encoded bytes.
+    for (author, opt_idx) in &state.votes {
+        out.extend_from_slice(author);
+        out.extend_from_slice(&opt_idx.to_be_bytes());
+    }
+    out.push(if state.ended { 1 } else { 0 });
+    out
+}
+
+/// Canonical decoder. Inverse of `encode_state`. On any malformed prefix
+/// returns `None`; callers convert to `Reject`.
+fn decode_state(bytes: &[u8]) -> Option<PollState> {
+    let mut cursor: usize = 0;
+
+    // creator
+    let creator_end = cursor.checked_add(32)?;
+    let creator_slice = bytes.get(cursor..creator_end)?;
+    let mut creator = [0u8; 32];
+    creator.copy_from_slice(creator_slice);
+    cursor = creator_end;
+
+    // options vec
+    let options_len = read_u64_be(bytes, cursor)? as usize;
+    cursor = cursor.checked_add(8)?;
+    let mut options: Vec<String> = Vec::new();
+    for _ in 0..options_len {
+        let label_len = read_u64_be(bytes, cursor)? as usize;
+        cursor = cursor.checked_add(8)?;
+        let label_end = cursor.checked_add(label_len)?;
+        let label_bytes = bytes.get(cursor..label_end)?;
+        // Validate UTF-8 without using format! — core::str::from_utf8 is float-free.
+        let label_str = core::str::from_utf8(label_bytes).ok()?;
+        options.push(String::from(label_str));
+        cursor = label_end;
+    }
+
+    // votes map
+    let votes_len = read_u64_be(bytes, cursor)? as usize;
+    cursor = cursor.checked_add(8)?;
+    let mut votes: BTreeMap<[u8; 32], u32> = BTreeMap::new();
+    for _ in 0..votes_len {
+        let author_end = cursor.checked_add(32)?;
+        let author_slice = bytes.get(cursor..author_end)?;
+        let mut author = [0u8; 32];
+        author.copy_from_slice(author_slice);
+        cursor = author_end;
+        let opt_idx = read_u32_be(bytes, cursor)?;
+        cursor = cursor.checked_add(4)?;
+        votes.insert(author, opt_idx);
+    }
+
+    // ended
+    let ended_byte = *bytes.get(cursor)?;
+    cursor = cursor.checked_add(1)?;
+    let ended = match ended_byte {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+
+    // Trailing-bytes check: canonical encoding must be exact.
+    if cursor != bytes.len() {
+        return None;
+    }
+
+    Some(PollState {
+        creator,
+        options,
+        votes,
+        ended,
+    })
+}
+
+/// Decode `Vec<String>` from the CreatePoll body. Returns `(options, ())`
+/// or `None` if malformed. Layout: u64-BE count + (u64-BE byte-len + bytes)
+/// per entry. Identical to the in-state encoding but standalone for
+/// the genesis-payload path.
+fn decode_options(bytes: &[u8]) -> Option<Vec<String>> {
+    let mut cursor: usize = 0;
+    let count = read_u64_be(bytes, cursor)? as usize;
+    cursor = cursor.checked_add(8)?;
+    let mut options: Vec<String> = Vec::new();
+    for _ in 0..count {
+        let label_len = read_u64_be(bytes, cursor)? as usize;
+        cursor = cursor.checked_add(8)?;
+        let label_end = cursor.checked_add(label_len)?;
+        let label_bytes = bytes.get(cursor..label_end)?;
+        let label_str = core::str::from_utf8(label_bytes).ok()?;
+        options.push(String::from(label_str));
+        cursor = label_end;
+    }
+    // Trailing-bytes check.
+    if cursor != bytes.len() {
+        return None;
+    }
+    Some(options)
+}
+
 impl Guest for Component {
     fn apply(prior_state: Vec<u8>, event: Vec<u8>) -> (Verdict, Vec<u8>) {
         // Fixed prefix up to and including deps_len (deps array follows).
         if event.len() < HLC_OFFSET_AFTER_DEPS_LEN {
             return reject("event envelope shorter than fixed prefix");
         }
-        // author lives at envelope[0..40] but state-apply only needs it
-        // for the EndPoll permission gate (T2). T1 leaves the offset
-        // implicit via the SEQ_OFFSET = 40 constant.
+        // event.author lives at envelope[AUTHOR_OFFSET..AUTHOR_OFFSET+AUTHOR_LEN]
+        // (8-byte serde_bytes length prefix + 32 pubkey bytes; counter:101).
+        let author_slice = match event.get(AUTHOR_OFFSET..AUTHOR_OFFSET + AUTHOR_LEN) {
+            Some(s) => s,
+            None => return reject("failed to read event author"),
+        };
+        let mut event_author = [0u8; 32];
+        event_author.copy_from_slice(author_slice);
+
         let Some(seq) = read_u64_be(&event, SEQ_OFFSET) else {
             return reject("failed to read seq");
         };
@@ -210,49 +364,131 @@ impl Guest for Component {
         };
 
         if seq == 1 && prior_state.is_empty() {
-            // Topic Genesis (founder's seq=1 against never-applied state):
-            // T2 will decode the GenesisV1 envelope, extract the CreatePoll
-            // body, and materialize the initial PollState. For T1 we only
-            // confirm the envelope decodes and reject as unimplemented.
+            // Topic Genesis: decode GenesisV1 envelope (seed + founder_pubkey
+            // + app_payload) and materialize initial PollState from the
+            // CreatePoll body wrapped inside.
             //
             // Genesis discriminator mirrors counter at
             // counter-state-apply.rs:191. Non-founder seq=1 events have
             // non-empty prior_state and fall through to the non-genesis
             // arm below.
-            let _ = GENESIS_APP_PAYLOAD_LEN_OFFSET;
-            return reject("unimplemented");
+            if payload.len() < GENESIS_APP_PAYLOAD_LEN_OFFSET + 8 {
+                return reject("genesis payload shorter than fixed prefix");
+            }
+            // Extract founder_pubkey from the GenesisV1 envelope.
+            // Layout: seed(32) + len(8) + pubkey(32) = 72 bytes before app_payload.
+            let founder_slice = match payload
+                .get(GENESIS_FOUNDER_PUBKEY_BYTES_OFFSET..GENESIS_APP_PAYLOAD_LEN_OFFSET)
+            {
+                Some(s) => s,
+                None => return reject("failed to read founder_pubkey"),
+            };
+            let mut creator = [0u8; 32];
+            creator.copy_from_slice(founder_slice);
+
+            let Some(app_len) = read_u64_be(payload, GENESIS_APP_PAYLOAD_LEN_OFFSET) else {
+                return reject("failed to read genesis app_payload_len");
+            };
+            let app_len = app_len as usize;
+            let start = GENESIS_APP_PAYLOAD_LEN_OFFSET + 8;
+            let end = match start.checked_add(app_len) {
+                Some(e) => e,
+                None => return reject("genesis app_payload length overflow"),
+            };
+            let Some(app_payload) = payload.get(start..end) else {
+                return reject("genesis app_payload extends past payload");
+            };
+
+            // app_payload is `0x00 ‖ canonical(options)` per spec §4.3.
+            if app_payload.is_empty() {
+                return reject("genesis app_payload empty");
+            }
+            if app_payload[0] != DISCRIMINATOR_CREATE_POLL {
+                return reject("genesis must be CreatePoll discriminator");
+            }
+            let options_bytes = &app_payload[1..];
+            let options = match decode_options(options_bytes) {
+                Some(o) => o,
+                None => return reject("CreatePoll: malformed options encoding"),
+            };
+            if options.is_empty() {
+                return reject("CreatePoll: must declare ≥1 option");
+            }
+            if options.len() > MAX_OPTIONS {
+                return reject("CreatePoll: must declare 1..=MAX_OPTIONS");
+            }
+            for label in &options {
+                if label.len() > MAX_OPTION_LABEL_LEN_BYTES {
+                    return reject("CreatePoll: option label too long");
+                }
+            }
+
+            let state = PollState {
+                creator,
+                options,
+                votes: BTreeMap::new(),
+                ended: false,
+            };
+            return (Verdict::Accept, encode_state(&state));
         }
 
-        // Non-genesis events carry a discriminator byte at payload[0]
-        // followed by the variant body (Vote = u32 BE option_index;
-        // EndPoll = empty; CreatePoll-non-genesis = invalid).
+        // Non-genesis path: prior_state must decode into a PollState; payload
+        // carries a single-byte discriminator followed by the variant body.
         if payload.is_empty() {
             return reject("event payload empty");
         }
+        let mut state = match decode_state(&prior_state) {
+            Some(s) => s,
+            None => return reject("prior_state malformed"),
+        };
+
         match payload[0] {
-            0x00 => {
-                // CreatePoll outside of genesis — T2 will Reject explicitly.
-                reject("unimplemented")
+            DISCRIMINATOR_CREATE_POLL => {
+                // CreatePoll is only valid as a genesis event (handled above).
+                reject("CreatePoll: only valid as genesis")
             }
-            0x01 => {
-                // Vote — T2 will decode option_index and update votes.
-                reject("unimplemented")
+            DISCRIMINATOR_VOTE => {
+                if state.ended {
+                    return reject("Vote: poll has ended");
+                }
+                // body = u32 BE option_index after the discriminator byte.
+                if payload.len() != 5 {
+                    return reject("Vote: malformed body");
+                }
+                let option_index = match read_u32_be(payload, 1) {
+                    Some(v) => v,
+                    None => return reject("Vote: failed to read option_index"),
+                };
+                if (option_index as usize) >= state.options.len() {
+                    return reject("Vote: option_index out of range");
+                }
+                // Last-vote-wins via BTreeMap insert (§4.1.2): overwrite
+                // any existing entry for this author. BTreeMap key-sorted
+                // iteration on encode keeps the digest deterministic.
+                state.votes.insert(event_author, option_index);
+                (Verdict::Accept, encode_state(&state))
             }
-            0x02 => {
-                // EndPoll — T2 will check author == state.creator and flip
-                // the ended flag.
-                reject("unimplemented")
+            DISCRIMINATOR_END_POLL => {
+                // Permission gate (§4.1.3): only the creator may end the poll.
+                if event_author != state.creator {
+                    return reject("EndPoll: not poll creator");
+                }
+                // body must be empty (just the discriminator byte).
+                if payload.len() != 1 {
+                    return reject("EndPoll: malformed body");
+                }
+                state.ended = true;
+                (Verdict::Accept, encode_state(&state))
             }
-            _ => reject("unimplemented"),
+            _ => reject("unknown discriminator"),
         }
     }
 
     fn state_digest(state: Vec<u8>) -> Vec<u8> {
-        // Placeholder: pass through the raw state bytes. T2 will replace
-        // this with a stable digest over the canonical PollState shape
-        // (BTreeMap<AuthorPubkey, OptionIndex> + creator + status — spec
-        // §4.2). The canonical bincode of PollState is already stable,
-        // so identity is the right answer once T2 lands the encoder.
+        // Identity. The canonical encoding produced by `encode_state` IS
+        // already a stable digest: BTreeMap iteration is key-sorted so two
+        // peers with the same vote set produce identical bytes. Mirrors
+        // counter:239-244 and echo:217-220.
         state
     }
 }
