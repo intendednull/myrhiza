@@ -7,7 +7,7 @@
 
 ## 1. Goal
 
-B-6 ships the second MVP demo app called for in [mvp.md §15.2](2026-05-09-myrhiza-master-design/mvp.md) — a minimal poll application that exercises multi-author voting, a permission-gated event (`EndPoll`, creator-only), and the full four-component profile shape (state-apply + state-propose + interaction + manifest). It closes [implementation.md §20 item 16](2026-05-09-myrhiza-master-design/implementation.md) per the [post-B-4 gap analysis](../reports/2026-05-21-mvp-gap-analysis.md). Criterion 4 ("two apps coexist on one peer") is already met by B-5's counter + echo coexistence test, so B-6 is **not v1-blocking** — it is the second non-trivial demo for the v1 release showcase and exercises ABI surfaces that counter alone does not (multi-author authority, permissioned events, structured per-option tallies). Per the gap analysis, B-6 is estimated at 2–3 days of focused work.
+B-6 ships the second MVP demo app called for in [mvp.md §15.2](2026-05-09-myrhiza-master-design/mvp.md) — a minimal poll application that exercises multi-author voting, a permission-gated event (`EndPoll`, creator-only), and the full four-component profile shape (state-apply + state-propose + interaction + manifest). It closes [implementation.md §20 item 16](2026-05-09-myrhiza-master-design/implementation.md) per the [post-B-4 gap analysis](../reports/2026-05-21-mvp-gap-analysis.md). Criterion 4 ("two apps coexist on one peer") is already met by B-5's counter + echo coexistence test, so B-6 is **not v1-blocking** — it is the second non-trivial demo for the v1 release showcase and exercises ABI surfaces that counter alone does not (permissioned events, structured per-option tallies, and the first fixture that tolerates non-empty `deps`). Per the gap analysis, B-6 is estimated at 2–3 days of focused work.
 
 ## 2. Scope
 
@@ -18,7 +18,7 @@ B-6 ships the second MVP demo app called for in [mvp.md §15.2](2026-05-09-myrhi
 - State-tier unit tests for the six canonical state-apply cases (§7.1).
 - Kernel-tier in-process MemNetwork test exercising the full propose → pre-check → apply → re-project loop, plus a multi-author voting scenario.
 - Coexistence extension: the existing B-5 `coexistence.rs::two_apps_coexist_no_event_crossing` test gains a poll-vs-counter variant (one peer running both bundles on different topics; no event crossing) per critical-ambiguity #6.
-- `myrhiza-cli --bundle <poll-bundle>` works against the B-7 harness with no harness changes (the harness is bundle-agnostic).
+- `myrhiza-cli --bundle <poll-bundle>` works against the B-7 harness with one small harness contract addition: the harness populates `peer_state` with the local `AuthorPubkey` bytes per §4.1.4. No WIT changes, no new host imports.
 
 ### 2.2 Explicitly out of v1 (deferred)
 
@@ -92,13 +92,13 @@ Six decisions called out by the task brief. Each lists the chosen answer + the r
 - **(b) idempotent / no-op** silently discards the user's intent to change vote, which is the legitimate use case ("I picked B but meant A").
 - **(c) ballot history** is reasonable but balloons state-size, requires a separate "current effective vote" projection, and adds nothing the simple overwrite doesn't.
 
-**Last-vote-wins is deterministic**: state-apply is `(prior, event) -> (verdict, new_state)`; the natural implementation is `votes.insert(author_pubkey, option_index)` which `HashMap::insert` already does. Determinism is preserved because topo-sort order is canonical (per `prior-art/willow/state-machine.md` "Topological sort is Kahn's + lex hash tie-break"). Two peers that have seen the same event set apply them in the same canonical order and arrive at the same `votes` map. The "vote" the author intended is the last `Vote` event from that author in canonical order — well-defined and inspectable.
+**Last-vote-wins is deterministic**: state-apply is `(prior, event) -> (verdict, new_state)`; the natural implementation is `votes.insert(author_pubkey, option_index)`. Determinism is preserved because topo-sort order is canonical — per [`prior-art/willow/state-machine.md`](../prior-art/willow/state-machine.md) §"Convergence property" leg 2: "Topo-sort is deterministic (Kahn's algorithm + `BTreeSet` lex order)." Two peers that have seen the same event set apply them in the same canonical order and arrive at the same `votes` map. The "vote" the author intended is the last `Vote` event from that author in canonical order — well-defined and inspectable.
 
-The state model uses `BTreeMap<AuthorPubkey, OptionIndex>` (BTreeMap, not HashMap) to make the on-wire state-digest stable across runs without sorting separately (per [determinism.md §5.1](2026-05-09-myrhiza-master-design/determinism.md) deterministic helper set discipline). `HashMap` iteration order is allocator-dependent and would invalidate `state-digest` cross-peer; BTreeMap iteration is sorted-by-key-bytes by construction.
+The state model uses `BTreeMap<AuthorPubkey, OptionIndex>` (BTreeMap, not HashMap) to make the on-wire state-digest stable across runs without sorting separately (per [determinism.md §5.1](2026-05-09-myrhiza-master-design/determinism.md) deterministic helper set discipline). `HashMap` iteration order is allocator-dependent and would invalidate `state-digest` cross-peer; BTreeMap iteration is sorted-by-key-bytes by construction. The "HashMap is not deterministic" claim is normative in [convergence.md §4.3](2026-05-09-myrhiza-master-design/convergence.md) (line 100, "Why not hash WASM linear memory" sub-bullet: "allocator behavior, struct field padding, `HashMap` iteration order would diverge trivially across peers").
 
 #### 4.1.3 EndPoll permission gate — creator embedded in CreatePoll payload (locked)
 
-**Decision**: the genesis `CreatePoll` event's app payload **explicitly embeds the creator's `AuthorPubkey`** as a 32-byte field. `state-apply` reads this from the materialized state on every `EndPoll` event and rejects if `event.author != state.creator`.
+**Decision**: at genesis, `state-apply` reads the **`founder_pubkey` field of the `GenesisV1` envelope** and stores it as `state.creator`. On every subsequent `EndPoll` event, state-apply reads `event.author` from the canonical envelope and rejects if `event.author != state.creator`. The kernel enforces `event.author == GenesisV1.founder_pubkey` for the genesis event itself (per [convergence.md §4.6](2026-05-09-myrhiza-master-design/convergence.md)), so reading `founder_pubkey` and `event.author` from the envelope yields the same byte-string at genesis time — picking `founder_pubkey` matches the counter fixture's pattern (`tests/fixtures/counter-state-apply/src/lib.rs:200-211`) and avoids re-parsing the outer envelope's author field on genesis.
 
 **Runner-up rejected**: **(implicit) creator = author of the first event in topo-sort.**
 
@@ -107,8 +107,8 @@ The state model uses `BTreeMap<AuthorPubkey, OptionIndex>` (BTreeMap, not HashMa
 The runner-up looks attractive because the genesis author is structurally the topic creator (per [convergence.md §4.6](2026-05-09-myrhiza-master-design/convergence.md)). But:
 
 1. **What "state-apply sees" is materialized state, not the topo-sort history.** The kernel hands `state-apply` `(prior_state, event_envelope)`. `state-apply` does not see "the list of all prior events" — it sees the snapshot. To find the creator, state-apply must have already stored that information in `prior_state`. Embedding it explicitly at genesis is the only path that keeps state-apply pure (no host calls into the event log).
-2. **The event's `author_pubkey` is in the canonical envelope already** (per the offset map in `tests/fixtures/counter-state-apply/src/lib.rs:91-115`); state-apply reads it via the same byte-offset decode counter uses. So the comparison is `event.author == state.creator`, both readable from data already in hand. No new host import required.
-3. **Trusting unsigned data is the trapdoor to avoid.** The `event.author` field is verified by the kernel (B-1 chain integrity + Ed25519 signature) *before* state-apply runs. State-apply trusts the kernel's verification — it does not re-verify signatures (per [determinism.md §5.1](2026-05-09-myrhiza-master-design/determinism.md) — crypto primitives are kernel-side host imports, not part of state-apply's hot path). The kernel signs the envelope-author binding; state-apply reads the author byte-offset; comparison is trustworthy.
+2. **The genesis envelope's `founder_pubkey` is already canonical.** State-apply already decodes the `GenesisV1` envelope at genesis to extract `app_payload`; reading `founder_pubkey` from the same envelope adds no new decode work. No new host import required.
+3. **Trusting unsigned data is the trapdoor to avoid.** The kernel verifies the genesis envelope (B-1 chain integrity + Ed25519 signature; equality `event.author == GenesisV1.founder_pubkey` enforced at validation time) *before* state-apply runs. State-apply trusts the kernel's verification — it does not re-verify signatures (per [determinism.md §5.1](2026-05-09-myrhiza-master-design/determinism.md) — crypto primitives are kernel-side host imports, not part of state-apply's hot path). The kernel signs the envelope-author binding; state-apply reads `founder_pubkey` at genesis and `event.author` on subsequent events; comparison is trustworthy.
 
 **Trace through (state-apply call)**:
 
@@ -116,9 +116,9 @@ The runner-up looks attractive because the genesis author is structurally the to
 2. Kernel verifies Ed25519 signature over canonical body (matches `event.author`). If invalid → `PeerWarning::SignatureInvalid` per B-4.8; state-apply is never called.
 3. Kernel inserts into per-author DAG (chain-integrity check); topo-sort places it.
 4. Kernel calls `state-apply.apply(prior_state, event_bytes)`:
-   - state-apply decodes `event.author` from canonical envelope at offset 8 (per the offset map established in counter — `author` is the first field, length-prefixed 32-byte pubkey).
+   - state-apply decodes `event.author` from canonical envelope at offset 8 (per the offset constants in `tests/fixtures/counter-state-apply/src/lib.rs:137-147` — `author` is the first field, length-prefixed 32-byte pubkey).
    - state-apply decodes `event.payload` and finds it's an `EndPoll` (single-byte discriminator + no further data).
-   - state-apply reads `prior_state.creator: [u8; 32]`.
+   - state-apply reads `prior_state.creator: [u8; 32]` (set from `founder_pubkey` at genesis-apply).
    - If `event.author != prior_state.creator` → `Verdict::Reject("EndPoll: not poll creator")`.
    - Else → `Verdict::Accept`; sets `new_state.ended = true`.
 
@@ -140,11 +140,15 @@ your vote: 1 (No)      # absent if you have not voted; "<not voted>" otherwise
 
 All four projections in one view: (a) live counts per option, (b) ended/in-progress flag, (c) per-peer "your vote" display, (d) plus the option labels themselves (which were not in the brief's enumeration but are necessary to make the view legible).
 
-`peer_state` is a 32-byte slice containing the local `AuthorPubkey` of the interacting user (whose vote is "yours"). This is the first non-empty use of `peer_state` in Myrhiza — counter ignored it (per B-7 Choice D). It is **read-only** in v1 (mirrors B-7 §6 resolved decision: harness owns peer_state mutation). The B-7 harness owns the byte slice and threads it through every `view` call; population of the 32-byte author pubkey is added to the harness as a one-line setup step that requires no WIT changes.
+`peer_state` is a 32-byte slice containing the local `AuthorPubkey` of the interacting user (whose vote is "yours"). This is the first non-empty use of `peer_state` in Myrhiza — counter ignored it (per B-7 Choice D, which defined `peer_state` as opaque app-defined bytes, always empty for counter v1). It is **read-only** in v1 (mirrors B-7 §6 resolved decision: harness owns peer_state mutation). Pluralize the vote-count noun via a simple `if n == 1 { "vote" } else { "votes" }` — no i18n machinery in v1.
+
+**Harness contract addition** (normative — owned by this spec):
+
+B-6 introduces a harness ABI contract addition that B-7 Choice D left as a placeholder. The B-7 native interaction harness MUST populate `peer_state` with the local `AuthorPubkey` bytes (32 bytes, the raw pubkey of the keypair the harness uses to sign events) for every `view` call when running poll bundles — or, more precisely, for every bundle whose `peer_state` shape is non-empty. The harness already holds the local keypair (for signing events), so passing the pubkey bytes through into `view` is a small, deterministic-helper-set-compatible addition (no new host imports, no new WIT changes). This is a real contract change; the plan-writer phase implements it, but the contract itself is owned here.
 
 **Runner-up rejected**: subset views (counts only; counts + ended flag without "your vote") — every projection adds discrete testable behavior; cutting any of them reduces the demo's pedagogical value. The interaction component is non-deterministic-OK per [architecture.md §3.1](2026-05-09-myrhiza-master-design/architecture.md), so per-peer divergence in the rendered text is fine.
 
-**Why testable with the B-7 harness**: the harness drives `view → stdin → dispatch → propose → pre-check → apply` (per [B-7 design §3.6](2026-05-21-plan-b-7-interaction-harness-design.md)). The test driver writes scripted stdin (e.g., `"vote 1\nquit\n"`) and asserts the **final view bytes contain expected substrings** (`"option 1.*1 vote"`, `"your vote: 1"`, `"status: in-progress"`). The harness's existing stdout-capture flow is exactly the surface needed; no harness modifications required.
+**Why testable with the B-7 harness**: the harness drives `view → stdin → dispatch → propose → pre-check → apply` (per [B-7 design §3.6](2026-05-21-plan-b-7-interaction-harness-design.md)). The test driver writes scripted stdin (e.g., `"vote 1\nquit\n"`) and asserts the **final view bytes contain expected substrings** (`"option 1.*1 vote"`, `"your vote: 1"`, `"status: in-progress"`). The harness's existing stdout-capture flow is exactly the surface needed; only the `peer_state` plumbing above is new.
 
 #### 4.1.5 State-tier coverage — six canonical cases (locked)
 
@@ -158,23 +162,25 @@ State-tier unit tests are pure invocations of `state-apply.apply(prior, event)` 
 | 4 | `end_poll_by_creator_accepts` | state with `creator=alice` | `EndPoll` signed by alice | `Accept` | `ended=true` |
 | 5 | `end_poll_by_non_creator_rejects` | state with `creator=alice` | `EndPoll` signed by bob | `Reject("EndPoll: not poll creator")` | unchanged |
 | 6 | `vote_after_end_poll_rejects` | state with `ended=true` | `Vote{option_index=0}` signed by carol | `Reject("Vote: poll has ended")` | unchanged |
+| 6b | `vote_replay_out_of_order_converges_to_lex_last` | two `Vote` events from the same author applied in either order against the same prior state | both orderings `Accept`; final `votes[author]` is the lex-last `(event-hash, option_index)` pair under topo-sort tie-break (per §4.1.2) | converges to canonical order regardless of arrival sequence |
 
-Plus three structural-validity cases not in the brief but required for completeness (state-apply is the only check on these — the propose path can be bypassed by a hand-crafted signed event):
+Plus four structural-validity cases not in the brief but required for completeness (state-apply is the only check on these — the propose path can be bypassed by a hand-crafted signed event):
 
 | # | Test name | Event | Expected verdict |
 |---|---|---|---|
 | 7 | `vote_out_of_range_option_rejects` | `Vote{option_index=5}` against 2-option poll | `Reject("Vote: option_index out of range")` |
 | 8 | `non_genesis_create_poll_rejects` | `CreatePoll` event with seq=2 against initialized state | `Reject("CreatePoll: only valid as genesis")` |
 | 9 | `genesis_zero_options_rejects` | `CreatePoll{options=[]}` in genesis envelope | `Reject("CreatePoll: must declare ≥1 option")` |
+| 10 | `genesis_too_many_options_rejects` | `CreatePoll{options=[...]}` with `options.len() > MAX_OPTIONS` in genesis envelope | `Reject("CreatePoll: must declare 1..=MAX_OPTIONS")` |
 
-All nine state-tier tests run in `crates/kernel/tests/poll_state_apply.rs` (new file) by instantiating the poll state-apply WASM fixture via the existing `WasmtimeBackend::instantiate_state_apply` + `StateApplyHandle` pattern (mirrors counter's pattern from `crates/kernel/tests/acceptance.rs::kernel_instantiates_and_applies_increment`). State-tier tests do NOT instantiate a `Runtime` — they call `apply()` directly with hand-built envelopes constructed via `myrhiza_kernel::event_builder::EventBuilder` (re-homed in B-7.0).
+All state-tier tests (cases 1–6, 6b, and 7–10) run in `crates/kernel/tests/poll_state_apply.rs` (new file) by instantiating the poll state-apply WASM fixture via the existing `WasmtimeBackend::instantiate_state_apply` + `StateApplyHandle` pattern (mirrors counter's pattern from `crates/kernel/tests/acceptance.rs::kernel_instantiates_and_applies_increment`). State-tier tests do NOT instantiate a `Runtime` — they call `apply()` directly with hand-built envelopes constructed via `myrhiza_kernel::event_builder::EventBuilder` (re-homed in B-7.0).
 
 **Kernel-tier coverage** (in-process MemNetwork, single peer, no real iroh):
 
 | # | Test name | What it verifies |
 |---|---|---|
 | K1 | `poll_e2e_single_peer_full_lifecycle` | end-to-end propose → pre-check → apply for: CreatePoll genesis → Vote → ReVote → EndPoll. Asserts final state via `state-digest()` matches the expected canonical bytes. |
-| K2 | `poll_multi_author_voting` | three authors (alice creator, bob + carol voters) on the **same in-process bus**; all three see the same final tally; `state-digest` agrees. This exercises Myrhiza's multi-author DAG (per `prior-art/willow/state-machine.md` "per-author Merkle DAG") in a way counter (single-author linear chain) does not. |
+| K2 | `poll_multi_author_voting` | three authors (alice creator, bob + carol voters) on the **same in-process bus**; all three see the same final tally; `state-digest` agrees. Voters MUST declare `deps = {creator's genesis event hash}` (not empty) so the non-empty-deps code path in `state-apply` is genuinely exercised — the first fixture to do so. This exercises Myrhiza's multi-author DAG (per `prior-art/willow/state-machine.md` "per-author Merkle DAG") in a way counter (which has been multi-author tested, but only with empty deps) does not. |
 | K3 | `poll_unauthorized_end_poll_rejected_by_authority` | bob attempts EndPoll on alice's poll; kernel calls apply; verdict is Reject; bob's event is dropped at apply (per `RuntimeHandle::dropped_at_apply` already exposed). |
 | K4 | `poll_and_counter_coexist_no_event_crossing` | extension of B-5's `two_apps_coexist_no_event_crossing`. One peer, two `Runtime`s on two topics — counter on one, poll on the other. Author increment on counter; author vote on poll; assert each digest changes independently and the other runtime's digest does not. Closes critical-ambiguity #6. |
 
@@ -360,6 +366,11 @@ fn propose(prior_state, intent):
         0x00 CreatePoll:
             if !prior_state.is_empty():
                 return Err("CreatePoll: only valid as genesis intent")
+            options = decode Vec<String> from intent[1..]
+            if options.is_empty():
+                return Err("CreatePoll: must declare ≥1 option")
+            if options.len() > MAX_OPTIONS:
+                return Err("CreatePoll: too many options (> MAX_OPTIONS)")
             # Pass through; kernel will wrap in GenesisV1 + add the seed.
             # Body bytes are returned as event-payload.
             return Ok(intent)   # 0x00 + bincode(options)
@@ -390,6 +401,8 @@ fn propose(prior_state, intent):
 ```
 
 The asymmetry on `EndPoll`'s permission check (propose can't see "is the local author the creator?") is by design: the state-propose WIT world has no host-import that exposes the local `AuthorPubkey`. State-apply, by contrast, sees `event.author` because the kernel passes the signed envelope. This is the intended layering: propose is per-peer best-effort validation; state-apply is the canonical authority verdict per [architecture.md §3.5](2026-05-09-myrhiza-master-design/architecture.md). Pre-check (state-apply in dry-run) catches the "wrong author" case before the event is broadcast — see §4.1.3 trace.
+
+> **Future ABI gap candidate** (out of B-6 scope, do not implement here): "propose can't see local author" is going to bite every permission-gated app — not just poll's `EndPoll`. A future host-import (e.g. `host.local_author() -> AuthorPubkey`) would let propose surface "you can't do that" errors earlier and avoid the round-trip through pre-check for known-impossible intents. Flagged as a candidate for a future ABI-additions spec; not part of B-6.
 
 #### 4.5.3 `interaction` (~150 LOC)
 
@@ -449,7 +462,7 @@ The manifest signs (per B-7.0's bundle-content-hash) over the BLAKE3 composite h
 
 ### 5.1 State-tier (`crates/kernel/tests/poll_state_apply.rs` — new file)
 
-Nine `#[test]` functions per §4.1.5 table. Each:
+One `#[test]` function per row in the §4.1.5 tables (cases 1–6, 6b, and 7–10). Each:
 
 1. Instantiates the poll-state-apply WASM via `WasmtimeBackend::instantiate_state_apply` + `StateApplyHandle::new` (mirrors the pattern from `crates/kernel/tests/acceptance.rs::kernel_instantiates_and_applies_increment`).
 2. Builds the test event via `myrhiza_kernel::event_builder::EventBuilder` (re-homed in B-7.0; pre-B-7 use `myrhiza_test_utils::EventBuilder`).
@@ -463,7 +476,7 @@ These tests run on every `cargo test -p myrhiza-kernel` and exercise only state-
 Tests K1–K3 per §4.1.5 table. Each spins up an in-process `Runtime` with a `MemNetwork`, drives events through the full propose → pre-check → apply path, observes via `RuntimeHandle::digest_watch` + `RuntimeHandle::dropped_at_apply`. Asserts:
 
 - K1: final state-digest equals expected canonical bytes after 4 events (CreatePoll → Vote → ReVote → EndPoll).
-- K2: after seeding three authors and authoring votes from each, the digest converges to the expected three-author tally.
+- K2: after seeding three authors and authoring votes from each (voters' Vote events declare `deps = {creator's genesis event hash}`, exercising the non-empty-deps code path), the digest converges to the expected three-author tally.
 - K3: bob's `EndPoll` on alice's poll appears in `dropped_at_apply` with verdict `Reject("EndPoll: not poll creator")`.
 
 ### 5.3 Coexistence (`crates/kernel/tests/coexistence.rs` — extend existing)
@@ -497,19 +510,25 @@ Add `poll_and_counter_coexist_no_event_crossing` per §4.1.6. Same shape as the 
 
 **Mitigation**: state-tier test 1 (`genesis_create_poll_accepts`) asserts the stored `state.creator` matches the genesis envelope's `founder_pubkey`. The kernel-tier check that `event.author == founder_pubkey` lives in the existing B-1 chain-integrity rule; we rely on it.
 
-### 6.3 Novel-surface gotchas — multi-author DAG
+### 6.3 Novel-surface gotchas — first fixture that tolerates non-empty deps
 
-**Risk**: counter (B-1 era) is a single-author linear chain. Poll is the first multi-author DAG fixture (`alice creates, bob + carol vote`). Cross-author `deps` arrays are no longer guaranteed empty — voters' events may carry deps pointing at the creator's genesis. The existing fixtures (`counter-state-apply`, `echo-state-apply`) hard-reject `deps_len != 0` (per `tests/fixtures/counter-state-apply/src/lib.rs:174-177`).
+**Risk**: counter has already been exercised under multi-author authoring (per `crates/kernel/tests/convergence.rs::concurrent_multi_author_converges` — peer A + peer B both author increments after genesis). What counter has NOT been exercised on is **non-empty `deps`**: both the counter and echo fixtures hard-reject `deps_len != 0` (per `tests/fixtures/counter-state-apply/src/lib.rs:174-177` and `tests/fixtures/echo-state-apply/src/lib.rs:169-171`), and existing tests pass `BTreeSet::new()` for deps. Poll is the **first fixture that tolerates non-empty `deps`** — voters' Vote events declare `deps = {creator's genesis event hash}` so their per-author chains hang off the topic's shared causal anchor.
 
 **Resolution**: poll's state-apply must **tolerate non-empty deps**. State-apply does not enforce DAG topology — that's the kernel's job (B-1 topo-sort + chain-integrity). State-apply just reads `event.author` and `event.payload`; deps are part of the envelope but state-apply does not need to inspect them. The byte-offset decoder skips past the deps array (8-byte length prefix + N × 40 bytes) to find the payload.
 
-**Concrete change** vs the counter fixture: drop the `deps_len != 0` reject (counter-state-apply:174-177); skip past deps to PAYLOAD_LEN_OFFSET dynamically rather than at a fixed compile-time offset. This is a ~15-LOC change to the offset-decoder vs. counter's compile-time-constant offsets. Tested by K2 (multi-author with implicit deps).
+**Concrete change** vs the counter fixture: drop the `deps_len != 0` reject (counter-state-apply:174-177); skip past deps to PAYLOAD_LEN_OFFSET dynamically rather than at a fixed compile-time offset. This is a ~15-LOC change to the offset-decoder vs. counter's compile-time-constant offsets. Tested by K2 (multi-author with non-empty deps): voters MUST declare `deps = {creator's genesis event hash}` (not empty) so the non-empty-deps code path is genuinely exercised.
 
 ### 6.4 Vote-replay overwrites earlier votes — UX gotcha
 
 **Risk**: a peer that votes A, then re-votes B, has their A discarded. If the UI doesn't make this clear, users will think they double-voted.
 
 **Mitigation**: the view (§4.1.4) shows "your vote: 1 (No)" — only the current vote, not the history. A future UI module could surface "you changed your vote from Yes to No 30 seconds ago," but that's a higher-tier UX concern not blocking v1.
+
+### 6.4b Vote-replay transient-tally during ingestion (deps-monotonicity)
+
+**Risk**: per [convergence.md §4.4](2026-05-09-myrhiza-master-design/convergence.md) deps-monotonicity, state-apply must be valid against *any* state containing the event's declared `deps`. With last-vote-wins (§4.1.2), if peer A signs Vote(0) and then — before that propagates — signs Vote(1), a receiver materializing the events in a different topo order can see Vote(1) apply before Vote(0) arrives. Vote(0) then overwrites Vote(1) in `votes[A]` during ingestion. The receiver's transient tally flips between the two re-applies, visible to any UI subscribed to `digest_watch` mid-ingestion.
+
+**Mitigation**: this is a *transient* anomaly, not a convergence bug. Final state still converges because topo-sort is canonical (Kahn's algorithm + `BTreeSet` lex order — see §4.1.2 source citation). Two peers with the same final event set arrive at the same final `votes[A]` regardless of arrival ordering. State-tier test 6b (`vote_replay_out_of_order_converges_to_lex_last`) is the canary: it applies two same-author Vote events in both orders against the same prior state and asserts the final state-bytes are identical. UX implications (a `digest_watch` subscriber sees the tally flip mid-stream) are documented but not mitigated in v1 — debouncing on the consumer side is the right layer for that concern.
 
 ### 6.5 State-size growth (Sybil-shaped)
 
@@ -527,7 +546,7 @@ Add `poll_and_counter_coexist_no_event_crossing` per §4.1.6. Same shape as the 
 
 Per [`using-prior-art`](../../.claude/skills/using-prior-art/SKILL.md), consulted folders + sections:
 
-- [`prior-art/willow/state-machine.md`](../prior-art/willow/state-machine.md) §"Shipped today: `EventKind` (chat-specific)" + §"What Myrhiza inherits" — confirms the per-app `EventKind`-as-opaque-payload pattern poll follows. The `BTreeMap`-for-determinism call-out (§"Convergence property" leg 2: Kahn's + lex hash tie-break is deterministic; HashMap is not) is borrowed directly.
+- [`prior-art/willow/state-machine.md`](../prior-art/willow/state-machine.md) §"Shipped today: `EventKind` (chat-specific)" + §"What Myrhiza inherits" — confirms the per-app `EventKind`-as-opaque-payload pattern poll follows. The deterministic topo-sort cite (§"Convergence property" leg 2: "Kahn's algorithm + `BTreeSet` lex order") is borrowed directly. The complementary "HashMap is not deterministic" claim is cited separately from [convergence.md §4.3](2026-05-09-myrhiza-master-design/convergence.md) (the "Why not hash WASM linear memory" sub-bullet).
 - [`prior-art/willow/state-machine.md`](../prior-art/willow/state-machine.md) §"Moves into the per-app `state-apply` component" — validates that the permission-gate pattern (counter's Reset, poll's EndPoll) belongs in state-apply, not the kernel.
 - [`prior-art/willow/apps.md`](../prior-art/willow/apps.md) §"MVP demo apps + acceptance criteria" — names "real-time poll" as a candidate proof-point alongside counter. B-6 implements the named direction.
 - [`prior-art/willow/authority.md`](../prior-art/willow/authority.md) §"pre-check = apply mechanic" (cited in [B-7 spec §3.6](2026-05-21-plan-b-7-interaction-harness-design.md)) — the propose→pre-check→apply asymmetry §4.5.2 calls out (propose can't see local author; state-apply can see event.author) is grounded in this pattern. Pre-check is mechanically the same WASM function as apply; that's why moving the creator-only check to state-apply is correct.
@@ -546,11 +565,11 @@ Per [`using-prior-art`](../../.claude/skills/using-prior-art/SKILL.md), consulte
 **2–3 days of focused work**, aligned with the [post-B-4 gap analysis](../reports/2026-05-21-mvp-gap-analysis.md) §"B-6: Poll app" estimate. Breakdown:
 
 - **0.5 day** — three fixture crates (state-apply ~120 LOC, state-propose ~60 LOC, interaction ~150 LOC) + `Justfile` recipes + `tests/fixtures/built/poll-*.wasm` outputs (Path-B) OR `examples/poll/src/{state,propose,interaction}.rs` + `examples/poll/manifest.toml` (Path-A). Most of this is mechanical copy-from-counter; the novel part is poll's `apply` (~80 LOC of decode + match) and its hand-rolled BTreeMap canonical encoder (~30 LOC).
-- **0.5 day** — `test-utils::build_signed_poll_bundle()` helper + `helpers::poll_handle()` (Path-B) or sdk-layer wiring (Path-A).
-- **1 day** — state-tier tests (9 tests) + kernel-tier tests (K1–K3, ~4 tests).
+- **0.5 day** — `test-utils::build_signed_poll_bundle()` helper + `helpers::poll_handle()` (Path-B) or sdk-layer wiring (Path-A); harness `peer_state` plumbing per §4.1.4.
+- **1.5 days** — state-tier tests (cases 1–6, 6b, 7–10) + kernel-tier tests (K1–K3, ~4 tests). Vote-replay out-of-order (test 6b) is the trickiest fixture-shape; budget for one debug pass on the canonical-encoder.
 - **0.5 day** — coexistence test K4 + cross-test fmt/lint cleanup + spec-coverage table update + commit/PR shepherd.
 
-Path-A vs Path-B difference is ≤0.5 day of file-shuffling; the technical content is identical.
+Total: 3 days (the upper bound of the 2–3 day range). Path-A vs Path-B difference is ≤0.5 day of file-shuffling; the technical content is identical.
 
 ## 9. Acceptance criteria
 
@@ -558,10 +577,10 @@ B-6 ships when:
 
 - [ ] Three poll WASM components build clean via `just build-fixtures` (Path-B) or `cargo build -p poll` (Path-A).
 - [ ] `crates/test-utils/src/bundle.rs` (or SDK equivalent under Path-A) exposes a signed-poll-bundle builder.
-- [ ] `crates/kernel/tests/poll_state_apply.rs` runs nine state-tier tests covering §4.1.5 table cases 1–9, all green.
+- [ ] `crates/kernel/tests/poll_state_apply.rs` runs the state-tier tests covering §4.1.5 table cases 1–6, 6b, and 7–10, all green.
 - [ ] `crates/kernel/tests/poll.rs` runs kernel-tier tests K1–K3, all green.
 - [ ] `crates/kernel/tests/coexistence.rs::poll_and_counter_coexist_no_event_crossing` extends the existing coexistence test with a poll-vs-counter variant; green alongside the existing `two_apps_coexist_no_event_crossing`.
-- [ ] `myrhiza-cli --bundle <poll-bundle-path>` runs against the B-7 harness with no harness modifications, drives a full create → vote → end lifecycle from scripted stdin, and produces the expected canonical state-digest at the end.
+- [ ] `myrhiza-cli --bundle <poll-bundle-path>` runs against the B-7 harness — with the §4.1.4 `peer_state` contract addition wired — drives a full create → vote → end lifecycle from scripted stdin, and produces the expected canonical state-digest at the end.
 - [ ] `just ci` passes (fmt + clippy `-D warnings` + tests).
 - [ ] `docs/reports/2026-05-21-mvp-gap-analysis.md` updates implementation.md §20 item 16 from ❌ to ✅.
 
