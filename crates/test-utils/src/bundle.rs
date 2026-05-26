@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use bincode::Options;
 use myrhiza_kernel::BundleAddress;
 use myrhiza_manifest::schema::Manifest;
-use myrhiza_types::canonical_bincode;
+use myrhiza_types::{BlobHash, canonical_bincode};
 use tempfile::TempDir;
 
 use crate::manifest::{
@@ -133,11 +133,14 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
     let component_bytes = read_fixture("counter-state-apply");
 
     let mut manifest = helpers_only_state_apply_manifest();
+    // Populate the iroh-path BlobHash of the state-apply bytes BEFORE
+    // signing so the signature commits to the hash claim (B-10 §4.1).
+    manifest.components.state_apply_hash = Some(BlobHash::blake3(&component_bytes));
     let key = deterministic_signing_key(7);
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -168,7 +171,7 @@ pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -258,6 +261,13 @@ pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddr
     let interaction_bytes = read_fixture("counter-interaction");
 
     let mut manifest = helpers_only_three_component_manifest();
+    // Populate iroh-path BlobHashes BEFORE signing so the signature
+    // commits to the hash claim (B-10 §4.1). All three declared
+    // component slots (state-apply, state-propose, interaction) get
+    // hashes; behavior remains absent + `None`.
+    manifest.components.state_apply_hash = Some(BlobHash::blake3(&apply_bytes));
+    manifest.components.state_propose_hash = Some(BlobHash::blake3(&propose_bytes));
+    manifest.components.interaction_hash = Some(BlobHash::blake3(&interaction_bytes));
     let key = deterministic_signing_key(7);
     sign_manifest_three_components(
         &mut manifest,
@@ -270,7 +280,7 @@ pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddr
     let test_bundle =
         write_three_component_bundle(&manifest, &apply_bytes, &propose_bytes, &interaction_bytes)
             .expect("write three-component bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -306,7 +316,7 @@ pub fn build_signed_poll_bundle() -> (TestBundle, BundleAddress) {
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -344,7 +354,7 @@ pub fn build_signed_poll_bundle_three_components() -> (TestBundle, BundleAddress
     let test_bundle =
         write_three_component_bundle(&manifest, &apply_bytes, &propose_bytes, &interaction_bytes)
             .expect("write three-component bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -379,4 +389,91 @@ pub fn build_counter_bundle_with_extra_cap(
     let key = deterministic_signing_key(seed);
     sign_manifest(&mut manifest, component_bytes, &key);
     write_bundle(&manifest, component_bytes)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use myrhiza_types::{BlobHash, canonical_bincode};
+
+    /// Per B-10 §4.1 + §4.2: the iroh-path fixture builder must compute
+    /// `BLAKE3(state_apply.wasm raw bytes)` and populate
+    /// `Manifest::components::state_apply_hash` before signing. This
+    /// test reads the manifest from disk and verifies the hash matches
+    /// the on-disk bytes — proving the publish-side invariant holds.
+    #[test]
+    fn build_signed_counter_bundle_populates_hashes_matching_on_disk_bytes() {
+        let (bundle, _addr) = build_signed_counter_bundle();
+        let manifest_bytes =
+            std::fs::read(bundle.bundle_dir.join(&bundle.manifest_path)).expect("read manifest");
+        let manifest: myrhiza_manifest::schema::Manifest = canonical_bincode()
+            .deserialize(&manifest_bytes)
+            .expect("decode manifest");
+        let on_disk_bytes = std::fs::read(
+            bundle
+                .bundle_dir
+                .join(manifest.components.state_apply.as_deref().unwrap()),
+        )
+        .expect("read state-apply");
+
+        assert_eq!(
+            manifest.components.state_apply_hash,
+            Some(BlobHash::blake3(&on_disk_bytes)),
+            "fixture builder must populate state_apply_hash matching the on-disk bytes",
+        );
+    }
+
+    /// Three-component analog of the above. All three declared slots
+    /// (state-apply, state-propose, interaction) must carry hashes
+    /// matching their on-disk bytes; the absent behavior slot remains
+    /// `None`.
+    #[test]
+    fn build_signed_counter_bundle_three_components_populates_all_hashes() {
+        let (bundle, _addr) = build_signed_counter_bundle_three_components();
+        let manifest_bytes =
+            std::fs::read(bundle.bundle_dir.join(&bundle.manifest_path)).expect("read manifest");
+        let manifest: myrhiza_manifest::schema::Manifest = canonical_bincode()
+            .deserialize(&manifest_bytes)
+            .expect("decode manifest");
+
+        let apply_bytes = std::fs::read(
+            bundle
+                .bundle_dir
+                .join(manifest.components.state_apply.as_deref().unwrap()),
+        )
+        .expect("read state-apply");
+        let propose_bytes = std::fs::read(
+            bundle
+                .bundle_dir
+                .join(manifest.components.state_propose.as_deref().unwrap()),
+        )
+        .expect("read state-propose");
+        let interaction_bytes = std::fs::read(
+            bundle
+                .bundle_dir
+                .join(manifest.components.interaction.as_deref().unwrap()),
+        )
+        .expect("read interaction");
+
+        assert_eq!(
+            manifest.components.state_apply_hash,
+            Some(BlobHash::blake3(&apply_bytes)),
+            "state_apply_hash must match on-disk bytes",
+        );
+        assert_eq!(
+            manifest.components.state_propose_hash,
+            Some(BlobHash::blake3(&propose_bytes)),
+            "state_propose_hash must match on-disk bytes",
+        );
+        assert_eq!(
+            manifest.components.interaction_hash,
+            Some(BlobHash::blake3(&interaction_bytes)),
+            "interaction_hash must match on-disk bytes",
+        );
+        assert_eq!(
+            manifest.components.behavior_hash, None,
+            "absent behavior slot must keep hash None",
+        );
+    }
 }

@@ -8,6 +8,7 @@ members = [
     "crates/kernel",
     "crates/network",
     "crates/sdk",
+    "crates/distribution",
     "crates/test-utils",
     "crates/myrhiza-cli",
     "examples/counter",
@@ -68,6 +69,16 @@ wasmtime-wasi = { version = "=36.0.9", default-features = false }
 # "every minor is breaking"). Bump deliberately.
 iroh = "=1.0.0-rc.0"
 iroh-gossip = "=0.99.0"
+# iroh-blobs is the data-plane sibling of iroh-gossip. Pinned to
+# 0.101.0 (latest as of 2026-05-08); aware that this is the
+# "rewrite line" the iroh team flags as "not yet production
+# quality" — see prior-art/iroh/blobs.md §"What's actually
+# shipping right now". Tight-pinned in lockstep with the rest of
+# the iroh ecosystem per prior-art/iroh/lessons.md §Avoid row 1.
+# iroh-blobs 0.101.0 declares `iroh = "=1.0.0-rc.0"` transitively,
+# matching the workspace's iroh pin (verified against crates.io
+# 2026-05-26; see B-10 spec §4.7). Bump deliberately.
+iroh-blobs = "=0.101.0"
 # iroh-gossip's `GossipTopic` implements `n0_future::Stream`;
 # `futures-lite::StreamExt` provides the `.next()` adapter we use to
 # poll it. Tight-pinned in lockstep with the iroh ecosystem (per

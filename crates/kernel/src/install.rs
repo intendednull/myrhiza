@@ -14,8 +14,6 @@
 //! of the artifact post-signing fails as a signature error rather
 //! than a separate content-hash mismatch.
 
-use std::path::PathBuf;
-
 use bincode::Options;
 use myrhiza_manifest::{
     ParseError, SignatureError, bundle_content_hash,
@@ -23,7 +21,7 @@ use myrhiza_manifest::{
     schema::{Manifest, Signature},
     verify_signature,
 };
-use myrhiza_types::{EventHash, canonical_bincode};
+use myrhiza_types::{BundleAddress, EventHash, canonical_bincode};
 use thiserror::Error;
 
 /// The kernel-major value this build of the runtime implements. The
@@ -31,21 +29,6 @@ use thiserror::Error;
 /// distribution.md §10.5: a major-bump is a hard ABI change, not a
 /// soft kernel-minor extension. Plan A pins `KERNEL_MAJOR_V1 = 1`.
 const KERNEL_MAJOR_V1: u32 = 1;
-
-/// Locator for an on-disk bundle. Plan A reads bundles from local
-/// directories; plan B fetches them via iroh-blobs and materializes
-/// them under a temp dir before passing them through this struct.
-#[derive(Debug, Clone)]
-pub struct BundleAddress {
-    /// Root of the bundle directory (contains `manifest.bincode` and
-    /// the `components/` artifact tree).
-    pub bundle_dir: PathBuf,
-    /// Path of the manifest file (canonical-bincode-encoded) relative
-    /// to `bundle_dir`. v1 file naming is `manifest.bincode`. The TOML
-    /// human-readable form is canonicalized at publish time; the
-    /// kernel only consumes the canonical bytes.
-    pub manifest_path: PathBuf,
-}
 
 /// Errors returned by [`InstallFlow::load`].
 #[derive(Debug, Error)]
@@ -86,6 +69,14 @@ pub enum InstallError {
     /// absent on disk.
     #[error("manifest references components/state-apply but file is absent")]
     ComponentMissing,
+    /// [`InstallFlow::load`] was called with a `BundleAddress::IrohBlob`
+    /// variant. The kernel does not fetch directly — the embedder must
+    /// call `BundleDistribution::fetch` to materialize the blob tree
+    /// into a tempdir and produce a `BundleAddress::Disk` first.
+    #[error(
+        "BundleAddress::IrohBlob must be materialized via BundleDistribution::fetch before InstallFlow::load"
+    )]
+    IrohBlobNotMaterialized,
 }
 
 /// Output of [`InstallFlow::load`]: a verified manifest plus the
@@ -135,7 +126,16 @@ impl InstallFlow {
     /// verify (this also covers the tampered-component case, since
     /// `signing_target_bytes` commits to the component's content hash).
     pub fn load(&self, addr: &BundleAddress) -> Result<LoadedBundle, InstallError> {
-        let manifest_bytes = std::fs::read(addr.bundle_dir.join(&addr.manifest_path))?;
+        let (bundle_dir, manifest_path) = match addr {
+            BundleAddress::Disk {
+                bundle_dir,
+                manifest_path,
+            } => (bundle_dir, manifest_path),
+            BundleAddress::IrohBlob { .. } => {
+                return Err(InstallError::IrohBlobNotMaterialized);
+            }
+        };
+        let manifest_bytes = std::fs::read(bundle_dir.join(manifest_path))?;
         let mut manifest: Manifest = canonical_bincode()
             .deserialize(&manifest_bytes)
             .map_err(|e| InstallError::Decode(e.to_string()))?;
@@ -161,25 +161,25 @@ impl InstallFlow {
             .state_apply
             .clone()
             .ok_or(InstallError::ComponentMissing)?;
-        let component_bytes = std::fs::read(addr.bundle_dir.join(&component_rel))?;
+        let component_bytes = std::fs::read(bundle_dir.join(&component_rel))?;
 
         let state_propose_bytes = manifest
             .components
             .state_propose
             .as_ref()
-            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .map(|rel| std::fs::read(bundle_dir.join(rel)))
             .transpose()?;
         let interaction_bytes = manifest
             .components
             .interaction
             .as_ref()
-            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .map(|rel| std::fs::read(bundle_dir.join(rel)))
             .transpose()?;
         let behavior_bytes = manifest
             .components
             .behavior
             .as_ref()
-            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .map(|rel| std::fs::read(bundle_dir.join(rel)))
             .transpose()?;
 
         let content_hash = bundle_content_hash(
@@ -277,9 +277,13 @@ mod tests {
             modules: ModulesSection { dep: vec![] },
             components: ComponentsSection {
                 state_apply: Some("components/state-apply.wasm".into()),
+                state_apply_hash: None,
                 state_propose: None,
+                state_propose_hash: None,
                 interaction: None,
+                interaction_hash: None,
                 behavior: None,
+                behavior_hash: None,
             },
             author_policy: AuthorPolicy::default_deny(),
             signature: None,
@@ -297,7 +301,7 @@ mod tests {
         std::fs::write(dir.join("manifest.bincode"), manifest_bytes).unwrap();
 
         (
-            BundleAddress {
+            BundleAddress::Disk {
                 bundle_dir: dir.to_path_buf(),
                 manifest_path: "manifest.bincode".into(),
             },
@@ -359,9 +363,13 @@ mod tests {
             modules: ModulesSection { dep: vec![] },
             components: ComponentsSection {
                 state_apply: Some("components/state-apply.wasm".into()),
+                state_apply_hash: None,
                 state_propose: Some("components/state-propose.wasm".into()),
+                state_propose_hash: None,
                 interaction: None,
+                interaction_hash: None,
                 behavior: None,
+                behavior_hash: None,
             },
             author_policy: AuthorPolicy::default_deny(),
             signature: None,
@@ -379,7 +387,7 @@ mod tests {
         std::fs::write(dir.join("manifest.bincode"), manifest_bytes).unwrap();
 
         (
-            BundleAddress {
+            BundleAddress::Disk {
                 bundle_dir: dir.to_path_buf(),
                 manifest_path: "manifest.bincode".into(),
             },

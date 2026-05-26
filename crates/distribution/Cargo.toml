@@ -1,0 +1,34 @@
+[package]
+name = "myrhiza-distribution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bundle distribution: iroh-blobs publish/fetch + revocation/publication topic state machines for Myrhiza."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+myrhiza-network = { path = "../network" }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+serde.workspace = true
+thiserror.workspace = true
+bincode.workspace = true
+tempfile.workspace = true
+blake3.workspace = true
+ed25519-dalek.workspace = true
+iroh = { workspace = true, optional = true }
+iroh-blobs = { workspace = true, optional = true }
+
+[features]
+default = []
+# Iroh-blobs publish + fetch + revocation/publication topic dispatch.
+# Default-off to keep `cargo test --workspace` fast; the iroh-acceptance
+# tests in crates/kernel/tests opt in via `network-iroh`.
+# Per B-10 spec §4.7.
+network-iroh = ["dep:iroh", "dep:iroh-blobs", "myrhiza-network/network-iroh"]

@@ -12,6 +12,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use myrhiza_kernel::BundleAddress;
 use myrhiza_test_utils::bundle::build_signed_counter_bundle_three_components;
 
 /// Spawn `myrhiza-cli` with the given bundle dir + author seed, pipe
@@ -58,7 +59,10 @@ struct CliOutput {
 #[test]
 fn cli_binary_increment_loop_yields_final_state_via_stdout_views() {
     let (_bundle, addr) = build_signed_counter_bundle_three_components();
-    let output = run_cli(&addr.bundle_dir, 0, b"inc 5\ninc 3\nquit\n");
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
+    let output = run_cli(bundle_dir, 0, b"inc 5\ninc 3\nquit\n");
 
     assert_eq!(
         output.status,
@@ -132,7 +136,10 @@ fn cli_binary_missing_bundle_exits_nonzero_with_diagnostic() {
 #[test]
 fn cli_binary_dispatch_rejection_does_not_abort_loop() {
     let (_bundle, addr) = build_signed_counter_bundle_three_components();
-    let output = run_cli(&addr.bundle_dir, 2, b"bogus_action\ninc 1\nquit\n");
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
+    let output = run_cli(bundle_dir, 2, b"bogus_action\ninc 1\nquit\n");
 
     assert_eq!(
         output.status,

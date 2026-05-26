@@ -18,6 +18,7 @@
 
 use std::io::Cursor;
 
+use myrhiza_kernel::BundleAddress;
 use myrhiza_kernel::event_builder::AuthorKeypair;
 use myrhiza_kernel::state_apply::ApplyOutcome;
 use myrhiza_test_utils::bundle::{
@@ -57,12 +58,15 @@ fn poll_genesis_app_payload(options: &[&str]) -> Vec<u8> {
 fn counter_inc_5_inc_3_yields_final_state_8() {
     let key = AuthorKeypair::deterministic(0);
     let (_bundle, addr) = build_signed_counter_bundle_three_components();
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
 
     let input = b"inc 5\ninc 3\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
     let (state, log) = myrhiza_cli::run(
-        &addr.bundle_dir,
+        bundle_dir,
         &key,
         counter_genesis_app_payload(),
         Cursor::new(input),
@@ -105,12 +109,15 @@ fn counter_inc_5_inc_3_yields_final_state_8() {
 fn counter_stdout_shows_progressive_views() {
     let key = AuthorKeypair::deterministic(1);
     let (_bundle, addr) = build_signed_counter_bundle_three_components();
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
 
     let input = b"inc 5\ninc 3\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
     myrhiza_cli::run(
-        &addr.bundle_dir,
+        bundle_dir,
         &key,
         counter_genesis_app_payload(),
         Cursor::new(input),
@@ -142,12 +149,15 @@ fn counter_stdout_shows_progressive_views() {
 fn counter_dispatch_rejection_does_not_abort_loop() {
     let key = AuthorKeypair::deterministic(2);
     let (_bundle, addr) = build_signed_counter_bundle_three_components();
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
 
     let input = b"bogus_action\ninc 1\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
     let (state, log) = myrhiza_cli::run(
-        &addr.bundle_dir,
+        bundle_dir,
         &key,
         counter_genesis_app_payload(),
         Cursor::new(input),
@@ -196,12 +206,15 @@ fn counter_dispatch_rejection_does_not_abort_loop() {
 fn poll_dispatch_displays_per_peer_vote() {
     let key = AuthorKeypair::deterministic(3);
     let (_bundle, addr) = build_signed_poll_bundle_three_components();
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
 
     let input = b"vote 0\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
     myrhiza_cli::run(
-        &addr.bundle_dir,
+        bundle_dir,
         &key,
         poll_genesis_app_payload(&["Yes", "No"]),
         Cursor::new(input),
