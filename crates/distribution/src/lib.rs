@@ -20,6 +20,9 @@ pub mod publication;
 pub mod revocation;
 pub mod topic;
 
+#[cfg(feature = "network-iroh")]
+pub mod blobs;
+
 pub use publication::{
     DOMAIN_SEP_PUBLICATION, MAX_PUBLICATION_JUMP, MAX_VERSION_LEN, PublicationError,
     PublicationEvent, PublicationLog,
@@ -29,4 +32,5 @@ pub use revocation::{
     RevocationLog,
 };
 
-// Iroh-blobs publish + fetch lands in T7.
+#[cfg(feature = "network-iroh")]
+pub use blobs::{BundleDistribution, PublishError};
