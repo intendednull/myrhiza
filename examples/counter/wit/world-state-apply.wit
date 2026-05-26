@@ -1,0 +1,34 @@
+package myrhiza:kernel@1.0.0;
+
+/// state-apply: strict pure function of (prior state, event).
+/// Bound only against host-deterministic. ABI is normative per
+/// architecture.md §3.5 + determinism.md §5.1 — adding any other
+/// import here is a kernel-major bump.
+world state-apply {
+    import host-deterministic;
+    use types.{verdict};
+
+    /// Apply mode: ingest an event, update state in place, return
+    /// the verdict. State is opaque app-defined bytes, encoded
+    /// canonically per the app's serde discipline.
+    /// In dry-run (pre-check) mode the kernel calls this same export
+    /// with the same `prior-state` it would use for apply, and
+    /// discards `new-state` if the verdict is Accept.
+    ///
+    /// `event` is the FULL canonical Event envelope per
+    /// convergence.md §4 — the same byte string that two peers see on
+    /// the wire (author + seq + prev + deps + hlc + payload +
+    /// signature, encoded with the v1-pinned bincode 1.3.x options
+    /// chain per determinism.md §5.4). The guest passes this same
+    /// byte slice to `host.now-hlc-from-event` to extract the HLC
+    /// signed by the originator — both peers decoding the same wire
+    /// bytes get the same HLC, which is the load-bearing property.
+    /// App-payload extraction is the guest's responsibility (decode
+    /// the envelope and read `payload`).
+    export apply: func(prior-state: list<u8>, event: list<u8>) ->
+        tuple<verdict, list<u8>>;
+
+    /// Canonical bytes of the app state, used by the kernel for
+    /// cross-peer convergence verification. Per convergence.md §4.3.
+    export state-digest: func(state: list<u8>) -> list<u8>;
+}

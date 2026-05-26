@@ -83,8 +83,14 @@ spec-coverage-check: spec-coverage
 
 ci: fmt-check lint test test-iroh spec-coverage-check
 
-# Sync `crates/sdk/wit/` from the canonical `wit/myrhiza-kernel/wit/`.
-# Run when the kernel WIT changes; CI test asserts bit-equality.
+# Sync `crates/sdk/wit/` and `examples/counter/wit/` from the
+# canonical `wit/myrhiza-kernel/wit/`. Run when the kernel WIT
+# changes; the in-sync test (`crates/sdk/tests/wit_in_sync.rs`)
+# asserts SDK ↔ kernel bit-equality. `examples/counter/wit/` is
+# a separate copy because `wit_bindgen::generate!` resolves its
+# default `./wit` path against the consumer's `CARGO_MANIFEST_DIR`
+# (per spec §3.3 / macros.rs::myrhiza_app docs).
 sync-wit:
     cp -p wit/myrhiza-kernel/wit/*.wit crates/sdk/wit/
-    @echo "WIT files synced from wit/myrhiza-kernel/wit/ → crates/sdk/wit/"
+    cp -p crates/sdk/wit/*.wit examples/counter/wit/
+    @echo "WIT files synced from wit/myrhiza-kernel/wit/ → crates/sdk/wit/ → examples/counter/wit/"

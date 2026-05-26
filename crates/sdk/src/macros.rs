@@ -152,40 +152,68 @@ macro_rules! __opt_lit {
     };
 }
 
-/// Application initializer macro — replaces ~80 LOC of per-component
+/// Application initializer macro — replaces the bulk of per-component
 /// boilerplate with one invocation.
 ///
 /// Per docs/specs/2026-05-26-b-8-sdk-design.md §2.1 + §3.1 + §3.2.
 ///
 /// Four arms map to the four component profiles. `state_apply`,
-/// `state_propose`, and `interaction` emit the standard boilerplate
-/// (`#![no_std]`, `#![no_main]`, bump allocator, `#[panic_handler]`,
-/// `wit_bindgen::generate!`, `export!`). The `behavior` arm is
-/// reserved for v1.1 and surfaces a `compile_error!`.
+/// `state_propose`, and `interaction` emit the bump allocator wiring,
+/// the `#[panic_handler]`, the `wit_bindgen::generate!` invocation
+/// (pointing at the consumer's `./wit` directory via wit-bindgen's
+/// default `CARGO_MANIFEST_DIR` resolution), and the `export!` line.
+/// The `behavior` arm is reserved for v1.1 and surfaces a
+/// `compile_error!`.
+///
+/// # Inner attributes — consumer responsibility
+///
+/// `macro_rules!` macros cannot emit inner attributes (`#![no_std]`,
+/// `#![no_main]`, `#![allow(unsafe_op_in_unsafe_fn)]`) that take
+/// effect on the surrounding module — Rust's macro expansion rules
+/// forbid it. Consumers must place these at the top of each
+/// component source file themselves:
+///
+/// ```ignore
+/// #![no_std]
+/// #![no_main]
+/// #![allow(unsafe_op_in_unsafe_fn)]
+///
+/// myrhiza_sdk::myrhiza_app!(state_apply, Component);
+///
+/// // ... app-author code: use alloc::vec::Vec; impl Guest for Component { ... }
+/// ```
+///
+/// The macro emits `extern crate alloc;` itself; `Vec`, `String`,
+/// etc. become reachable via `alloc::` paths after that. The
+/// `unsafe_op_in_unsafe_fn` allow is for wit-bindgen 0.30's
+/// generated unsafe blocks.
 ///
 /// # Example
 ///
 /// ```ignore
-/// // In a wasm32-unknown-unknown cdylib crate:
-/// use myrhiza_sdk::prelude::*;
+/// // In a wasm32-unknown-unknown bin or cdylib crate root:
+/// #![no_std]
+/// #![no_main]
+/// #![allow(unsafe_op_in_unsafe_fn)]
 ///
-/// myrhiza_app!(state_apply, Component);
+/// myrhiza_sdk::myrhiza_app!(state_apply, Component);
+///
+/// use alloc::vec::Vec;
 ///
 /// impl Guest for Component {
 ///     fn apply(prior_state: Vec<u8>, event: Vec<u8>) -> (Verdict, Vec<u8>) {
 ///         // ...
+///         # todo!()
 ///     }
 ///     fn state_digest(state: Vec<u8>) -> Vec<u8> {
 ///         // ...
+///         # todo!()
 ///     }
 /// }
 /// ```
 #[macro_export]
 macro_rules! myrhiza_app {
     (state_apply, $component:ident) => {
-        #![no_std]
-        #![no_main]
-        #![allow(unsafe_op_in_unsafe_fn)]
         extern crate alloc;
 
         #[global_allocator]
@@ -198,16 +226,12 @@ macro_rules! myrhiza_app {
 
         wit_bindgen::generate!({
             world: "state-apply",
-            path: $crate::local_wit_dir!(),
         });
 
         struct $component;
         export!($component);
     };
     (state_propose, $component:ident) => {
-        #![no_std]
-        #![no_main]
-        #![allow(unsafe_op_in_unsafe_fn)]
         extern crate alloc;
 
         #[global_allocator]
@@ -220,16 +244,12 @@ macro_rules! myrhiza_app {
 
         wit_bindgen::generate!({
             world: "state-propose",
-            path: $crate::local_wit_dir!(),
         });
 
         struct $component;
         export!($component);
     };
     (interaction, $component:ident) => {
-        #![no_std]
-        #![no_main]
-        #![allow(unsafe_op_in_unsafe_fn)]
         extern crate alloc;
 
         #[global_allocator]
@@ -242,7 +262,6 @@ macro_rules! myrhiza_app {
 
         wit_bindgen::generate!({
             world: "interaction",
-            path: $crate::local_wit_dir!(),
         });
 
         struct $component;
@@ -253,7 +272,7 @@ macro_rules! myrhiza_app {
     };
 }
 
-/// Resolve the consumer crate's `wit/` directory.
+/// Resolve the consumer crate's `wit/` directory as a `&'static str`.
 ///
 /// Expands to `concat!(env!("CARGO_MANIFEST_DIR"), "/wit")` — the macro
 /// lives in the SDK but emits the **consumer's** path. `CARGO_MANIFEST_DIR`
@@ -264,6 +283,19 @@ macro_rules! myrhiza_app {
 /// The `local_` prefix encodes the "lives-in-SDK, emits-consumer-path"
 /// semantic asymmetry that would otherwise surprise readers expecting
 /// `myrhiza_sdk::local_wit_dir!()` to return the SDK's own dir.
+///
+/// # Note on `wit_bindgen::generate!`
+///
+/// `wit_bindgen::generate!` is a `proc_macro` that parses its `path:`
+/// argument as a `syn::LitStr` (string literal) and does **not**
+/// expand `macro_rules!` invocations inside. Wiring
+/// `path: $crate::local_wit_dir!()` does not work — the proc-macro
+/// sees the unexpanded token tree. The `myrhiza_app!` macro omits
+/// `path:` entirely, relying on wit-bindgen's default
+/// (`./wit` relative to the consumer's `CARGO_MANIFEST_DIR`), which
+/// resolves to the same location. This helper is exported for use
+/// in non-proc-macro contexts (e.g., a hand-written `include_str!`
+/// of a file in `wit/`).
 #[macro_export]
 macro_rules! local_wit_dir {
     () => {

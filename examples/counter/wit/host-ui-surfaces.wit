@@ -1,0 +1,32 @@
+package myrhiza:kernel@1.0.0;
+
+/// V1 minimum ui:* vocabulary per distribution.md §10.2. Counter+poll
+/// MVP exercises panel + button + input + form.
+///
+/// Component Model WIT does not permit recursive types (even via
+/// list-indirection in wit-parser 0.236). Container records (panel,
+/// form, dialog) therefore reference their children by id rather
+/// than embedding ui-element values directly; the kernel renderer
+/// resolves the child id list against the flat element table the
+/// app emits per frame.
+interface host-ui-surfaces {
+    record panel { id: string, title: string, body: list<string> }
+    record button { id: string, label: string, action: string }
+    record input-element { id: string, label: string, placeholder: string }
+    record form { id: string, fields: list<string>, submit-action: string }
+    record list-element { id: string, items: list<string> }
+    record message { id: string, body: string }
+    record menu { id: string, items: list<tuple<string, string>> }
+    record dialog { id: string, body: list<string> }
+
+    variant ui-element {
+        panel(panel),
+        button(button),
+        input(input-element),
+        form(form),
+        %list(list-element),
+        message(message),
+        menu(menu),
+        dialog(dialog),
+    }
+}

@@ -1,0 +1,42 @@
+[package]
+name = "counter-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Counter app — canonical Myrhiza first-app demo."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "counter-state-apply"
+path = "src/state.rs"
+required-features = ["state-apply"]
+
+[[bin]]
+name = "counter-state-propose"
+path = "src/propose.rs"
+required-features = ["state-propose"]
+
+[[bin]]
+name = "counter-interaction"
+path = "src/interaction.rs"
+required-features = ["interaction"]
+
+[features]
+state-apply = []
+state-propose = []
+interaction = []
+
+[dependencies]
+myrhiza-sdk = { path = "../../crates/sdk" }
+wit-bindgen = "0.30"
+
+# Release-profile opts (`panic = "abort"`, `lto`, `opt-level = "z"`,
+# `strip`) are defined at the workspace root's `[profile.release]`
+# block because `counter-example` is a workspace member and Cargo
+# ignores package-level `[profile.*]` blocks for non-root packages.
+# `panic` and `lto` specifically cannot be overridden per-package
+# (Cargo restriction), so workspace-wide placement is mandatory.
+# Per spec §3.3 + determinism.md §5.2.

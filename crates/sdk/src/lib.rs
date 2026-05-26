@@ -15,8 +15,17 @@
 extern crate alloc;
 
 pub mod macros;
+
+// Manifest authoring surface (host-only): re-exports `myrhiza-manifest`
+// schema types and the `manifest!` declarative macro's prelude. Gated
+// to non-wasm32 because `myrhiza-manifest` is std-only — pulling its
+// symbols into the SDK's rlib on wasm32 transitively loads `std`,
+// which conflicts with the consumer's `#![no_std]` + `#[panic_handler]`.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod manifest;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod prelude;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod types;
 
 // Boilerplate is only relevant on wasm32 targets — re-exposed via the

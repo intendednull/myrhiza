@@ -10,6 +10,7 @@ members = [
     "crates/sdk",
     "crates/test-utils",
     "crates/myrhiza-cli",
+    "examples/counter",
 ]
 exclude = [
     # Wasm-only fixtures — built for wasm32-unknown-unknown by
@@ -83,6 +84,24 @@ anyhow = "1"
 hex-literal = "0.4"
 proptest = "1"
 tempfile = "3"
+
+# Workspace-wide release profile. The wasm32 `examples/*` bin
+# artifacts (state-apply / state-propose / interaction) need the
+# aggressive size opts so unused float-Display paths from the panic
+# machinery / serde trait dispatch are dead-code-eliminated — the
+# byte-level float-ban lint (determinism.md §5.2) would otherwise
+# reject the resulting components at kernel instantiation. `panic`
+# and `lto` cannot be overridden per-package by Cargo, so they must
+# live at the workspace root. Existing wasm fixtures under
+# `tests/fixtures/*` continue to use their own standalone
+# `[profile.release]` blocks (each fixture is its own workspace root)
+# and are unaffected. Per spec §3.3.
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+strip = "symbols"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
