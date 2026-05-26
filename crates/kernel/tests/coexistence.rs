@@ -503,7 +503,8 @@ fn poll_encode_state(
     out
 }
 
-/// Covers: spec §4.1.6 + §4.1.5 K4 row.
+/// Covers: mvp.md §15.1, mvp.md §15.2, convergence.md §4.6
+/// (counter + poll coexistence — K4 row of B-6 spec §4.1.5).
 ///
 /// Same peer, two distinct WASM bundles (counter + poll), two distinct
 /// topics on the same `MemBus`. Events authored on the counter runtime
