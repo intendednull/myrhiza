@@ -1,0 +1,18 @@
+[package]
+name = "myrhiza-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Myrhiza application author surface — WIT, manifest macros, runtime-init boilerplate."
+
+[lints]
+workspace = true
+
+[dependencies]
+myrhiza-types = { path = "../types" }
+myrhiza-manifest = { path = "../manifest" }
+
+[features]
+default = []

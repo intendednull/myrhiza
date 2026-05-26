@@ -2365,6 +2365,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "myrhiza-sdk"
+version = "0.1.0"
+dependencies = [
+ "myrhiza-manifest",
+ "myrhiza-types",
+]
+
+[[package]]
 name = "myrhiza-test-utils"
 version = "0.1.0"
 dependencies = [

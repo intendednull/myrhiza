@@ -1,0 +1,12 @@
+package myrhiza:kernel@1.0.0;
+
+world state-propose {
+    import host-deterministic;
+    import host-non-deterministic;
+    use types.{verdict};
+
+    /// Build a candidate event from user intent. Kernel re-runs
+    /// state-apply (dry-run) before signing per convergence.md §4.4.
+    export propose: func(prior-state: list<u8>, intent: list<u8>) ->
+        result<list<u8>, string>;
+}

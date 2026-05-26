@@ -1,0 +1,50 @@
+package myrhiza:kernel@1.0.0;
+
+interface types {
+    // Opaque identity primitives. Per identity.md §6.1 components hold
+    // these handles but cannot inspect or forge their contents.
+    resource identity-handle {}
+    resource peer-handle {}
+    resource key-handle {}
+
+    record identity-scope {
+        long-term: borrow<identity-handle>,
+        instance: option<instance-binding>,
+    }
+
+    record instance-binding {
+        peer: borrow<peer-handle>,
+        kind: instance-kind,
+        name: string,
+    }
+
+    variant instance-kind {
+        device,
+        behavior,
+        mls-leaf,
+        custom(string),
+    }
+
+    record hlc {
+        wall-ms: u64,
+        logical: u32,
+    }
+
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    // Opaque single-use kernel-issued tokens for submit-and-poll
+    // surfaces per abi.md §8.5.
+    resource request-token {}
+
+    // Verdicts returned by state-apply.
+    variant verdict {
+        accept,
+        reject(string),
+    }
+}
