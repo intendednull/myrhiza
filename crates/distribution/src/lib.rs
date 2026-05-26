@@ -16,13 +16,17 @@
 #![deny(missing_docs)]
 
 pub mod conversions;
+pub mod publication;
 pub mod revocation;
 pub mod topic;
 
+pub use publication::{
+    DOMAIN_SEP_PUBLICATION, MAX_PUBLICATION_JUMP, MAX_VERSION_LEN, PublicationError,
+    PublicationEvent, PublicationLog,
+};
 pub use revocation::{
     DOMAIN_SEP_REVOCATION, MAX_REASON_LEN, MAX_REVOCATION_JUMP, RevocationError, RevocationEvent,
     RevocationLog,
 };
 
-// PublicationLog lands in T6.
 // Iroh-blobs publish + fetch lands in T7.
