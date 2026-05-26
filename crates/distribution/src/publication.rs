@@ -15,10 +15,12 @@
 //! contract.
 
 use bincode::Options;
-use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
 use myrhiza_types::{AuthorPubkey, BlobHash, canonical_bincode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::dispatch::DispatchReject;
+use crate::signed_envelope::{self, SignedEnvelope, serde_bytes_64};
 
 /// Domain-separator string for publication signatures. Mirrors the
 /// manifest-signature framing in `crates/manifest/src/canonical.rs`
@@ -62,48 +64,6 @@ pub struct PublicationEvent {
     pub signature: [u8; 64],
 }
 
-mod serde_bytes_64 {
-    use core::fmt;
-
-    use serde::{
-        Deserializer, Serializer,
-        de::{SeqAccess, Visitor},
-        ser::SerializeTuple,
-    };
-
-    pub fn serialize<S: Serializer>(bytes: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
-        let mut t = s.serialize_tuple(64)?;
-        for b in bytes {
-            t.serialize_element(b)?;
-        }
-        t.end()
-    }
-
-    struct ArrayVisitor;
-
-    impl<'de> Visitor<'de> for ArrayVisitor {
-        type Value = [u8; 64];
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "an array of 64 bytes")
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut out = [0u8; 64];
-            for (i, slot) in out.iter_mut().enumerate() {
-                *slot = seq
-                    .next_element::<u8>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
-            }
-            Ok(out)
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
-        d.deserialize_tuple(64, ArrayVisitor)
-    }
-}
-
 #[derive(Serialize)]
 struct PublicationSignedFields<'a> {
     manifest_hash: &'a BlobHash,
@@ -140,6 +100,20 @@ impl PublicationEvent {
             .expect("canonical bincode of PublicationSignedFields never fails");
         out.extend_from_slice(&body);
         out
+    }
+}
+
+impl SignedEnvelope for PublicationEvent {
+    fn signing_target(&self) -> Vec<u8> {
+        PublicationEvent::signing_target(self)
+    }
+
+    fn signature(&self) -> &[u8; 64] {
+        &self.signature
+    }
+
+    fn field_too_long(&self) -> bool {
+        self.version.len() > MAX_VERSION_LEN
     }
 }
 
@@ -230,6 +204,12 @@ impl PublicationLog {
         event: &PublicationEvent,
         author: &AuthorPubkey,
     ) -> Result<Self, PublicationError> {
+        // Validation sequence per B-10 spec §3.4: length check →
+        // seq-monotonic → seq-jump cap → pubkey-decode → verify_strict.
+        // The length check is repeated by `signed_envelope::verify`
+        // below but must run *first* so its typed error precedes any
+        // seq-check error; the verify-side check is a guaranteed
+        // no-op once we've passed this gate.
         if event.version.len() > MAX_VERSION_LEN {
             return Err(PublicationError::VersionTooLong {
                 got: event.version.len(),
@@ -246,12 +226,17 @@ impl PublicationLog {
             return Err(PublicationError::SeqJumpTooLarge { jump });
         }
 
-        let vk = VerifyingKey::from_bytes(author.as_bytes())
-            .map_err(|_| PublicationError::AuthorPubkeyMalformed)?;
-        let sig = DalekSignature::from_bytes(&event.signature);
-        let target = event.signing_target();
-        vk.verify_strict(&target, &sig)
-            .map_err(|_| PublicationError::SignatureInvalid)?;
+        signed_envelope::verify(event, author).map_err(|reject| match reject {
+            // FieldTooLong is unreachable here — already gated above
+            // with the typed `VersionTooLong` error. Map defensively
+            // to the typed variant so a future reorder of the gates
+            // doesn't silently drop the field-length signal.
+            DispatchReject::FieldTooLong => PublicationError::VersionTooLong {
+                got: event.version.len(),
+            },
+            DispatchReject::AuthorPubkeyMalformed => PublicationError::AuthorPubkeyMalformed,
+            DispatchReject::SignatureInvalid => PublicationError::SignatureInvalid,
+        })?;
 
         self.latest_announcement = Some((event.manifest_hash, event.version.clone()));
         self.last_observed_seq = event.publication_seq;
