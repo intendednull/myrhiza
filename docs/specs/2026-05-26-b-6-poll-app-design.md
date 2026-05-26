@@ -129,8 +129,7 @@ The creator pubkey lives in materialized state as a 32-byte field, included in e
 **Decision**: `view(state, peer_state) -> bytes` projects a UTF-8 text block containing:
 
 ```
-poll: <question/prompt>
-status: <in-progress | ended>
+poll: in-progress
 options:
   [0] Yes              (3 votes)
   [1] No               (1 vote)
@@ -138,7 +137,9 @@ options:
 your vote: 1 (No)      # absent if you have not voted; "<not voted>" otherwise
 ```
 
-All four projections in one view: (a) live counts per option, (b) ended/in-progress flag, (c) per-peer "your vote" display, (d) plus the option labels themselves (which were not in the brief's enumeration but are necessary to make the view legible).
+When the poll has ended, the first line reads `poll: ended` instead. The `poll: <in-progress | ended>` line is a literal status indicator — it is **not** a placeholder for runtime data. `PollState` carries no prompt field (per mvp.md §15.2 master design); poll context (the question being asked) is surfaced out-of-band by the originating user (URL, chat, etc.). See §4.2 for the data-model rationale and v1.1 candidate flag.
+
+All four projections in one view: (a) live counts per option, (b) ended/in-progress flag (rendered as the literal status line), (c) per-peer "your vote" display, (d) plus the option labels themselves (which were not in the brief's enumeration but are necessary to make the view legible).
 
 `peer_state` is a 32-byte slice containing the local `AuthorPubkey` of the interacting user (whose vote is "yours"). This is the first non-empty use of `peer_state` in Myrhiza — counter ignored it (per B-7 Choice D, which defined `peer_state` as opaque app-defined bytes, always empty for counter v1). It is **read-only** in v1 (mirrors B-7 §6 resolved decision: harness owns peer_state mutation). Pluralize the vote-count noun via a simple `if n == 1 { "vote" } else { "votes" }` — no i18n machinery in v1.
 
@@ -222,6 +223,8 @@ struct PollState {
 ```
 
 `state-digest(state_bytes) -> state_bytes`: the canonical-bincode encoding of `PollState` *is* its own digest, mirroring counter's and echo's "identity digest" pattern (per `tests/fixtures/counter-state-apply/src/lib.rs:239` + `tests/fixtures/echo-state-apply/src/lib.rs:217`). BTreeMap canonical iteration makes this safe; if we used HashMap the digest would diverge across peers and the convergence proof would break.
+
+**No prompt field — design note.** Per [mvp.md §15.2](2026-05-09-myrhiza-master-design/mvp.md), `PollState` carries no prompt field; the view does not render poll text. The originating user surfaces poll context out-of-band (URL, chat, app-level metadata). v1.1 candidate: an optional `prompt: String` field at `CreatePoll` genesis if user research surfaces the need — the encoder, view, and dispatch would each gain a small touch-up. Not in scope for v1.
 
 **State-size bound**: `MAX_OPTIONS = 16`, `MAX_OPTION_LABEL_LEN_BYTES = 64`, `MAX_VOTES` unbounded (one per distinct author pubkey on the topic). At 16 options × 64 bytes + a votes map of 1000 voters × (32 + 4) bytes ≈ 36 KB of state. Below the 64 KB heap cap the WASM fixtures' bump allocator declares.
 
