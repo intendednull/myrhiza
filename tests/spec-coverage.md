@@ -6,14 +6,14 @@ Mapping: each spec section to the tests that prove it. Tests carry
 `/// Covers: <file>.md §X.Y` doc comments; this file aggregates them.
 
 ## architecture.md §3.2
-- crates/wasmtime-backend/tests/profile_instantiation.rs:135
-- crates/wasmtime-backend/tests/profile_instantiation.rs:168
-- crates/wasmtime-backend/tests/profile_instantiation.rs:196
-- crates/wasmtime-backend/tests/profile_instantiation.rs:240
+- crates/wasmtime-backend/tests/profile_instantiation.rs:143
+- crates/wasmtime-backend/tests/profile_instantiation.rs:176
+- crates/wasmtime-backend/tests/profile_instantiation.rs:204
+- crates/wasmtime-backend/tests/profile_instantiation.rs:248
 
 ## architecture.md §3.3
-- crates/wasmtime-backend/tests/profile_instantiation.rs:135
-- crates/wasmtime-backend/tests/profile_instantiation.rs:196
+- crates/wasmtime-backend/tests/profile_instantiation.rs:143
+- crates/wasmtime-backend/tests/profile_instantiation.rs:204
 
 ## architecture.md §3.5
 - crates/wasmtime-backend/src/gating.rs:350
@@ -26,7 +26,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## capabilities.md §7.1
 - crates/wasmtime-backend/src/gating.rs:350
 - crates/wasmtime-backend/src/gating.rs:416
-- crates/wasmtime-backend/src/gating.rs:555
+- crates/wasmtime-backend/src/gating.rs:559
 
 ## capabilities.md §7.2
 - crates/kernel/tests/acceptance.rs:192
@@ -175,7 +175,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## determinism.md §5.1
 - crates/kernel/src/state_apply.rs:263
 - crates/wasmtime-backend/src/gating.rs:416
-- crates/wasmtime-backend/src/gating.rs:555
+- crates/wasmtime-backend/src/gating.rs:559
 
 ## determinism.md §5.2
 - crates/kernel/tests/acceptance.rs:375
@@ -233,9 +233,9 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/iroh_convergence.rs:76
 
 ## mvp.md §15.1 #3
-- crates/myrhiza-cli/tests/cli_binary.rs:123
-- crates/myrhiza-cli/tests/cli_binary.rs:50
-- crates/myrhiza-cli/tests/cli_binary.rs:94
+- crates/myrhiza-cli/tests/cli_binary.rs:127
+- crates/myrhiza-cli/tests/cli_binary.rs:51
+- crates/myrhiza-cli/tests/cli_binary.rs:98
 
 ## mvp.md §15.1 #4
 - crates/kernel/tests/convergence.rs:190

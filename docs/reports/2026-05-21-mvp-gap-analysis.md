@@ -25,7 +25,7 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 | 11. Iroh integration | ✅ | B-4.0–4.4 (real `IrohNetwork` with subscribe/publish/request_heads, MemNetwork sibling) |
 | 12. HeadsSummary sync + drift-detection gossip | ✅ | B-1 (HeadsSummary) + B-4.5/4.6 (direct-stream backfill + peer-authority index) |
 | 13. Crypto primitives (host imports) | 🟡 partial | `myrhiza_manifest::verify_signature` (Ed25519) exists, but no `crates/crypto/` and no full host-import surface for app components. WIT files declare crypto host imports but the binding crate is missing. |
-| 14. Bundle distribution + signing | 🟡 partial | Bundle install/load works (acceptance tests at `crates/kernel/tests/acceptance.rs` use real signed bundles). Revocation topic / per-author publishing flow not implemented. |
+| 14. Bundle distribution + signing | ✅ | **Shipped in B-10 (2026-05-26)**: `crates/distribution/` ships iroh-blobs publish + fetch (`BundleDistribution::publish` / `::fetch`), per-author revocation + publication topic derivation (`derive_revocation_topic` / `derive_publication_topic`), pure-fn state machines for both (`RevocationLog::apply` / `PublicationLog::apply`), and bad-sig dispatch helpers (`verify_revocation` / `verify_publication`). Kernel-tier e2e at `crates/kernel/tests/iroh_bundle_distribution.rs` closes `mvp.md §15.1 #1` against real iroh-blobs over loopback QUIC. Kernel-tier runtime subscription wiring for revocation is deferred to a follow-up (see B-10 spec §10). |
 | 15. Counter app (state-apply + propose + interaction + manifest) | ❌ | Only the `counter-state-apply.wasm` fixture exists (`tests/fixtures/counter-state-apply/`). No propose/interaction components, no `examples/counter/` workspace member. |
 | 16. Poll app | ✅ | **Shipped in B-6 (2026-05-26)**: four-component poll bundle (state-apply + propose + interaction + manifest) at `tests/fixtures/poll-*/`; 11 state-tier tests + 3 kernel-tier tests + coexistence-with-counter test green. Not v1-blocking (criterion 4 already satisfied by counter + echo) — shipped as second MVP demo app per [mvp.md §15.2](../specs/2026-05-09-myrhiza-master-design/mvp.md). |
 | 17. State-tier tests | ❌ | Per-app state-apply unit tests not present — current tests use the in-Rust `counter_handle()` test helper, not real-app state-apply. |
@@ -37,7 +37,7 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 | 23. v1.1 behavior profile + criterion #6 | ❌ | Deferable per mvp.md §15.5. |
 | 24. Dependency-direction CI check | ✅ | Shipped in B-8 (2026-05-26): `xtask/dep-direction/` BFS walks `cargo metadata` resolve graph and rejects `examples/*` transitively depending on kernel-internal crates. Wired into `just ci`. |
 
-**Tally**: 15 items ✅, 4 items 🟡, 5 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback). Update 2026-05-26: item 16 (Poll app) flipped from ❌ to ✅ with B-6; items 20 (SDK ergonomics) + 24 (dep-direction CI check) flipped from ❌ to ✅ with B-8.
+**Tally**: 16 items ✅, 3 items 🟡, 5 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback). Update 2026-05-26: item 14 (Bundle distribution) flipped from 🟡 to ✅ with B-10; item 16 (Poll app) flipped from ❌ to ✅ with B-6; items 20 (SDK ergonomics) + 24 (dep-direction CI check) flipped from ❌ to ✅ with B-8.
 
 ## v1 acceptance criteria status
 
@@ -45,7 +45,7 @@ Cross-checking against [mvp.md §15.1](../specs/2026-05-09-myrhiza-master-design
 
 | Criterion | Status |
 |---|---|
-| 1. Kernel loads + instantiates WASM state component from a bundle (iroh-blobs not required for the in-process tier) | ✅ Plan A acceptance tests prove this against the `counter-state-apply.wasm` fixture. |
+| 1. Kernel loads + instantiates WASM state component from a bundle fetched via iroh-blobs | ✅ **Closed against the iroh-blobs path in B-10 (2026-05-26)**: `crates/kernel/tests/iroh_bundle_distribution.rs` exercises peer-A `BundleDistribution::publish` → peer-B `BundleDistribution::fetch` over loopback QUIC → `InstallFlow::load` → `WasmtimeBackend::instantiate_state_apply` → genesis apply. Disk-loaded variant remained satisfied throughout via `crates/kernel/tests/acceptance.rs`. |
 | 2. Multi-peer convergence on same component bytes (verified via state-digest) | ✅ **Corrected 2026-05-21 during B-5 brainstorming**: `helpers::counter_handle()` (used by every B-1 + B-4 convergence test) loads the real `counter-state-apply.wasm` via `WasmtimeBackend::instantiate_state_apply` — every existing convergence test already runs on real WASM bytes. |
 | 3. UI app loads interaction component, projects a view, submits a command, observes state change | ✅ **Shipped in B-7 (2026-05-21)**: `crates/myrhiza-cli/` harness drives the counter bundle's three components (state-apply + state-propose + interaction) through the `view → dispatch → propose → pre-check → apply` loop. E2E test at `crates/myrhiza-cli/tests/e2e.rs` asserts final state == `8_i64.to_be_bytes()` and pre-check ≡ apply on every step. |
 | 4. Two apps coexist (different state component, different topic, same peer; events don't cross) | ✅ **Shipped in B-5 (2026-05-21)**: `crates/kernel/tests/coexistence.rs::two_apps_coexist_no_event_crossing` proves criterion 4 with counter + echo bundles on one peer. |
@@ -89,11 +89,9 @@ The original B-5 scope was based on the incorrect read of criterion 2's status (
 
 **Estimate**: 5-7 days.
 
-### B-10 (optional): Bundle distribution polish
+### ~~B-10: Bundle distribution polish~~ → SHIPPED 2026-05-26
 
-**Scope**: revocation topic, per-author bundle publishing, blob-fetch path via iroh-blobs (currently bundles are loaded from disk).
-
-**Estimate**: 5-7 days.
+**Scope** (shipped): revocation topic, per-author bundle publishing, blob-fetch path via iroh-blobs. Closes implementation.md §20 item 14 and `mvp.md §15.1 #1` against real iroh-blobs (previously only against disk-loaded bundles). See [docs/specs/2026-05-26-b-10-bundle-distribution-design.md](../specs/2026-05-26-b-10-bundle-distribution-design.md) and [docs/plans/2026-05-26-b-10-bundle-distribution.md](../plans/2026-05-26-b-10-bundle-distribution.md).
 
 ### v1.5+ (post-v1)
 
@@ -115,7 +113,7 @@ The original B-5 scope was based on the incorrect read of criterion 2's status (
 ## Open questions
 
 1. **State persistence**: Does mvp.md §15.1 require it for v1? Reading §15.4 workspace shape suggests `crates/storage/` is in scope but the acceptance criteria don't mandate restart-survival. Treat as optional for v1 acceptance.
-2. **Iroh-blobs for bundle fetch**: §15.1 #1 says "fetched via iroh-blobs" — this is a real requirement. Today bundles load from disk in tests; we need a real iroh-blobs integration path before v1 ships.
+2. ~~**Iroh-blobs for bundle fetch**~~: **Resolved by B-10 (2026-05-26)**. `crates/distribution/` ships `BundleDistribution::publish` + `::fetch` against `iroh-blobs 0.101.0`; `crates/kernel/tests/iroh_bundle_distribution.rs` proves cross-peer fetch via the real downloader over loopback QUIC.
 3. **Real cross-process tests**: §15.3 lists E2E tier as "slow" and depends on item 19. Should B-7 or B-8 include cross-process tests, or defer entirely?
 
 ## Recommendation

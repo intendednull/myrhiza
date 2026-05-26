@@ -206,12 +206,15 @@ fn counter_dispatch_rejection_does_not_abort_loop() {
 fn poll_dispatch_displays_per_peer_vote() {
     let key = AuthorKeypair::deterministic(3);
     let (_bundle, addr) = build_signed_poll_bundle_three_components();
+    let BundleAddress::Disk { bundle_dir, .. } = &addr else {
+        panic!("fixture builder returns Disk variant");
+    };
 
     let input = b"vote 0\nquit\n".to_vec();
     let mut output: Vec<u8> = Vec::new();
 
     myrhiza_cli::run(
-        &addr.bundle_dir,
+        bundle_dir,
         &key,
         poll_genesis_app_payload(&["Yes", "No"]),
         Cursor::new(input),

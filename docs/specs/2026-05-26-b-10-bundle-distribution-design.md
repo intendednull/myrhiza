@@ -1,5 +1,5 @@
 **Date:** 2026-05-26
-**Status:** draft
+**Status:** active
 **Parent:** [docs/specs/2026-05-09-myrhiza-master-design/README.md](2026-05-09-myrhiza-master-design/README.md)
 **Subject:** Plan B-10 — Bundle distribution polish + iroh-blobs fetch path
 
