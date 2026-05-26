@@ -116,7 +116,12 @@ spec-coverage-check: spec-coverage
         exit 1; \
     fi
 
-ci: fmt-check lint test test-iroh spec-coverage-check
+# Dep-direction check: examples/* MUST NOT transitively depend on
+# kernel-internal crates. Per docs/specs/2026-05-26-b-8-sdk-design.md §2.4.
+dep-direction:
+    cargo run -p dep-direction-check --quiet
+
+ci: fmt-check lint test test-iroh spec-coverage-check dep-direction
 
 # Sync `crates/sdk/wit/` and `examples/counter/wit/` from the
 # canonical `wit/myrhiza-kernel/wit/`. Run when the kernel WIT
