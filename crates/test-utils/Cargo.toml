@@ -16,10 +16,12 @@ myrhiza-types = { path = "../types" }
 myrhiza-manifest = { path = "../manifest" }
 myrhiza-kernel = { path = "../kernel" }
 myrhiza-network = { path = "../network", features = ["test-helpers"] }
+myrhiza-distribution = { path = "../distribution", optional = true }
 bincode.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 iroh = { workspace = true, optional = true }
+iroh-blobs = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
 serde.workspace = true
 tempfile.workspace = true
@@ -30,8 +32,16 @@ tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 # tests that need a real `IrohNetwork` under a real `Runtime`. Default
 # off; mirrors the `network-iroh` feature on `myrhiza-network`. Per
 # docs/specs/2026-05-22-e2e-test-coverage-design.md §3.2.
+#
+# B-10 T10: the harness also constructs a `BundleDistribution` per peer
+# and registers `iroh_blobs::ALPN` on the same router as gossip + heads,
+# so the iroh-blobs publish/fetch surface is reachable in kernel-tier
+# tests (spec §3.6 ¶5 + §6.3).
 network-iroh = [
     "myrhiza-network/network-iroh",
+    "myrhiza-distribution/network-iroh",
     "dep:iroh",
+    "dep:iroh-blobs",
     "dep:iroh-gossip",
+    "dep:myrhiza-distribution",
 ]

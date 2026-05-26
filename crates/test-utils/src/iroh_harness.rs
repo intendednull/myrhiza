@@ -17,9 +17,10 @@ use myrhiza_types::{BundleHash, PeerPubkey, Topic};
 use crate::harness::PeerHandle;
 
 /// One iroh peer's complete stack: endpoint, gossip handle, router,
-/// and the `IrohNetwork`. Ownership lives on the harness so endpoints
-/// are not dropped mid-test (dropping the endpoint tears down the
-/// UDP socket and silently breaks every running peer).
+/// the `IrohNetwork`, and the `BundleDistribution` (iroh-blobs
+/// publish/fetch surface). Ownership lives on the harness so
+/// endpoints are not dropped mid-test (dropping the endpoint tears
+/// down the UDP socket and silently breaks every running peer).
 ///
 /// Fields are pub for the rare test that needs to reach below the
 /// harness API (e.g. publishing raw bytes through `gossip` to
@@ -31,12 +32,19 @@ pub struct IrohPeerStack {
     /// Gossip handle on top of `endpoint`, used by `IrohNetwork` for
     /// topic publish/subscribe.
     pub gossip: iroh_gossip::Gossip,
-    /// Protocol router accepting `iroh_gossip::ALPN` (always) and
-    /// `HEADS_REQUEST_ALPN` (when requested) against this endpoint.
+    /// Protocol router accepting `iroh_gossip::ALPN` (always),
+    /// `HEADS_REQUEST_ALPN` (when requested), and `iroh_blobs::ALPN`
+    /// (always — for B-10 publish/fetch) against this endpoint.
     pub router: iroh::protocol::Router,
     /// The `IrohNetwork` wired to `endpoint` + `gossip`; pass into
     /// `Runtime::start` as the kernel's `Network` impl.
     pub network: IrohNetwork,
+    /// The `BundleDistribution` wired to `endpoint`; owns the local
+    /// `MemStore` and the `BlobsProtocol` handler registered on the
+    /// router for `iroh_blobs::ALPN`. Tests reach in to publish
+    /// bundles and pass the resulting `BlobHash` to peers for fetch.
+    /// Per B-10 spec §3.6 + §6.3.
+    pub distribution: myrhiza_distribution::BundleDistribution,
 }
 
 /// Spin up a fresh iroh endpoint + gossip + router for a test peer.
@@ -83,8 +91,18 @@ pub async fn spawn_iroh_peer(
     lookup.add_endpoint_info(endpoint.addr());
     let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
     let network = IrohNetwork::new(endpoint.clone(), gossip.clone());
-    let mut builder =
-        iroh::protocol::Router::builder(endpoint.clone()).accept(iroh_gossip::ALPN, gossip.clone());
+    // Per B-10 spec §3.6 ¶5 + §6.3: every iroh peer also carries a
+    // `BundleDistribution` and registers `iroh_blobs::ALPN` against
+    // the same router. Constructed after gossip + endpoint so the
+    // `BlobsProtocol` is wired to the same endpoint as the rest of
+    // the per-peer stack.
+    let distribution = myrhiza_distribution::BundleDistribution::new(endpoint.clone());
+    // `BlobsProtocol: Clone` (derived in `iroh_blobs::net_protocol`),
+    // so a `.clone()` on the borrowed handler is the natural way to
+    // hand an owned handler to the router.
+    let mut builder = iroh::protocol::Router::builder(endpoint.clone())
+        .accept(iroh_gossip::ALPN, gossip.clone())
+        .accept(iroh_blobs::ALPN, distribution.protocol_handler().clone());
     if register_heads_alpn {
         builder = builder.accept(HEADS_REQUEST_ALPN, network.protocol_handler());
     }
@@ -94,6 +112,7 @@ pub async fn spawn_iroh_peer(
         gossip,
         router,
         network,
+        distribution,
     }
 }
 
