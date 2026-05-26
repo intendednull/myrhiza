@@ -16,6 +16,7 @@
 #![deny(missing_docs)]
 
 pub mod conversions;
+pub mod dispatch;
 pub mod publication;
 pub mod revocation;
 pub mod topic;
@@ -23,6 +24,7 @@ pub mod topic;
 #[cfg(feature = "network-iroh")]
 pub mod blobs;
 
+pub use dispatch::{DispatchReject, verify_publication, verify_revocation};
 pub use publication::{
     DOMAIN_SEP_PUBLICATION, MAX_PUBLICATION_JUMP, MAX_VERSION_LEN, PublicationError,
     PublicationEvent, PublicationLog,
