@@ -23,7 +23,8 @@ use myrhiza_kernel::pending::PendingCfg;
 use myrhiza_kernel::runtime::RuntimeCfg;
 use myrhiza_kernel::{BundleAddress, InstallFlow, StateApplyHandle};
 use myrhiza_test_utils::bundle::{
-    TestBundle, build_signed_counter_bundle, build_signed_echo_bundle, write_bundle,
+    TestBundle, build_signed_counter_bundle, build_signed_echo_bundle, build_signed_poll_bundle,
+    write_bundle,
 };
 use myrhiza_test_utils::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest, sign_manifest,
@@ -89,6 +90,23 @@ pub fn counter_handle() -> StateApplyHandle {
 #[must_use]
 pub fn echo_handle() -> StateApplyHandle {
     let (_bundle, addr) = build_signed_echo_bundle();
+    let flow = InstallFlow::new();
+    let loaded = flow.load(&addr).expect("InstallFlow::load");
+    let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");
+    let instance = backend
+        .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
+        .expect("instantiate_state_apply");
+    StateApplyHandle::new(instance)
+}
+
+/// Install + instantiate the poll-state-apply fixture and return a
+/// fresh `StateApplyHandle`. Each call returns an independent wasmtime
+/// instance with its own Store.
+///
+/// Used by plan-B-6 kernel-tier tests; mirrors `counter_handle()`.
+#[must_use]
+pub fn poll_handle() -> StateApplyHandle {
+    let (_bundle, addr) = build_signed_poll_bundle();
     let flow = InstallFlow::new();
     let loaded = flow.load(&addr).expect("InstallFlow::load");
     let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");

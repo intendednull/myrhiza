@@ -323,6 +323,142 @@ pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddr
     (test_bundle, addr)
 }
 
+/// Path to the poll-state-apply fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/poll-state-apply.wasm`
+/// via `CARGO_MANIFEST_DIR`. Test-utils sits at `crates/test-utils/`, so
+/// walking up two ancestors reaches the workspace root — same shape as
+/// every other crate under `crates/`.
+#[allow(clippy::expect_used)]
+fn poll_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/poll-state-apply.wasm")
+}
+
+/// Path to the poll-state-propose fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/poll-state-propose.wasm`.
+#[allow(clippy::expect_used)]
+fn poll_state_propose_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/poll-state-propose.wasm")
+}
+
+/// Path to the poll-interaction fixture built by `just build-fixtures`.
+///
+/// Resolves to `<workspace_root>/tests/fixtures/built/poll-interaction.wasm`.
+#[allow(clippy::expect_used)]
+fn poll_interaction_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("workspace root is two levels above test-utils crate manifest")
+        .join("tests/fixtures/built/poll-interaction.wasm")
+}
+
+/// Build a signed poll-state-apply bundle from the
+/// reproducibly-built fixture at `tests/fixtures/built/poll-state-apply.wasm`.
+/// Returns the [`TestBundle`] (with on-disk artifacts retained via the
+/// inner [`TempDir`]) and its [`BundleAddress`] (suitable for
+/// [`myrhiza_kernel::InstallFlow::load`]).
+///
+/// Requires `just build-fixtures` to have produced the wasm artifact.
+/// Used by plan-B-6 poll-app state-tier + kernel-tier tests.
+///
+/// Signs with [`deterministic_signing_key`](13) — distinct from the
+/// counter helpers' seed `7` so the on-disk signing artifact does not
+/// collide when both bundles co-exist in a single test (per plan B-6).
+///
+/// # Panics
+/// Panics if the fixture wasm is missing or unreadable, or if the
+/// tempdir bundle write fails. Both indicate a broken test environment
+/// (forgot `just build-fixtures`, /tmp unwriteable) rather than a
+/// runtime condition the test should recover from. The matching
+/// `#[allow]` is the documented escape hatch per workspace
+/// `Cargo.toml` — `test-utils` is dev-only (`publish = false`).
+#[allow(clippy::expect_used, clippy::panic)]
+pub fn build_signed_poll_bundle() -> (TestBundle, BundleAddress) {
+    let component_bytes = std::fs::read(poll_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "poll fixture missing at {}: {e} — run `just build-fixtures`",
+            poll_fixture_path().display()
+        )
+    });
+
+    let mut manifest = helpers_only_state_apply_manifest();
+    let key = deterministic_signing_key(13);
+    sign_manifest(&mut manifest, &component_bytes, &key);
+
+    let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
+    let addr = BundleAddress {
+        bundle_dir: test_bundle.bundle_dir.clone(),
+        manifest_path: test_bundle.manifest_path.clone(),
+    };
+    (test_bundle, addr)
+}
+
+/// Build a signed three-component poll bundle from the reproducibly-built
+/// fixtures at `tests/fixtures/built/`.
+///
+/// Signs all three components (state-apply, state-propose, interaction) under
+/// the composite `bundle_content_hash` with [`deterministic_signing_key`](13).
+/// Returns the [`TestBundle`] and its [`BundleAddress`].
+///
+/// Requires `just build-fixtures` to have produced all three artifacts.
+///
+/// # Panics
+/// Panics if any fixture is missing or unreadable, or if the tempdir write
+/// fails. Both indicate a broken test environment.
+#[allow(clippy::expect_used, clippy::panic)]
+pub fn build_signed_poll_bundle_three_components() -> (TestBundle, BundleAddress) {
+    let apply_bytes = std::fs::read(poll_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "poll-state-apply fixture missing at {}: {e} — run `just build-fixtures`",
+            poll_fixture_path().display()
+        )
+    });
+    let propose_bytes = std::fs::read(poll_state_propose_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "poll-state-propose fixture missing at {}: {e} — run `just build-fixtures`",
+            poll_state_propose_fixture_path().display()
+        )
+    });
+    let interaction_bytes = std::fs::read(poll_interaction_fixture_path()).unwrap_or_else(|e| {
+        panic!(
+            "poll-interaction fixture missing at {}: {e} — run `just build-fixtures`",
+            poll_interaction_fixture_path().display()
+        )
+    });
+
+    let mut manifest = helpers_only_three_component_manifest();
+    let key = deterministic_signing_key(13);
+    sign_manifest_three_components(
+        &mut manifest,
+        &apply_bytes,
+        &propose_bytes,
+        &interaction_bytes,
+        &key,
+    );
+
+    let test_bundle =
+        write_three_component_bundle(&manifest, &apply_bytes, &propose_bytes, &interaction_bytes)
+            .expect("write three-component bundle to tempdir");
+    let addr = BundleAddress {
+        bundle_dir: test_bundle.bundle_dir.clone(),
+        manifest_path: test_bundle.manifest_path.clone(),
+    };
+    (test_bundle, addr)
+}
+
 /// Build a signed [`TestBundle`] around `component_bytes` whose manifest
 /// is the helpers-only state-apply manifest *augmented* with one extra
 /// entry under `capabilities.host_imports` set to `true`.
