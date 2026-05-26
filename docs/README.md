@@ -65,7 +65,9 @@ _No specs yet. Prior art: [`prior-art/jco/`](prior-art/jco/) (the only viable co
 
 *(test tiers, harnesses, dev workflow)*
 
-_No specs yet. Prior art: [`prior-art/formal-methods/`](prior-art/formal-methods/) (TLA+ / Apalache / Loom / Kani survey)._
+- [Plan B-8 — SDK ergonomics + examples wiring + dep-direction CI](specs/2026-05-26-b-8-sdk-design.md) — introduces `crates/sdk/` (type re-exports + WIT directory + `manifest!` and `myrhiza_app!` declarative macros) and `examples/counter/` (canonical first-app demo); migrates counter fixtures off `tests/fixtures/`; adds an `xtask/dep-direction/` CI check enforcing `examples/ → crates/sdk` direction only. Closes implementation.md §20 items 20 + 24. `[draft]`
+
+Prior art: [`prior-art/formal-methods/`](prior-art/formal-methods/) (TLA+ / Apalache / Loom / Kani survey).
 
 ## References
 
