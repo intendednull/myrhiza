@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use myrhiza_types::BlobHash;
 use serde::{Deserialize, Serialize};
 
 /// Top-level manifest. Mirrors distribution.md §10.2.
@@ -146,17 +147,37 @@ pub struct ModuleDep {
     pub required_capabilities: Vec<String>,
 }
 
-/// `[components]` section: per-profile artifact paths.
+/// `[components]` section: per-profile artifact paths + content hashes.
+///
+/// Per B-10 spec §4.1, each profile carries two parallel fields: the
+/// disk-relative path (for disk-bundle layout) and the `BlobHash` of
+/// the component's raw bytes (load-bearing for iroh-blobs addressing).
+/// Disk bundles set `*_hash` to `None`; iroh-publish populates them
+/// before signing so the signature commits to the hash claim.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ComponentsSection {
     /// Path to state-apply component, if present.
     pub state_apply: Option<String>,
+    /// BLAKE3 hash of the state-apply component's raw bytes (iroh-
+    /// blobs addressing). `None` for disk-only bundles. Populated by
+    /// publish before signing; cross-checked at install when fetched
+    /// over iroh-blobs.
+    pub state_apply_hash: Option<BlobHash>,
     /// Path to state-propose component, if present.
     pub state_propose: Option<String>,
+    /// BLAKE3 hash of the state-propose component's raw bytes (iroh-
+    /// blobs addressing). `None` for disk-only bundles.
+    pub state_propose_hash: Option<BlobHash>,
     /// Path to interaction component, if present.
     pub interaction: Option<String>,
+    /// BLAKE3 hash of the interaction component's raw bytes (iroh-
+    /// blobs addressing). `None` for disk-only bundles.
+    pub interaction_hash: Option<BlobHash>,
     /// Path to behavior component, if present.
     pub behavior: Option<String>,
+    /// BLAKE3 hash of the behavior component's raw bytes (iroh-blobs
+    /// addressing). `None` for disk-only bundles.
+    pub behavior_hash: Option<BlobHash>,
 }
 
 /// Author-policy per identity.md §6.1. v1 default is `Deny`.
@@ -281,9 +302,13 @@ mod tests {
             modules: ModulesSection { dep: Vec::new() },
             components: ComponentsSection {
                 state_apply: Some("components/state-apply.wasm".into()),
+                state_apply_hash: None,
                 state_propose: None,
+                state_propose_hash: None,
                 interaction: None,
+                interaction_hash: None,
                 behavior: None,
+                behavior_hash: None,
             },
             author_policy: AuthorPolicy::default_deny(),
             signature: None,

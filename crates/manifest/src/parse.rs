@@ -325,11 +325,17 @@ fn parse_modules(doc: &DocumentMut) -> Result<ModulesSection, ParseError> {
 fn parse_components(doc: &DocumentMut) -> Result<ComponentsSection, ParseError> {
     let t = require(doc, "components")?;
     let opt = |k: &str| t.get(k).and_then(|i| i.as_str()).map(String::from);
+    // TOML manifests carry only paths; iroh-blobs hashes are populated
+    // at publish-time over the canonical-bincode wire form.
     Ok(ComponentsSection {
         state_apply: opt("state-apply"),
+        state_apply_hash: None,
         state_propose: opt("state-propose"),
+        state_propose_hash: None,
         interaction: opt("interaction"),
+        interaction_hash: None,
         behavior: opt("behavior"),
+        behavior_hash: None,
     })
 }
 

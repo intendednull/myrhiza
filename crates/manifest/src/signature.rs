@@ -82,9 +82,13 @@ mod tests {
             modules: ModulesSection { dep: vec![] },
             components: ComponentsSection {
                 state_apply: Some("components/state-apply.wasm".into()),
+                state_apply_hash: None,
                 state_propose: None,
+                state_propose_hash: None,
                 interaction: None,
+                interaction_hash: None,
                 behavior: None,
+                behavior_hash: None,
             },
             author_policy: AuthorPolicy::default_deny(),
             signature: None,

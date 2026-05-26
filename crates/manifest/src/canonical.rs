@@ -260,9 +260,13 @@ mod tests {
             modules: ModulesSection { dep: vec![] },
             components: ComponentsSection {
                 state_apply: Some("components/state-apply.wasm".into()),
+                state_apply_hash: None,
                 state_propose: None,
+                state_propose_hash: None,
                 interaction: None,
+                interaction_hash: None,
                 behavior: None,
+                behavior_hash: None,
             },
             author_policy: AuthorPolicy::default_deny(),
             signature: sig.map(|v| Signature {
@@ -270,5 +274,29 @@ mod tests {
                 value: v,
             }),
         }
+    }
+
+    #[test]
+    fn components_section_hash_fields_roundtrip() {
+        use crate::schema::ComponentsSection;
+        use myrhiza_types::BlobHash;
+
+        let cs = ComponentsSection {
+            state_apply: Some("components/state-apply.wasm".into()),
+            state_apply_hash: Some(BlobHash::from_bytes([0xAA; 32])),
+            state_propose: None,
+            state_propose_hash: None,
+            interaction: Some("components/interaction.wasm".into()),
+            interaction_hash: Some(BlobHash::from_bytes([0xBB; 32])),
+            behavior: None,
+            behavior_hash: None,
+        };
+        let bytes = myrhiza_types::canonical_bincode()
+            .serialize(&cs)
+            .expect("encode");
+        let decoded: ComponentsSection = myrhiza_types::canonical_bincode()
+            .deserialize(&bytes)
+            .expect("decode");
+        assert_eq!(cs, decoded);
     }
 }
