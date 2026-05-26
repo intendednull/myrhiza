@@ -70,6 +70,8 @@ Authentication chain on fetch:
 
 **Decision (a)**: derive `topic_id = BLAKE3("myrhiza/revocations/v1" || author_pubkey)` exactly as [`distribution.md`](2026-05-09-myrhiza-master-design/distribution.md) §10.7 already pins. Every peer that has installed at least one bundle by author A auto-subscribes to A's revocation topic at install time and stays subscribed for the lifetime of the install. Revocations are gossiped as signed `RevocationEvent` envelopes.
 
+**Topic-ID derivation is public**: the topic is `BLAKE3("myrhiza/revocations/v1" || author_pubkey)` and the `author_pubkey` is embedded in every installed manifest. Any peer who knows the pubkey can derive the topic and publish unsigned envelopes (or envelopes signed by the wrong key) onto it. Per §4.4 step 1, envelopes failing Ed25519 signature verification against `author_pubkey` are dropped at subscription dispatch before reaching `RevocationLog::apply` — the apply step never sees them, so no state mutation can occur from forged envelopes. Rate-limiting bad-sig senders is out of scope for v1; the `PeerWarning::SignatureInvalid` path (already shipped in B-4.8) is the natural extension point and a v1.5+ follow-up. The same dispatch-time filter applies to the publication topic (§3.4).
+
 The shape is the master spec's pinned commitment; this slice realizes it. The decision worth recording here is **why the topic is per-author and not per-bundle**.
 
 **Runner-up (b) — per-bundle revocation on the bundle's own application topic**. Rejected: peers do not subscribe to bundles they don't have, so a peer who deferred installing version 1.4 has no subscription on which to receive the "1.4 is revoked, do not install" message. The point of revocation is to warn peers *before* they install — per-author beats per-bundle structurally.
@@ -96,9 +98,13 @@ struct PublicationEvent {
     /// here so peers can render a release notification before fetching
     /// the manifest bytes.
     version: String,
-    /// Signature by the author's pubkey over the canonical-bincode
-    /// encoding of (manifest_hash || version || sequence).
+    /// Monotonic-per-author. Kernel rejects out-of-order or duplicate.
     publication_seq: u64,
+    /// Signature by the author's pubkey over the canonical-bincode
+    /// encoding of (DOMAIN_SEP_PUBLICATION || manifest_hash ||
+    /// version || publication_seq), where DOMAIN_SEP_PUBLICATION =
+    /// "myrhiza/publication/v1" (mirrors the manifest DOMAIN_SEP
+    /// pattern; see §4.4 for the matching revocation domain separator).
     signature: Signature,
 }
 ```
@@ -349,8 +355,14 @@ pub struct RevocationEvent {
     pub revoked_at: u64,
     /// Monotonic-per-author. Kernel rejects out-of-order or duplicate.
     pub revocation_seq: u64,
-    /// Signature by the author's pubkey over canonical-bincode of
-    /// (revoked_bundle_hash, reason, revoked_at, revocation_seq).
+    /// Signature by the author's pubkey over the byte string
+    /// `DOMAIN_SEP_REVOCATION || canonical-bincode(revoked_bundle_hash,
+    /// reason, revoked_at, revocation_seq)`, where
+    /// `DOMAIN_SEP_REVOCATION = "myrhiza/revocation/v1"`. Mirrors the
+    /// manifest-signature framing in `crates/manifest/src/canonical.rs`
+    /// (where `DOMAIN_SEP = "myrhiza/manifest/v1"`); the domain prefix
+    /// defends against key-reuse across envelope types if the same
+    /// author key ever signs heterogeneous payloads.
     pub signature: Signature,
 }
 ```
@@ -455,6 +467,12 @@ Workspace `[workspace.dependencies]`:
 iroh-blobs = "=0.101.0"
 ```
 
+**Version-compatibility verification (2026-05-26)**: workspace `Cargo.toml` line 61 pins `iroh = "=1.0.0-rc.0"`. The prior-art note at [`prior-art/iroh/blobs.md`](../prior-art/iroh/blobs.md) §Versions line 14 reports that iroh-blobs **0.100** targets `iroh = "0.98"`, which would mismatch our workspace pin. **Verified directly against crates.io** (`https://docs.rs/crate/iroh-blobs/0.101.0/source/Cargo.toml.orig`) that **iroh-blobs 0.101.0** — the version this slice actually pins — declares `iroh = { version = "=1.0.0-rc.0", default-features = false }`, exactly matching the workspace pin. iroh-blobs 0.101.0 was published 2026-05-08, the same day the prior-art note was written; the note captured 0.100's older `iroh = "0.98"` dependency before the 0.101 bump landed.
+
+**Implication for the plan-writer**: the version pin in §4.7 is intentional and compatible. T0 verification is *still* required — confirm at plan-execution time that `cargo tree -p iroh-blobs` resolves the workspace `iroh = 1.0.0-rc.0` without conflict, and that the `iroh-base`, `iroh-tickets`, `iroh-metrics` transitive pins (all `=1.0.0-rc.0` on iroh-blobs 0.101.0) do not collide with anything else in the tree.
+
+**Contingency paths** if T0 verification later surfaces a real mismatch (e.g., iroh-blobs publishes a 0.102 that requires `iroh = "1.0.0-rc.1"` and we've bumped iroh in the meantime, or vice-versa): (a) bump both pins together — both are `=`-pinned in this workspace, so bumping is the same shape as the existing iroh version bumps that B-4.x slices already executed; (b) hold iroh-blobs back to a release that still targets the current iroh pin, accepting any feature regression; (c) escalate to spec re-scope if neither (a) nor (b) is viable. Path (a) is the expected resolution and matches the workspace's existing exact-pin discipline.
+
 `crates/distribution/Cargo.toml`:
 
 ```toml
@@ -491,7 +509,7 @@ network-iroh = ["dep:iroh", "dep:iroh-blobs", "myrhiza-network/network-iroh"]
 | **Fetch flakes under network jitter** | Medium | Test flake in CI; user-visible install failures in production | iroh-blobs BLAKE3 + Bao verified streaming is resumable per [`prior-art/iroh/blobs.md`](../prior-art/iroh/blobs.md) §Wire-protocol ("re-asking for the missing tail of a partially-received blob just costs the missing range"); kernel-tier acceptance test wraps fetch in `tokio::time::timeout(30s)`. Production-side retry policy is a follow-up (no automatic retry in B-10 — user re-tries the install on transient failure). |
 | **Revocation log conflict under concurrent revoke** | Low | Last-write-wins ambiguity from compromised key | Already covered by `revocation-seq` monotonicity + MAX_REVOCATION_JUMP from [`distribution.md`](2026-05-09-myrhiza-master-design/distribution.md) §10.7. A non-compromised author increments seq carefully; a compromised key publishing concurrent (author, seq=N) collides deterministically and one is rejected. This is the single-key-compromise threat already named. |
 | **Publication topic enumeration** | Medium | Relay can correlate which peers follow which authors | Same as the revocation-topic enumeration risk already accepted per [`distribution.md`](2026-05-09-myrhiza-master-design/distribution.md) §10.7 closing paragraph + [`risks.md`](2026-05-09-myrhiza-master-design/risks.md) §19. Mitigation (relay rotation, topic-subscription cover) deferred. |
-| **BundleAddress enum migration breaks call sites** | Low | Compile failures across kernel/test-utils on the B-10 PR | Mechanical migration — `grep` returns ~5-10 call sites all in `crates/kernel/tests/`, `crates/test-utils/`, and `crates/myrhiza-cli/`. One PR cleanup. |
+| **BundleAddress enum migration breaks call sites** | Low | Compile failures across kernel/test-utils on the B-10 PR | Mechanical migration — verified by grep against `crates/`: 9 constructor sites need updating, plus the struct definition itself becomes an enum. Enumerated: `crates/myrhiza-cli/src/lib.rs:109` (CLI install path), `crates/kernel/tests/helpers/mod.rs:113` (test helper), `crates/kernel/tests/acceptance.rs:269,435` (2 acceptance test sites), `crates/test-utils/src/bundle.rs:140,176,319` (3 fixture builders: counter / echo / counter-three-components), and `crates/kernel/src/install.rs:298,380` (2 internal sites within install.rs alongside the type definition at :39). One PR cleanup. |
 | **Manifest schema gains 4 new fields; old bundles without hash fields** | Low | Disk bundles still need to work; iroh bundles need hashes populated | Hash fields are `Option<BlobHash>`. Disk bundles set them to `None` (unchanged behavior). Publish-side fills them in. Install-time check is conditional on the `BundleAddress` variant — `Disk` variant ignores them, `IrohBlob` variant requires them present and rejects on absence. Manifest signature canonical-bincode covers them automatically. |
 | **iroh-blobs MemStore vs FsStore choice** | Medium | Production needs persistent store; tests want fast in-memory | Use `MemStore` in tests + dev. `FsStore` for production wired in by the kernel embedder (config-driven). Per `iroh-blobs` 0.101.0, both implement the same `Store` trait. B-10 lands MemStore wired in; FsStore wiring is a small follow-up tied to the storage layer (B-9). |
 | **iroh-blobs publish requires the author's iroh::Endpoint to be reachable** | Medium | An author publishing offline has nothing to seed | Acceptable for v1 — same model as iroh-gossip (peers serve what they have, replicas spread organically). Future direction: dedicated seed/relay peers per author. |
@@ -656,6 +674,7 @@ Per CLAUDE.md "Surface tradeoffs explicit. Name the runner-up paradigm if a choi
 ### Remaining gaps in the corpus
 
 - **iroh-blobs 0.101.0 exact API surface** — the prior-art folder is dated 2026-05-08 and the version it documents (`iroh-blobs = "0.101"` per [`prior-art/iroh/blobs.md`](../prior-art/iroh/blobs.md)) matches the pin. The implementer should still verify exact method signatures (`BlobsProtocol::new`, `MemStore::add_bytes`, the downloader API, tag lifecycle methods) at impl time — pre-1.0 churn risk per [`prior-art/iroh/lessons.md`](../prior-art/iroh/lessons.md) §Avoid row 1.
+- **iroh-blobs ↔ iroh version pin reconciliation** — [`prior-art/iroh/blobs.md`](../prior-art/iroh/blobs.md) §Versions line 14 documents that iroh-blobs 0.100 targets `iroh = "0.98"`, which conflicts with the workspace's `iroh = "=1.0.0-rc.0"` pin. Verified against crates.io (2026-05-26) that **iroh-blobs 0.101.0 itself targets `iroh = "=1.0.0-rc.0"`**, resolving the apparent mismatch — but the prior-art folder pre-dates that bump and reads as a contradiction. Worth-promoting back to `prior-art/iroh/blobs.md` in a future refresh: add the 0.101 transitive pin (`iroh = =1.0.0-rc.0`) to the version table.
 - **Endo bundle-hash for the cross-runtime comparison** — [`prior-art/agoric-endo/`](../prior-art/agoric-endo/) is referenced by app-distribution/bundle-comparisons.md (the "cleanest existence-proof of 'ship a code artifact by its hash, not by a name in a registry'") but is not load-bearing for this slice's decisions; Endo's chain-stored bundles assume a consensus layer Myrhiza explicitly does not have.
 - **Pears / Hypercore for the P2P-versioned-app comparison** — [`prior-art/pears/`](../prior-art/pears/) "the closest existing-art for Myrhiza's 'ship apps over a P2P transport' story." Not consulted for this slice's wire-format decisions because Hypercore is fundamentally a different shape (append-only signed log, not content-addressed blob store). Future direction: a Hypercore-shape version log layered on top of iroh-blobs hashes could replace the publication topic — that's a v1.5+ design space.
 
