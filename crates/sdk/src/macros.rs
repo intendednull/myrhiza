@@ -101,9 +101,13 @@ macro_rules! manifest {
             modules: ModulesSection { dep: vec![] },
             components: ComponentsSection {
                 state_apply: $crate::__opt_lit!($($sa)?),
+                state_apply_hash: None,
                 state_propose: $crate::__opt_lit!($($sp)?),
+                state_propose_hash: None,
                 interaction: $crate::__opt_lit!($($ix)?),
+                interaction_hash: None,
                 behavior: $crate::__opt_lit!($($bh)?),
+                behavior_hash: None,
             },
             author_policy: AuthorPolicy::default_deny(),
             signature: None,

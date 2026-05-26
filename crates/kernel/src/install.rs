@@ -32,19 +32,42 @@ use thiserror::Error;
 /// soft kernel-minor extension. Plan A pins `KERNEL_MAJOR_V1 = 1`.
 const KERNEL_MAJOR_V1: u32 = 1;
 
-/// Locator for an on-disk bundle. Plan A reads bundles from local
-/// directories; plan B fetches them via iroh-blobs and materializes
-/// them under a temp dir before passing them through this struct.
+/// Locator for a bundle.
+///
+/// Two variants per spec §3.5:
+///
+/// - `Disk` — bundle is already materialized in a local directory.
+///   Used by tests, the CLI dev harness, and (post-fetch) the
+///   production path after `BundleDistribution::fetch` extracts an
+///   iroh-blob bundle into a tempdir.
+/// - `IrohBlob` — production fetch path. Carries the iroh-blobs
+///   hash of the canonical-bincode-encoded manifest. The embedder
+///   must materialize this into a `Disk` variant via
+///   `BundleDistribution::fetch` before calling [`InstallFlow::load`].
 #[derive(Debug, Clone)]
-pub struct BundleAddress {
-    /// Root of the bundle directory (contains `manifest.bincode` and
-    /// the `components/` artifact tree).
-    pub bundle_dir: PathBuf,
-    /// Path of the manifest file (canonical-bincode-encoded) relative
+pub enum BundleAddress {
+    /// On-disk bundle. The `bundle_dir` contains `manifest.bincode`
+    /// and the `components/` artifact tree; `manifest_path` is the
+    /// path of the manifest file (canonical-bincode-encoded) relative
     /// to `bundle_dir`. v1 file naming is `manifest.bincode`. The TOML
     /// human-readable form is canonicalized at publish time; the
     /// kernel only consumes the canonical bytes.
-    pub manifest_path: PathBuf,
+    Disk {
+        /// Root of the bundle directory.
+        bundle_dir: PathBuf,
+        /// Manifest path relative to `bundle_dir`.
+        manifest_path: PathBuf,
+    },
+    /// Iroh-blob bundle identified by the BLAKE3 hash of its
+    /// canonical-bincode-encoded manifest. The kernel does not fetch
+    /// directly — the embedder calls `BundleDistribution::fetch`
+    /// (which lives outside this crate) to materialize the blob tree
+    /// into a tempdir and produce a `Disk` variant that
+    /// [`InstallFlow::load`] consumes.
+    IrohBlob {
+        /// Manifest hash — the identifier the author shares out of band.
+        manifest_hash: myrhiza_types::BlobHash,
+    },
 }
 
 /// Errors returned by [`InstallFlow::load`].
@@ -86,6 +109,14 @@ pub enum InstallError {
     /// absent on disk.
     #[error("manifest references components/state-apply but file is absent")]
     ComponentMissing,
+    /// [`InstallFlow::load`] was called with a `BundleAddress::IrohBlob`
+    /// variant. The kernel does not fetch directly — the embedder must
+    /// call `BundleDistribution::fetch` to materialize the blob tree
+    /// into a tempdir and produce a `BundleAddress::Disk` first.
+    #[error(
+        "BundleAddress::IrohBlob must be materialized via BundleDistribution::fetch before InstallFlow::load"
+    )]
+    IrohBlobNotMaterialized,
 }
 
 /// Output of [`InstallFlow::load`]: a verified manifest plus the
@@ -135,7 +166,16 @@ impl InstallFlow {
     /// verify (this also covers the tampered-component case, since
     /// `signing_target_bytes` commits to the component's content hash).
     pub fn load(&self, addr: &BundleAddress) -> Result<LoadedBundle, InstallError> {
-        let manifest_bytes = std::fs::read(addr.bundle_dir.join(&addr.manifest_path))?;
+        let (bundle_dir, manifest_path) = match addr {
+            BundleAddress::Disk {
+                bundle_dir,
+                manifest_path,
+            } => (bundle_dir, manifest_path),
+            BundleAddress::IrohBlob { .. } => {
+                return Err(InstallError::IrohBlobNotMaterialized);
+            }
+        };
+        let manifest_bytes = std::fs::read(bundle_dir.join(manifest_path))?;
         let mut manifest: Manifest = canonical_bincode()
             .deserialize(&manifest_bytes)
             .map_err(|e| InstallError::Decode(e.to_string()))?;
@@ -161,25 +201,25 @@ impl InstallFlow {
             .state_apply
             .clone()
             .ok_or(InstallError::ComponentMissing)?;
-        let component_bytes = std::fs::read(addr.bundle_dir.join(&component_rel))?;
+        let component_bytes = std::fs::read(bundle_dir.join(&component_rel))?;
 
         let state_propose_bytes = manifest
             .components
             .state_propose
             .as_ref()
-            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .map(|rel| std::fs::read(bundle_dir.join(rel)))
             .transpose()?;
         let interaction_bytes = manifest
             .components
             .interaction
             .as_ref()
-            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .map(|rel| std::fs::read(bundle_dir.join(rel)))
             .transpose()?;
         let behavior_bytes = manifest
             .components
             .behavior
             .as_ref()
-            .map(|rel| std::fs::read(addr.bundle_dir.join(rel)))
+            .map(|rel| std::fs::read(bundle_dir.join(rel)))
             .transpose()?;
 
         let content_hash = bundle_content_hash(
@@ -301,7 +341,7 @@ mod tests {
         std::fs::write(dir.join("manifest.bincode"), manifest_bytes).unwrap();
 
         (
-            BundleAddress {
+            BundleAddress::Disk {
                 bundle_dir: dir.to_path_buf(),
                 manifest_path: "manifest.bincode".into(),
             },
@@ -387,7 +427,7 @@ mod tests {
         std::fs::write(dir.join("manifest.bincode"), manifest_bytes).unwrap();
 
         (
-            BundleAddress {
+            BundleAddress::Disk {
                 bundle_dir: dir.to_path_buf(),
                 manifest_path: "manifest.bincode".into(),
             },

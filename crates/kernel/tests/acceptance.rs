@@ -268,7 +268,7 @@ fn build_signed_bundle_for(
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -434,7 +434,7 @@ fn manifest_declaring_non_deterministic_cap_rejects_at_install() {
     // Sanity: the install flow itself still accepts the bundle —
     // signature verification is independent of capability gating.
     // The manifest-gating rejection comes from the backend.
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: bundle.bundle_dir.clone(),
         manifest_path: bundle.manifest_path.clone(),
     };

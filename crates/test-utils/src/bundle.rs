@@ -140,7 +140,7 @@ pub fn build_signed_counter_bundle() -> (TestBundle, BundleAddress) {
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -171,7 +171,7 @@ pub fn build_signed_echo_bundle() -> (TestBundle, BundleAddress) {
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -280,7 +280,7 @@ pub fn build_signed_counter_bundle_three_components() -> (TestBundle, BundleAddr
     let test_bundle =
         write_three_component_bundle(&manifest, &apply_bytes, &propose_bytes, &interaction_bytes)
             .expect("write three-component bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -316,7 +316,7 @@ pub fn build_signed_poll_bundle() -> (TestBundle, BundleAddress) {
     sign_manifest(&mut manifest, &component_bytes, &key);
 
     let test_bundle = write_bundle(&manifest, &component_bytes).expect("write bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };
@@ -354,7 +354,7 @@ pub fn build_signed_poll_bundle_three_components() -> (TestBundle, BundleAddress
     let test_bundle =
         write_three_component_bundle(&manifest, &apply_bytes, &propose_bytes, &interaction_bytes)
             .expect("write three-component bundle to tempdir");
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: test_bundle.bundle_dir.clone(),
         manifest_path: test_bundle.manifest_path.clone(),
     };

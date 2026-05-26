@@ -111,7 +111,7 @@ pub fn run<R: BufRead, W: Write>(
 ) -> Result<(Vec<u8>, Vec<StepLog>), HarnessError> {
     // 1. Load + verify bundle.
     let flow = InstallFlow::new();
-    let addr = BundleAddress {
+    let addr = BundleAddress::Disk {
         bundle_dir: bundle_path.to_path_buf(),
         manifest_path: "manifest.bincode".into(),
     };
