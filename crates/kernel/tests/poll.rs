@@ -15,10 +15,9 @@
 //! | K2 | `poll_multi_author_voting` | three authors (alice/bob/carol) on one bus. Voters declare `deps = {genesis_hash}` (NOT empty) — the LOAD-BEARING exercise of the non-empty-deps code path in T1's decoder per spec §6.3. All three peers converge to the same digest. |
 //! | K3 | `poll_unauthorized_end_poll_rejected_by_authority` | bob's hand-injected EndPoll on alice's poll lands in alice's `dropped_at_apply` with `Reject("EndPoll: not poll creator")`. |
 //!
-//! K1–K3 share a local `fast_cfg()` helper that mirrors
-//! `coexistence.rs::fast_cfg()` (B-MINI-2's parameterized
-//! `helpers::fast_cfg(FAST_GOSSIP_TICK)` has not yet landed on the
-//! branch this T7 work targets; when it does, the helper here folds in).
+//! K1–K3 use the shared `helpers::fast_cfg(helpers::FAST_GOSSIP_TICK)`
+//! from B-MINI-2 (parameterized RuntimeCfg builder, FAST_GOSSIP_TICK =
+//! 100 ms for prompt cross-peer state delivery in convergence-shaped tests).
 //!
 //! [spec]: ../../../docs/specs/2026-05-26-b-6-poll-app-design.md
 
@@ -46,8 +45,6 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_kernel::identity::AuthorKeypair;
-use myrhiza_kernel::pending::PendingCfg;
-use myrhiza_kernel::runtime::RuntimeCfg;
 use myrhiza_network::{GossipMessage, MemNetwork, Network};
 use myrhiza_test_utils::InProcessHarness;
 use myrhiza_types::{Event, EventHash, GenesisV1, Hlc, canonical_bincode};
@@ -57,27 +54,6 @@ mod helpers;
 // ---------------------------------------------------------------------
 // Shared kernel-tier config + test-side helpers
 // ---------------------------------------------------------------------
-
-/// `RuntimeCfg` tuned for convergence-shaped in-process tests. Mirrors
-/// the same shape as `coexistence.rs::fast_cfg()` and
-/// `convergence.rs::fast_cfg()` exactly — no rate limits, fast
-/// HeadsSummary tick (100 ms) for prompt cross-peer state delivery.
-///
-/// When B-MINI-2 lands its parameterized `helpers::fast_cfg(tick)` +
-/// `helpers::FAST_GOSSIP_TICK`, this collapses to one call.
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        heads_summary_tick: Duration::from_millis(100),
-        pending_cfg: PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
 
 /// Discriminator bytes per spec §4.3. Mirrors the constants in
 /// `tests/fixtures/poll-state-apply/src/lib.rs` exactly.
@@ -182,7 +158,7 @@ fn end_poll_payload() -> Vec<u8> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poll_e2e_single_peer_full_lifecycle() {
     let harness = InProcessHarness::new(256, [0x11; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut alice = harness
         .spawn_peer(1, Some(1), helpers::poll_handle(), cfg)
         .await;
@@ -331,7 +307,7 @@ async fn poll_e2e_single_peer_full_lifecycle() {
 )]
 async fn poll_multi_author_voting() {
     let harness = InProcessHarness::new(256, [0x22; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     let mut alice = harness
         .spawn_peer(1, Some(1), helpers::poll_handle(), cfg.clone())
@@ -505,7 +481,7 @@ async fn poll_multi_author_voting() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poll_unauthorized_end_poll_rejected_by_authority() {
     let harness = InProcessHarness::new(256, [0x33; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut alice = harness
         .spawn_peer(1, Some(1), helpers::poll_handle(), cfg)
         .await;

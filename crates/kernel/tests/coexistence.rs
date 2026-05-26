@@ -550,7 +550,7 @@ async fn poll_and_counter_coexist_no_event_crossing() {
         "counter and poll topics must differ (distinct app_bundle_hash)"
     );
 
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     // --- Author keypairs ------------------------------------------------------
     // Distinct author keys per runtime. SEED ALIGNMENT: seeds (501 for
