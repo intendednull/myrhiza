@@ -1,0 +1,43 @@
+package myrhiza:kernel@1.0.0;
+
+/// Submit-and-poll async surfaces per abi.md §8.5.
+interface host-async {
+    use types.{request-token};
+
+    record http-request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    variant broadcast-error {
+        cap-denied,
+        topic-unknown,
+        would-block,
+    }
+
+    variant fetch-error {
+        cap-denied,
+        not-found,
+        timeout,
+        would-block,
+    }
+
+    variant http-error {
+        cap-denied,
+        timeout,
+        transport(string),
+        would-block,
+    }
+
+    broadcast-submit: func(topic: list<u8>, msg: list<u8>) -> request-token;
+    blob-fetch-submit: func(hash: list<u8>) -> request-token;
+    http-request-submit: func(req: http-request) -> request-token;
+}

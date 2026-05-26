@@ -1,0 +1,19 @@
+package myrhiza:kernel@1.0.0;
+
+world interaction {
+    import host-deterministic;
+    import host-non-deterministic;
+    import host-async;
+    import host-ui-surfaces;
+
+    /// Project a per-peer view of the state.
+    export view: func(state: list<u8>, peer-state: list<u8>) -> list<u8>;
+
+    /// Translate a user action into an intent for state-propose to
+    /// build into an event.
+    export dispatch: func(action: string) -> result<list<u8>, string>;
+
+    /// Submit-and-poll completion handlers per abi.md §8.5.
+    export on-broadcast-completion: func(token: list<u8>, ok: bool, err: string);
+    export on-blob-fetch-completion: func(token: list<u8>, ok: bool, payload: list<u8>, err: string);
+}

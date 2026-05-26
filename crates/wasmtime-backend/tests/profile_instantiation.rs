@@ -2,26 +2,34 @@
 //!
 //! Covers: architecture.md §3.2, architecture.md §3.3.
 //!
+//! Counter WASM artifacts under `tests/fixtures/built/counter-*.wasm`
+//! are produced from `examples/counter/` (per
+//! docs/specs/2026-05-26-b-8-sdk-design.md §3.3) by the Justfile's
+//! `_build-example` recipe. The output paths stayed stable through
+//! the B-8 T6 cutover; only the source dir moved.
+//!
 //! B-7.3.4 — `instantiate_state_propose_loads_counter_propose_fixture`:
-//! loads the counter-state-propose WASM fixture (built by B-7.5),
-//! instantiates via `WasmtimeBackend::instantiate_state_propose`, calls
-//! `propose` with an Increment-5 intent, and asserts the returned payload
-//! equals `5_i64.to_be_bytes()`.
+//! loads the counter-state-propose WASM artifact (built from
+//! `examples/counter/src/propose.rs` per B-8 T6), instantiates via
+//! `WasmtimeBackend::instantiate_state_propose`, calls `propose` with
+//! an Increment-5 intent, and asserts the returned payload equals
+//! `5_i64.to_be_bytes()`.
 //!
 //! B-7.3.5 — `instantiate_state_apply_rejects_propose_fixture_with_instantiation_error`:
-//! reads the same propose fixture but calls `instantiate_state_apply`.
-//! The fixture exports `propose` but not `apply`/`state-digest`, so the
+//! reads the same propose artifact but calls `instantiate_state_apply`.
+//! The component exports `propose` but not `apply`/`state-digest`, so the
 //! state-apply instantiation must fail with `BackendError::Instantiation`.
 //!
 //! B-7.4.4 — `instantiate_interaction_loads_counter_interaction_fixture`:
-//! loads the counter-interaction WASM fixture (built by B-7.6),
-//! instantiates via `WasmtimeBackend::instantiate_interaction`, calls
-//! `view` with an 8-byte BE i64 state, asserts the rendered text, then
-//! calls `dispatch("inc 3")` and asserts the intent bytes.
+//! loads the counter-interaction WASM artifact (built from
+//! `examples/counter/src/interaction.rs` per B-8 T6), instantiates via
+//! `WasmtimeBackend::instantiate_interaction`, calls `view` with an
+//! 8-byte BE i64 state, asserts the rendered text, then calls
+//! `dispatch("inc 3")` and asserts the intent bytes.
 //!
 //! B-7.4.5 — `instantiate_interaction_rejects_state_apply_fixture`:
-//! reads the counter-state-apply fixture but calls `instantiate_interaction`.
-//! The fixture exports `apply`/`state-digest` but not `view`/`dispatch`,
+//! reads the counter-state-apply artifact but calls `instantiate_interaction`.
+//! The component exports `apply`/`state-digest` but not `view`/`dispatch`,
 //! so instantiation must fail with `BackendError::Instantiation`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]

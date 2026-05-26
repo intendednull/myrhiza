@@ -6,14 +6,14 @@ Mapping: each spec section to the tests that prove it. Tests carry
 `/// Covers: <file>.md §X.Y` doc comments; this file aggregates them.
 
 ## architecture.md §3.2
-- crates/wasmtime-backend/tests/profile_instantiation.rs:127
-- crates/wasmtime-backend/tests/profile_instantiation.rs:160
-- crates/wasmtime-backend/tests/profile_instantiation.rs:188
-- crates/wasmtime-backend/tests/profile_instantiation.rs:232
+- crates/wasmtime-backend/tests/profile_instantiation.rs:135
+- crates/wasmtime-backend/tests/profile_instantiation.rs:168
+- crates/wasmtime-backend/tests/profile_instantiation.rs:196
+- crates/wasmtime-backend/tests/profile_instantiation.rs:240
 
 ## architecture.md §3.3
-- crates/wasmtime-backend/tests/profile_instantiation.rs:127
-- crates/wasmtime-backend/tests/profile_instantiation.rs:188
+- crates/wasmtime-backend/tests/profile_instantiation.rs:135
+- crates/wasmtime-backend/tests/profile_instantiation.rs:196
 
 ## architecture.md §3.5
 - crates/wasmtime-backend/src/gating.rs:350
@@ -29,8 +29,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:555
 
 ## capabilities.md §7.2
-- crates/kernel/tests/acceptance.rs:190
-- crates/kernel/tests/acceptance.rs:406
+- crates/kernel/tests/acceptance.rs:192
+- crates/kernel/tests/acceptance.rs:408
 - crates/wasmtime-backend/src/gating.rs:386
 
 ## convergence.md §4
@@ -93,8 +93,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/src/dag.rs:857
 
 ## convergence.md §4.4
-- crates/kernel/tests/acceptance.rs:276
-- crates/kernel/tests/acceptance.rs:73
+- crates/kernel/tests/acceptance.rs:278
+- crates/kernel/tests/acceptance.rs:75
 - crates/kernel/tests/attribution.rs:201
 - crates/kernel/tests/attribution.rs:384
 - crates/kernel/tests/coexistence.rs:77
@@ -178,11 +178,11 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:555
 
 ## determinism.md §5.2
-- crates/kernel/tests/acceptance.rs:373
+- crates/kernel/tests/acceptance.rs:375
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
 ## determinism.md §5.3
-- crates/kernel/tests/acceptance.rs:335
+- crates/kernel/tests/acceptance.rs:337
 - crates/types/tests/limits_shadow.rs:3
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
@@ -197,8 +197,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/tests/wit_freeze.rs:74
 
 ## distribution.md §10.5
-- crates/kernel/tests/acceptance.rs:406
-- crates/kernel/tests/acceptance.rs:49
+- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:51
 
 ## identity.md §6
 - crates/kernel/tests/persistence.rs:108
@@ -214,13 +214,13 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/network/tests/iroh_skeleton.rs:15
 
 ## mvp.md §15.1
-- crates/kernel/tests/acceptance.rs:190
-- crates/kernel/tests/acceptance.rs:276
-- crates/kernel/tests/acceptance.rs:335
-- crates/kernel/tests/acceptance.rs:373
-- crates/kernel/tests/acceptance.rs:406
-- crates/kernel/tests/acceptance.rs:49
-- crates/kernel/tests/acceptance.rs:73
+- crates/kernel/tests/acceptance.rs:192
+- crates/kernel/tests/acceptance.rs:278
+- crates/kernel/tests/acceptance.rs:337
+- crates/kernel/tests/acceptance.rs:375
+- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:51
+- crates/kernel/tests/acceptance.rs:75
 - crates/kernel/tests/coexistence.rs:506
 
 ## mvp.md §15.1 #1+#2
@@ -263,7 +263,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/network/tests/iroh_gossip.rs:110
 
 ## verification.md §22.1
-- crates/kernel/tests/acceptance.rs:49
+- crates/kernel/tests/acceptance.rs:51
 
 ## verification.md §22.2
 - crates/wasmtime-backend/tests/wit_freeze.rs:50
@@ -278,7 +278,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/types/tests/limits_shadow.rs:3
 
 ## verification.md §22.5
-- crates/kernel/tests/acceptance.rs:276
+- crates/kernel/tests/acceptance.rs:278
 
 ## verification.md §22.5 — pre-check rejection coverage
 - crates/kernel/tests/perf_carryovers.rs:476

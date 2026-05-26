@@ -7,22 +7,27 @@ members = [
     "crates/wasmtime-backend",
     "crates/kernel",
     "crates/network",
+    "crates/sdk",
     "crates/test-utils",
     "crates/myrhiza-cli",
+    "examples/counter",
+    "xtask/dep-direction",
 ]
 exclude = [
     # Wasm-only fixtures — built for wasm32-unknown-unknown by
     # `just build-fixtures` and wrapped into components via wasm-tools.
     # Workspace inclusion would force `cargo check --workspace` to
     # attempt cross-compiling on every gate run.
-    "tests/fixtures/counter-state-apply",
+    #
+    # Counter slots used to live here as standalone fixture crates;
+    # per docs/specs/2026-05-26-b-8-sdk-design.md §3.6 (B-8 T6
+    # cutover) they are now a workspace member at `examples/counter/`
+    # and build via the Justfile's `_build-example` recipe.
     "tests/fixtures/echo-state-apply",
     "tests/fixtures/over-importer",
     "tests/fixtures/pre-check-rejector",
     "tests/fixtures/infinite-loop",
     "tests/fixtures/float-banned",
-    "tests/fixtures/counter-state-propose",
-    "tests/fixtures/counter-interaction",
     "tests/fixtures/poll-state-apply",
     "tests/fixtures/poll-state-propose",
     "tests/fixtures/poll-interaction",
@@ -82,6 +87,24 @@ anyhow = "1"
 hex-literal = "0.4"
 proptest = "1"
 tempfile = "3"
+
+# Workspace-wide release profile. The wasm32 `examples/*` bin
+# artifacts (state-apply / state-propose / interaction) need the
+# aggressive size opts so unused float-Display paths from the panic
+# machinery / serde trait dispatch are dead-code-eliminated — the
+# byte-level float-ban lint (determinism.md §5.2) would otherwise
+# reject the resulting components at kernel instantiation. `panic`
+# and `lto` cannot be overridden per-package by Cargo, so they must
+# live at the workspace root. Existing wasm fixtures under
+# `tests/fixtures/*` continue to use their own standalone
+# `[profile.release]` blocks (each fixture is its own workspace root)
+# and are unaffected. Per spec §3.3.
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+strip = "symbols"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,17 @@
+package myrhiza:kernel@1.0.0;
+
+world behavior {
+    import host-deterministic;
+    import host-non-deterministic;
+    import host-async;
+
+    /// Observe an event materialized by state-apply.
+    export on-event: func(event: list<u8>);
+
+    /// Periodic tick from the kernel scheduler.
+    export tick: func();
+
+    /// Submit-and-poll completion handlers.
+    export on-http-completion: func(token: list<u8>, ok: bool, status: u16, body: list<u8>, err: string);
+    export on-broadcast-completion: func(token: list<u8>, ok: bool, err: string);
+}

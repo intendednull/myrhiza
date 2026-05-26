@@ -33,7 +33,9 @@ use bincode::Options;
 use myrhiza_types::{AuthorPubkey, Event, GenesisV1, Hlc, canonical_bincode};
 use std::collections::BTreeSet;
 
-/// Path to the counter-state-apply fixture built by `just build-fixtures`.
+/// Path to the counter-state-apply wasm artifact built by `just
+/// build-fixtures` from `examples/counter/src/state.rs` (per
+/// docs/specs/2026-05-26-b-8-sdk-design.md §3.3).
 fn counter_fixture_path() -> PathBuf {
     // Tests run with cwd = crate dir. Walk up to the workspace root
     // so the path resolves consistently from `cargo test` and from
