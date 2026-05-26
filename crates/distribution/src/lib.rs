@@ -19,6 +19,7 @@ pub mod conversions;
 pub mod dispatch;
 pub mod publication;
 pub mod revocation;
+pub mod signed_envelope;
 pub mod topic;
 
 #[cfg(feature = "network-iroh")]
