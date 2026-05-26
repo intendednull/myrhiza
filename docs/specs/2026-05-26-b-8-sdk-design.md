@@ -407,7 +407,7 @@ pub use crate::manifest;        // the manifest! macro
 pub use crate::myrhiza_app;     // the myrhiza_app! macro
 ```
 
-**cfg-gate note**: `manifest.rs` and the `manifest!` macro expansion below use `std::collections::BTreeMap`. The `boilerplate` module is cfg-gated to `target_arch = "wasm32"` (no `std`), but `manifest.rs` is **only ever compiled host-side** — never for `wasm32-unknown-unknown` — because manifest authoring is a publishing-side activity. Accordingly, the `manifest!` macro emits `std::*` paths unconditionally; this is safe given the host-side-only consumption context.
+**cfg-gate note**: `manifest.rs` and the `manifest!` macro expansion below use `std::collections::BTreeMap`. The `__boilerplate` module is cfg-gated to `target_arch = "wasm32"` (no `std`), and the `manifest` / `prelude` / `types` modules are cfg-gated to `not(target_arch = "wasm32")` — so manifest authoring is mechanically unavailable when the SDK compiles for `wasm32-unknown-unknown`. This enforces "manifest authoring is a publishing-side activity" at the type system level: the WASM-target compile cannot pull in `std` symbols transitively via the SDK's manifest module, which would otherwise conflict with the consumer's `#![no_std]` + `#[panic_handler]`. The `manifest!` macro emits `std::*` paths unconditionally; this is safe given the cfg-gated host-side-only compilation context.
 
 ```rust
 // crates/sdk/src/macros.rs (excerpt — the manifest! macro)
@@ -489,17 +489,27 @@ macro_rules! manifest {
 
 ```rust
 // crates/sdk/src/macros.rs (excerpt — the myrhiza_app! macro)
+//
+// Inner attributes (`#![no_std]`, `#![no_main]`, `#![allow(...)]`)
+// are NOT emitted by the macro — Rust's macro expansion forbids a
+// `macro_rules!` invocation from emitting inner attributes that take
+// effect on the surrounding module. The consumer writes them at the
+// top of each `src/state.rs` / `src/propose.rs` / `src/interaction.rs`.
 #[macro_export]
 macro_rules! myrhiza_app {
     (state_apply, $component:ident) => {
-        #![no_std]
-        #![no_main]
-        #![allow(unsafe_op_in_unsafe_fn)]
         extern crate alloc;
-        use $crate::__boilerplate::*;
+
+        #[global_allocator]
+        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
+
+        #[panic_handler]
+        fn panic(_info: &core::panic::PanicInfo) -> ! {
+            loop {}
+        }
+
         wit_bindgen::generate!({
             world: "state-apply",
-            path: $crate::local_wit_dir!(),
         });
         struct $component;
         export!($component);
@@ -516,6 +526,11 @@ macro_rules! myrhiza_app {
 /// compile time. The `local_` prefix is a reminder that the bytes consumed are
 /// the consumer crate's local copy (kept in sync with `crates/sdk/wit/` via
 /// `just sync-wit` — see §2.5).
+///
+/// Note: this helper is **not** wired into `myrhiza_app!`'s
+/// `wit_bindgen::generate!` invocation (see below); it is exported
+/// for non-proc-macro contexts (e.g., hand-written `include_str!`s
+/// of files under `wit/`).
 #[macro_export]
 macro_rules! local_wit_dir {
     () => {
@@ -524,9 +539,9 @@ macro_rules! local_wit_dir {
 }
 ```
 
-**Note on `local_wit_dir!`**: this resolves to the **example crate's** `wit/` directory (not the SDK's), because `CARGO_MANIFEST_DIR` is the consumer crate's manifest. The `wit/` directory must be present in the consumer crate. The `local_` prefix encodes this "lives-in-SDK, emits-consumer-path" semantic asymmetry that would otherwise surprise readers expecting `myrhiza_sdk::wit_dir!()` to return the SDK's own dir. This is the same pattern fixtures use today; the `just sync-wit` recipe (§2.5) copies from `crates/sdk/wit/` into `examples/*/wit/` and the in-sync test asserts equality.
+**Why `myrhiza_app!` omits `path:`**: `wit_bindgen::generate!` is a `proc_macro` that parses its `path:` argument as a `syn::LitStr` (string literal) at proc-macro-expansion time and does **not** further expand any `macro_rules!` invocations inside that argument. Wiring `path: $crate::local_wit_dir!()` therefore does **not** work — the proc-macro sees the unexpanded token tree and errors out. The `myrhiza_app!` macro instead omits `path:` entirely, relying on wit-bindgen's default `./wit` resolution against the consumer's `CARGO_MANIFEST_DIR`, which lands at `examples/<app>/wit/` — the directory bit-copied from `crates/sdk/wit/` by `just sync-wit`. `local_wit_dir!()` remains exported for hand-written non-proc-macro consumers (e.g., `include_str!`).
 
-**Caveat with concat! and env!**: `wit_bindgen::generate!` takes a `path` that's evaluated at macro-expansion time. Using `concat!(env!("CARGO_MANIFEST_DIR"), "/wit")` works because `env!` is also expanded at macro time, but the path is interpreted relative to wit-bindgen's expectation (which is an absolute path or a path relative to the workspace root). This pattern works in the existing fixtures (`wit_bindgen::generate!({ world: "state-apply" })` defaults to `./wit` relative to `CARGO_MANIFEST_DIR`); the macro is just making the path explicit. Verify at slice time.
+**Note on consumer-written inner attrs**: the three `#![no_std]`, `#![no_main]`, and `#![allow(unsafe_op_in_unsafe_fn)]` inner attributes that gate the WASM binary's compilation cannot be emitted by `macro_rules!` (Rust forbids macro-emitted inner attributes from applying to the surrounding module). Consumers write them at the top of each `src/state.rs` / `src/propose.rs` / `src/interaction.rs` — see `examples/counter/src/state.rs` for the canonical pattern.
 
 ### 3.3 Examples directory layout
 
@@ -591,13 +606,16 @@ interaction = []
 
 [dependencies]
 myrhiza-sdk = { path = "../../crates/sdk" }
+wit-bindgen = "0.30"
 
-[profile.release]
-panic = "abort"
-lto = true
-opt-level = "z"
-codegen-units = 1
-strip = "symbols"
+# Note: the release profile (`panic = "abort"`, `lto = true`,
+# `opt-level = "z"`, `codegen-units = 1`, `strip = "symbols"`) lives
+# at the workspace root's `[profile.release]` block, not here.
+# `counter-example` is a workspace member and Cargo ignores
+# package-level `[profile.*]` blocks for non-root packages; `panic`
+# and `lto` specifically cannot be overridden per-package. See the
+# workspace root `Cargo.toml` comment for the float-ban-compliance
+# rationale (determinism.md §5.2).
 ```
 
 **Caveat — multiple components per crate**: Rust's component-build story prefers **one cdylib per crate** because each `[lib]` block has one `crate-type` set and global allocator. The `[[bin]] + required-features` shape is the workaround: each component is a separate `[[bin]]` artifact, gated by a feature so only one component compiles per `cargo build --features ...` invocation. The Justfile recipe runs `cargo build --target wasm32-unknown-unknown --features state-apply --bin counter-state-apply` three times (once per component).
