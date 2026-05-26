@@ -17,7 +17,7 @@ use std::time::Duration;
 use bincode::Options;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
 use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime};
-use myrhiza_kernel::{ApplyOutcome, InstallFlow, StateApplyHandle};
+use myrhiza_kernel::{ApplyOutcome, StateApplyHandle, install};
 use myrhiza_network::{MemBus, MemNetwork};
 use myrhiza_test_utils::bundle::build_signed_echo_bundle;
 use myrhiza_types::{BundleHash, Event, EventHash, GenesisV1, Hlc, Topic, canonical_bincode};
@@ -79,7 +79,7 @@ async fn await_runtime_digest(
 /// Smoke test for the echo-state-apply fixture, mirroring
 /// `acceptance.rs::kernel_instantiates_and_applies_increment` for the
 /// counter fixture. Proves:
-///   - `InstallFlow::load` verifies the signed echo bundle,
+///   - `install::load` verifies the signed echo bundle,
 ///   - `WasmtimeBackend::instantiate_state_apply` compiles + links the echo WASM,
 ///   - `StateApplyHandle::apply` decodes the canonical `Event` envelope,
 ///   - genesis extracts `GenesisV1::app_payload` as initial state,
@@ -92,8 +92,7 @@ async fn await_runtime_digest(
 async fn kernel_instantiates_and_applies_echo() {
     let (_bundle, addr) = build_signed_echo_bundle();
 
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("load + verify");
+    let loaded = install::load(&addr).expect("load + verify");
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let instance = backend

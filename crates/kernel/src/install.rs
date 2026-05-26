@@ -30,7 +30,7 @@ use thiserror::Error;
 /// soft kernel-minor extension. Plan A pins `KERNEL_MAJOR_V1 = 1`.
 const KERNEL_MAJOR_V1: u32 = 1;
 
-/// Errors returned by [`InstallFlow::load`].
+/// Errors returned by [`load`].
 #[derive(Debug, Error)]
 pub enum InstallError {
     /// Reading a bundle file from disk failed.
@@ -69,18 +69,18 @@ pub enum InstallError {
     /// absent on disk.
     #[error("manifest references components/state-apply but file is absent")]
     ComponentMissing,
-    /// [`InstallFlow::load`] was called with a `BundleAddress::IrohBlob`
-    /// variant. The kernel does not fetch directly — the embedder must
-    /// call `BundleDistribution::fetch` to materialize the blob tree
-    /// into a tempdir and produce a `BundleAddress::Disk` first.
+    /// [`load`] was called with a `BundleAddress::IrohBlob` variant.
+    /// The kernel does not fetch directly — the embedder must call
+    /// `BundleDistribution::fetch` to materialize the blob tree into
+    /// a tempdir and produce a `BundleAddress::Disk` first.
     #[error(
-        "BundleAddress::IrohBlob must be materialized via BundleDistribution::fetch before InstallFlow::load"
+        "BundleAddress::IrohBlob must be materialized via BundleDistribution::fetch before install::load"
     )]
     IrohBlobNotMaterialized,
 }
 
-/// Output of [`InstallFlow::load`]: a verified manifest plus the
-/// component bytes ready for backend instantiation.
+/// Output of [`load`]: a verified manifest plus the component bytes
+/// ready for backend instantiation.
 #[derive(Debug)]
 pub struct LoadedBundle {
     /// Canonicalized manifest with signature attached.
@@ -98,114 +98,101 @@ pub struct LoadedBundle {
     pub behavior_bytes: Option<Vec<u8>>,
 }
 
-/// Stateless install flow. Held by the kernel; calls into it for each
-/// bundle that needs loading + verifying.
-#[derive(Default)]
-pub struct InstallFlow;
-
-impl InstallFlow {
-    /// Construct a fresh install flow.
-    #[must_use]
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Load and verify the bundle at `addr`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InstallError::Io`] if a bundle file cannot be read,
-    /// [`InstallError::Decode`] if the manifest fails to decode,
-    /// [`InstallError::IncompatibleKernelMajor`] if the manifest declares
-    /// a `kernel-major` other than the one this runtime implements,
-    /// [`InstallError::MissingSignature`] if the manifest is unsigned,
-    /// [`InstallError::ComponentMissing`] if the manifest references a
-    /// component file that is absent, [`InstallError::AuthorPubkeyDecode`]
-    /// if the `author_pubkey` field is not a `0x<hex>` 32-byte string,
-    /// or [`InstallError::Signature`] if the Ed25519 signature does not
-    /// verify (this also covers the tampered-component case, since
-    /// `signing_target_bytes` commits to the component's content hash).
-    pub fn load(&self, addr: &BundleAddress) -> Result<LoadedBundle, InstallError> {
-        let (bundle_dir, manifest_path) = match addr {
-            BundleAddress::Disk {
-                bundle_dir,
-                manifest_path,
-            } => (bundle_dir, manifest_path),
-            BundleAddress::IrohBlob { .. } => {
-                return Err(InstallError::IrohBlobNotMaterialized);
-            }
-        };
-        let manifest_bytes = std::fs::read(bundle_dir.join(manifest_path))?;
-        let mut manifest: Manifest = canonical_bincode()
-            .deserialize(&manifest_bytes)
-            .map_err(|e| InstallError::Decode(e.to_string()))?;
-        manifest.canonicalize();
-
-        // Reject incompatible kernel-major up front per distribution.md
-        // §10.5. Done before signature verify so a v2-major manifest
-        // never reaches the crypto path — keeps the error surface
-        // honest about *why* a bundle was rejected.
-        if manifest.abi.kernel_major != KERNEL_MAJOR_V1 {
-            return Err(InstallError::IncompatibleKernelMajor(
-                manifest.abi.kernel_major,
-            ));
+/// Load and verify the bundle at `addr`.
+///
+/// # Errors
+///
+/// Returns [`InstallError::Io`] if a bundle file cannot be read,
+/// [`InstallError::Decode`] if the manifest fails to decode,
+/// [`InstallError::IncompatibleKernelMajor`] if the manifest declares
+/// a `kernel-major` other than the one this runtime implements,
+/// [`InstallError::MissingSignature`] if the manifest is unsigned,
+/// [`InstallError::ComponentMissing`] if the manifest references a
+/// component file that is absent, [`InstallError::AuthorPubkeyDecode`]
+/// if the `author_pubkey` field is not a `0x<hex>` 32-byte string,
+/// or [`InstallError::Signature`] if the Ed25519 signature does not
+/// verify (this also covers the tampered-component case, since
+/// `signing_target_bytes` commits to the component's content hash).
+pub fn load(addr: &BundleAddress) -> Result<LoadedBundle, InstallError> {
+    let (bundle_dir, manifest_path) = match addr {
+        BundleAddress::Disk {
+            bundle_dir,
+            manifest_path,
+        } => (bundle_dir, manifest_path),
+        BundleAddress::IrohBlob { .. } => {
+            return Err(InstallError::IrohBlobNotMaterialized);
         }
+    };
+    let manifest_bytes = std::fs::read(bundle_dir.join(manifest_path))?;
+    let mut manifest: Manifest = canonical_bincode()
+        .deserialize(&manifest_bytes)
+        .map_err(|e| InstallError::Decode(e.to_string()))?;
+    manifest.canonicalize();
 
-        let signature: Signature = manifest
-            .signature
-            .clone()
-            .ok_or(InstallError::MissingSignature)?;
-
-        let component_rel = manifest
-            .components
-            .state_apply
-            .clone()
-            .ok_or(InstallError::ComponentMissing)?;
-        let component_bytes = std::fs::read(bundle_dir.join(&component_rel))?;
-
-        let state_propose_bytes = manifest
-            .components
-            .state_propose
-            .as_ref()
-            .map(|rel| std::fs::read(bundle_dir.join(rel)))
-            .transpose()?;
-        let interaction_bytes = manifest
-            .components
-            .interaction
-            .as_ref()
-            .map(|rel| std::fs::read(bundle_dir.join(rel)))
-            .transpose()?;
-        let behavior_bytes = manifest
-            .components
-            .behavior
-            .as_ref()
-            .map(|rel| std::fs::read(bundle_dir.join(rel)))
-            .transpose()?;
-
-        let content_hash = bundle_content_hash(
-            Some(&component_bytes),
-            state_propose_bytes.as_deref(),
-            interaction_bytes.as_deref(),
-            behavior_bytes.as_deref(),
-        );
-
-        // Decode author pubkey from `0x<hex>` form for plan A.
-        // Plan B replaces this with bech32m decoding (per
-        // distribution.md §10.2 wpub-author HRP).
-        let pk = decode_author_pubkey_hex(&manifest.app.author_pubkey)?;
-
-        let target = signing_target_bytes(&manifest, &content_hash);
-        verify_signature(&pk, &target, &signature.value)?;
-
-        Ok(LoadedBundle {
-            manifest,
-            component_bytes,
-            content_hash,
-            state_propose_bytes,
-            interaction_bytes,
-            behavior_bytes,
-        })
+    // Reject incompatible kernel-major up front per distribution.md
+    // §10.5. Done before signature verify so a v2-major manifest
+    // never reaches the crypto path — keeps the error surface
+    // honest about *why* a bundle was rejected.
+    if manifest.abi.kernel_major != KERNEL_MAJOR_V1 {
+        return Err(InstallError::IncompatibleKernelMajor(
+            manifest.abi.kernel_major,
+        ));
     }
+
+    let signature: Signature = manifest
+        .signature
+        .clone()
+        .ok_or(InstallError::MissingSignature)?;
+
+    let component_rel = manifest
+        .components
+        .state_apply
+        .clone()
+        .ok_or(InstallError::ComponentMissing)?;
+    let component_bytes = std::fs::read(bundle_dir.join(&component_rel))?;
+
+    let state_propose_bytes = manifest
+        .components
+        .state_propose
+        .as_ref()
+        .map(|rel| std::fs::read(bundle_dir.join(rel)))
+        .transpose()?;
+    let interaction_bytes = manifest
+        .components
+        .interaction
+        .as_ref()
+        .map(|rel| std::fs::read(bundle_dir.join(rel)))
+        .transpose()?;
+    let behavior_bytes = manifest
+        .components
+        .behavior
+        .as_ref()
+        .map(|rel| std::fs::read(bundle_dir.join(rel)))
+        .transpose()?;
+
+    let content_hash = bundle_content_hash(
+        Some(&component_bytes),
+        state_propose_bytes.as_deref(),
+        interaction_bytes.as_deref(),
+        behavior_bytes.as_deref(),
+    );
+
+    // Decode author pubkey from `0x<hex>` form for plan A.
+    // Plan B replaces this with bech32m decoding (per
+    // distribution.md §10.2 wpub-author HRP).
+    let pk = decode_author_pubkey_hex(&manifest.app.author_pubkey)?;
+
+    let target = signing_target_bytes(&manifest, &content_hash);
+    verify_signature(&pk, &target, &signature.value)?;
+
+    Ok(LoadedBundle {
+        manifest,
+        component_bytes,
+        content_hash,
+        state_propose_bytes,
+        interaction_bytes,
+        behavior_bytes,
+    })
 }
 
 fn decode_author_pubkey_hex(s: &str) -> Result<[u8; 32], InstallError> {
@@ -409,8 +396,7 @@ mod tests {
         )
         .unwrap();
 
-        let flow = InstallFlow::new();
-        let err = flow.load(&addr).expect_err("tampered propose must reject");
+        let err = load(&addr).expect_err("tampered propose must reject");
         assert!(
             matches!(err, InstallError::Signature(_)),
             "expected Signature error, got {err:?}"
@@ -422,8 +408,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let (addr, _pk) = write_fixture_bundle(tmp.path());
 
-        let flow = InstallFlow::new();
-        let loaded = flow.load(&addr).expect("load OK");
+        let loaded = load(&addr).expect("load OK");
         assert_eq!(loaded.manifest.app.name, "counter");
         assert!(!loaded.component_bytes.is_empty());
     }
@@ -441,8 +426,7 @@ mod tests {
             b"\x00asmTAMPERED",
         )
         .unwrap();
-        let flow = InstallFlow::new();
-        let err = flow.load(&addr).expect_err("tampered must reject");
+        let err = load(&addr).expect_err("tampered must reject");
         assert!(matches!(err, InstallError::Signature(_)));
     }
 
@@ -465,10 +449,7 @@ mod tests {
             canonical_bincode().serialize(&m).unwrap(),
         )
         .unwrap();
-        let flow = InstallFlow::new();
-        let err = flow
-            .load(&addr)
-            .expect_err("kernel-major mismatch must reject");
+        let err = load(&addr).expect_err("kernel-major mismatch must reject");
         match err {
             InstallError::IncompatibleKernelMajor(v) => assert_eq!(v, 2),
             other => panic!("expected IncompatibleKernelMajor(2), got {other:?}"),
@@ -489,8 +470,7 @@ mod tests {
             canonical_bincode().serialize(&m).unwrap(),
         )
         .unwrap();
-        let flow = InstallFlow::new();
-        let err = flow.load(&addr).expect_err("missing sig must reject");
+        let err = load(&addr).expect_err("missing sig must reject");
         assert!(matches!(err, InstallError::MissingSignature));
     }
 }

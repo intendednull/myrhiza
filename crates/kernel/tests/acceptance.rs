@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 
 use myrhiza_backend::{Backend, BackendError};
-use myrhiza_kernel::{ApplyOutcome, BundleAddress, InstallFlow, StateApplyHandle};
+use myrhiza_kernel::{ApplyOutcome, BundleAddress, StateApplyHandle, install};
 use myrhiza_manifest::bundle_content_hash;
 use myrhiza_test_utils::bundle::{
     build_counter_bundle_with_extra_cap, build_signed_counter_bundle, write_bundle,
@@ -57,8 +57,7 @@ fn counter_fixture_path() -> PathBuf {
 fn kernel_loads_signed_bundle() {
     let (_bundle, addr) = build_signed_counter_bundle();
 
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("install flow loads + verifies");
+    let loaded = install::load(&addr).expect("install flow loads + verifies");
 
     assert_eq!(loaded.manifest.app.name, "test-fixture");
     assert!(
@@ -84,7 +83,7 @@ fn kernel_loads_signed_bundle() {
 ///      8-byte BE i64 delta — the fixture adds it to the prior state.
 ///
 /// This exercises:
-///   - `InstallFlow::load` (signature verify),
+///   - `install::load` (signature verify),
 ///   - `WasmtimeBackend::instantiate_state_apply` (linker + fuel + memcap),
 ///   - `StateApplyHandle::apply` (bindgen-typed call),
 ///   - canonical-bincode decode of the wire `Event` envelope inside the
@@ -96,8 +95,7 @@ fn kernel_loads_signed_bundle() {
 fn kernel_instantiates_and_applies_increment() {
     let (_bundle, addr) = build_signed_counter_bundle();
 
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("load + verify");
+    let loaded = install::load(&addr).expect("load + verify");
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let instance = backend
@@ -290,8 +288,7 @@ fn build_signed_bundle_for(
 fn pre_check_returns_reject_and_does_not_commit() {
     let (_bundle, addr) = build_signed_bundle_for("pre-check-rejector", 13);
 
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("load + verify");
+    let loaded = install::load(&addr).expect("load + verify");
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let instance = backend
@@ -348,8 +345,7 @@ fn fuel_exhaustion_traps_apply() {
 
     let (_bundle, addr) = build_signed_bundle_for("infinite-loop", 17);
 
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("load + verify");
+    let loaded = install::load(&addr).expect("load + verify");
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let instance = backend
@@ -438,9 +434,7 @@ fn manifest_declaring_non_deterministic_cap_rejects_at_install() {
         bundle_dir: bundle.bundle_dir.clone(),
         manifest_path: bundle.manifest_path.clone(),
     };
-    let flow = InstallFlow::new();
-    let loaded = flow
-        .load(&addr)
+    let loaded = install::load(&addr)
         .expect("install flow accepts the signed bundle (cap gating is downstream)");
 
     let backend = WasmtimeBackend::new().expect("backend constructs");

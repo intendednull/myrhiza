@@ -41,7 +41,7 @@ async-trait.workspace = true
 # B-10 T8: adds `myrhiza-distribution` to the feature gate — this
 # crate's `BundleDistribution::fetch` is how the kernel embedder
 # materializes a `BundleAddress::IrohBlob` into a `Disk` variant for
-# `InstallFlow::load`. The kernel itself does NOT take a direct
+# `install::load`. The kernel itself does NOT take a direct
 # `iroh-blobs` dep (spec §4.6 dep direction: `kernel → distribution`,
 # distribution owns iroh-blobs).
 network-iroh = [

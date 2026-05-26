@@ -16,13 +16,13 @@ use std::path::Path;
 
 use myrhiza_backend::{Backend, BackendError};
 use myrhiza_kernel::{
-    BundleAddress, InstallError, InstallFlow,
+    BundleAddress, InstallError,
     event_builder::{AuthorKeypair, EventBuilder, canonical_envelope},
+    install,
     interaction::{InteractionError, InteractionHandle},
     state_apply::{ApplyError, ApplyOutcome, StateApplyHandle},
     state_propose::{ProposeError, StateProposeHandle},
 };
-use myrhiza_types::BundleHash;
 use myrhiza_wasmtime_backend::WasmtimeBackend;
 use thiserror::Error;
 
@@ -110,12 +110,11 @@ pub fn run<R: BufRead, W: Write>(
     mut stdout: W,
 ) -> Result<(Vec<u8>, Vec<StepLog>), HarnessError> {
     // 1. Load + verify bundle.
-    let flow = InstallFlow::new();
     let addr = BundleAddress::Disk {
         bundle_dir: bundle_path.to_path_buf(),
         manifest_path: "manifest.bincode".into(),
     };
-    let bundle = flow.load(&addr)?;
+    let bundle = install::load(&addr)?;
 
     // 2. Construct backend + instantiate all three profiles.
     let backend = WasmtimeBackend::new()?;
@@ -141,13 +140,11 @@ pub fn run<R: BufRead, W: Write>(
     // 3. Apply genesis. The caller supplies the application-specific
     //    `app_payload` bytes (counter: `0_i64.to_be_bytes()`; poll:
     //    `[0x00] ++ canonical(options)` per B-6 spec §4.3). The harness
-    //    wraps these in a `GenesisV1` envelope with a placeholder seed
-    //    and topic name; the v1 single-peer harness does not fetch a
-    //    real on-chain bundle hash, so those arguments are informational
-    //    only.
+    //    wraps these in a `GenesisV1` envelope with a placeholder seed;
+    //    the v1 single-peer harness does not derive a real topic, so the
+    //    seed is informational only.
     let builder = EventBuilder::new(author_key);
-    let bundle_hash = BundleHash::from_bytes([0u8; 32]);
-    let genesis_event = builder.genesis(&bundle_hash, [0u8; 32], "topic", genesis_app_payload);
+    let genesis_event = builder.genesis([0u8; 32], genesis_app_payload);
     let genesis_envelope = canonical_envelope(&genesis_event);
     let genesis_result = apply_handle.apply(&[], &genesis_envelope)?;
     if !matches!(genesis_result.outcome, ApplyOutcome::Accepted) {

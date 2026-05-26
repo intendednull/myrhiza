@@ -8,7 +8,7 @@
 //! API names verified against plan-A code (2026-05-10):
 //! - `myrhiza_test_utils::bundle::TestBundle`
 //! - `myrhiza_test_utils::bundle::build_signed_counter_bundle`
-//! - `myrhiza_kernel::{InstallFlow, BundleAddress}`
+//! - `myrhiza_kernel::{install::load, BundleAddress}`
 //! - `myrhiza_wasmtime_backend::WasmtimeBackend`
 //! - `WasmtimeBackend::instantiate_state_apply(&bytes, &manifest)`
 
@@ -21,7 +21,7 @@ use std::time::Duration;
 use myrhiza_backend::{Backend, ComponentInstance};
 use myrhiza_kernel::pending::PendingCfg;
 use myrhiza_kernel::runtime::RuntimeCfg;
-use myrhiza_kernel::{BundleAddress, InstallFlow, StateApplyHandle};
+use myrhiza_kernel::{BundleAddress, StateApplyHandle, install};
 use myrhiza_test_utils::bundle::{
     TestBundle, build_signed_counter_bundle, build_signed_echo_bundle, build_signed_poll_bundle,
     write_bundle,
@@ -90,8 +90,7 @@ pub fn counter_handle() -> StateApplyHandle {
 #[must_use]
 pub fn echo_handle() -> StateApplyHandle {
     let (_bundle, addr) = build_signed_echo_bundle();
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("InstallFlow::load");
+    let loaded = install::load(&addr).expect("install::load");
     let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");
     let instance = backend
         .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
@@ -107,8 +106,7 @@ pub fn echo_handle() -> StateApplyHandle {
 #[must_use]
 pub fn poll_handle() -> StateApplyHandle {
     let (_bundle, addr) = build_signed_poll_bundle();
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("InstallFlow::load");
+    let loaded = install::load(&addr).expect("install::load");
     let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");
     let instance = backend
         .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
@@ -121,8 +119,7 @@ pub fn poll_handle() -> StateApplyHandle {
 #[must_use]
 pub fn counter_component_instance() -> Box<dyn ComponentInstance> {
     let (_bundle, addr) = build_signed_counter_bundle();
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("InstallFlow::load");
+    let loaded = install::load(&addr).expect("install::load");
     let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");
     backend
         .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)
@@ -188,8 +185,7 @@ pub fn build_signed_pre_check_rejector_bundle() -> (TestBundle, BundleAddress) {
 #[must_use]
 pub fn pre_check_rejector_handle() -> StateApplyHandle {
     let (_bundle, addr) = build_signed_pre_check_rejector_bundle();
-    let flow = InstallFlow::new();
-    let loaded = flow.load(&addr).expect("InstallFlow::load");
+    let loaded = install::load(&addr).expect("install::load");
     let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");
     let instance = backend
         .instantiate_state_apply(&loaded.component_bytes, &loaded.manifest)

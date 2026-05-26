@@ -211,12 +211,7 @@ async fn replay_fallback_when_topo_reorders() {
     // varying payload until one's wire_hash is < X2's. Since we can't
     // read X2's hash directly, we use a different strategy: inject
     // multiple Y1 candidates, count how many drove a counter advance.
-    let y1 = builder.genesis(
-        &harness.app_bundle_hash,
-        harness.seed,
-        &harness.topic_name,
-        vec![0xAA, 0xBB, 0xCC],
-    );
+    let y1 = builder.genesis(harness.seed, vec![0xAA, 0xBB, 0xCC]);
 
     // Publish Y1 onto the bus. The first insert will be Y1's genesis-arm
     // attempt: Y1 has `seq=1` and `prev=ZERO`, but `genesis_author = X`
@@ -353,12 +348,7 @@ async fn replay_fallback_when_drain_loop_inserts_multiple() {
     let kp_y = AuthorKeypair::deterministic(2);
     let builder_x = EventBuilder::new(&kp_x);
 
-    let x1 = builder_x.genesis(
-        &harness.app_bundle_hash,
-        harness.seed,
-        &harness.topic_name,
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let x1 = builder_x.genesis(harness.seed, 0_i64.to_be_bytes().to_vec());
     let x2 = builder_x.next(&x1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
 
     // Y1: non-founder seq=1, explicit deps on X2. Since `EventBuilder`
@@ -517,12 +507,7 @@ async fn incremental_apply_reject_records_drop() {
     // reject on the `apply` call inside the fast-path.
     let kp = AuthorKeypair::deterministic(1);
     let builder = EventBuilder::new(&kp);
-    let genesis = builder.genesis(
-        &harness.app_bundle_hash,
-        harness.seed,
-        &harness.topic_name,
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let genesis = builder.genesis(harness.seed, 0_i64.to_be_bytes().to_vec());
     let genesis_hash = genesis.wire_hash();
 
     let net_pub = MemNetwork::new(
@@ -851,12 +836,7 @@ async fn anchor_digest_correctness_after_off_loop_move() {
     let kp_y = AuthorKeypair::deterministic(22);
     let builder_y = EventBuilder::new(&kp_y);
 
-    let x1 = builder_x.genesis(
-        &bundle_hash,
-        seed,
-        &topic_name,
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let x1 = builder_x.genesis(seed, 0_i64.to_be_bytes().to_vec());
     let x2 = builder_x.next(&x1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let x3 = builder_x.next(&x2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
 
@@ -864,12 +844,7 @@ async fn anchor_digest_correctness_after_off_loop_move() {
     // EventBuilder::genesis always emits seq=1 prev=ZERO empty-deps — we
     // can reuse it for Y's genesis-shaped first event. The DAG infers
     // the implicit Genesis dep at insert time.
-    let y1 = builder_y.genesis(
-        &bundle_hash,
-        seed,
-        &topic_name,
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let y1 = builder_y.genesis(seed, 0_i64.to_be_bytes().to_vec());
     // Note: y1's wire bytes will trigger genesis-validation arm if
     // genesis_author is unset on the receiving DAG. We will insert X1
     // before Y1 so genesis_author is set to X before Y1 arrives.

@@ -29,8 +29,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:559
 
 ## capabilities.md §7.2
-- crates/kernel/tests/acceptance.rs:192
-- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:190
+- crates/kernel/tests/acceptance.rs:404
 - crates/wasmtime-backend/src/gating.rs:386
 
 ## convergence.md §4
@@ -54,10 +54,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:412
 
 ## convergence.md §4.2 — InvalidChain recovery via direct-stream when index populated (B-4.6 §4.1 test 6)
-- crates/kernel/tests/peer_authority_index.rs:759
+- crates/kernel/tests/peer_authority_index.rs:739
 
 ## convergence.md §4.2 — Pending/InvalidChain soft-nudge when index is empty (B-4.7 §3.1)
-- crates/kernel/tests/peer_authority_index.rs:661
+- crates/kernel/tests/peer_authority_index.rs:646
 
 ## convergence.md §4.2 — `MemBus::inject_lag(topic)` test affordance for
 - crates/network/tests/memory_basic.rs:89
@@ -72,13 +72,13 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/direct_backfill.rs:196
 
 ## convergence.md §4.2 — end-to-end convergence via direct-stream with a populated index (B-4.6 §4.1 test 4)
-- crates/kernel/tests/peer_authority_index.rs:538
+- crates/kernel/tests/peer_authority_index.rs:523
 
 ## convergence.md §4.2 — peer-authority index MRU move-to-front (B-4.6 §4.1 test 2)
-- crates/kernel/tests/peer_authority_index.rs:249
+- crates/kernel/tests/peer_authority_index.rs:244
 
 ## convergence.md §4.2 — peer-authority index capped at 8 per author (B-4.6 §4.1 test 3)
-- crates/kernel/tests/peer_authority_index.rs:420
+- crates/kernel/tests/peer_authority_index.rs:410
 
 ## convergence.md §4.2 — peer-authority index populated by HeadsSummary receipt (B-4.6 §4.1 test 1)
 - crates/kernel/tests/peer_authority_index.rs:118
@@ -93,8 +93,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/src/dag.rs:857
 
 ## convergence.md §4.4
-- crates/kernel/tests/acceptance.rs:278
-- crates/kernel/tests/acceptance.rs:75
+- crates/kernel/tests/acceptance.rs:276
+- crates/kernel/tests/acceptance.rs:74
 - crates/kernel/tests/attribution.rs:201
 - crates/kernel/tests/attribution.rs:384
 - crates/kernel/tests/coexistence.rs:77
@@ -110,13 +110,13 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:851
 
 ## convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2)
-- crates/kernel/tests/perf_carryovers.rs:306
+- crates/kernel/tests/perf_carryovers.rs:301
 
 ## convergence.md §4.4 — prefix-mismatch fallback path (B-2.1 §3.4)
 - crates/kernel/tests/perf_carryovers.rs:103
 
 ## convergence.md §4.4 — rejected branch of `try_tip_incremental` records drop (B-2.1 §3.4)
-- crates/kernel/tests/perf_carryovers.rs:476
+- crates/kernel/tests/perf_carryovers.rs:466
 
 ## convergence.md §4.4 — tip-fast-path on single-author chain (B-2.1 §3)
 - crates/kernel/tests/perf_carryovers.rs:42
@@ -133,11 +133,11 @@ Mapping: each spec section to the tests that prove it. Tests carry
 ## convergence.md §4.6
 - crates/kernel/tests/attribution.rs:137
 - crates/kernel/tests/attribution.rs:82
-- crates/kernel/tests/coexistence.rs:506
+- crates/kernel/tests/coexistence.rs:505
 - crates/kernel/tests/convergence.rs:190
 
 ## convergence.md §4.6 (topic identity)
-- crates/kernel/tests/coexistence.rs:183
+- crates/kernel/tests/coexistence.rs:182
 
 ## convergence.md §4.6 — topic-binding on direct-stream requests (B-4.5 §4.1 test 3)
 - crates/kernel/tests/direct_backfill.rs:271
@@ -146,16 +146,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:271
 
 ## convergence.md §4.7 — `spawn_blocking` off-loop compute for drift-anchor digest (B-2.1 §4.2)
-- crates/kernel/tests/perf_carryovers.rs:659
+- crates/kernel/tests/perf_carryovers.rs:644
 
 ## convergence.md §4.7 — bad-signature drift surfaces as `PeerWarning::SignatureInvalid` (B-4.8 carryover)
 - crates/kernel/tests/attribution.rs:294
 
 ## convergence.md §4.7 — multi-author convergence regression guard for tip-fast-path landing (B-2.1 §5 test 5)
-- crates/kernel/tests/perf_carryovers.rs:576
+- crates/kernel/tests/perf_carryovers.rs:561
 
 ## convergence.md §4.7 — off-loop digest byte-identical to direct in-line compute (B-2.1 §4.2)
-- crates/kernel/tests/perf_carryovers.rs:812
+- crates/kernel/tests/perf_carryovers.rs:797
 
 ## convergence.md §4.8
 - crates/kernel/tests/convergence.rs:378
@@ -178,11 +178,11 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/src/gating.rs:559
 
 ## determinism.md §5.2
-- crates/kernel/tests/acceptance.rs:375
+- crates/kernel/tests/acceptance.rs:371
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
 ## determinism.md §5.3
-- crates/kernel/tests/acceptance.rs:337
+- crates/kernel/tests/acceptance.rs:334
 - crates/types/tests/limits_shadow.rs:3
 - crates/wasmtime-backend/tests/engine_config.rs:3
 
@@ -197,7 +197,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/wasmtime-backend/tests/wit_freeze.rs:74
 
 ## distribution.md §10.5
-- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:404
 - crates/kernel/tests/acceptance.rs:51
 
 ## identity.md §6
@@ -214,14 +214,14 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/network/tests/iroh_skeleton.rs:15
 
 ## mvp.md §15.1
-- crates/kernel/tests/acceptance.rs:192
-- crates/kernel/tests/acceptance.rs:278
-- crates/kernel/tests/acceptance.rs:337
-- crates/kernel/tests/acceptance.rs:375
-- crates/kernel/tests/acceptance.rs:408
+- crates/kernel/tests/acceptance.rs:190
+- crates/kernel/tests/acceptance.rs:276
+- crates/kernel/tests/acceptance.rs:334
+- crates/kernel/tests/acceptance.rs:371
+- crates/kernel/tests/acceptance.rs:404
 - crates/kernel/tests/acceptance.rs:51
-- crates/kernel/tests/acceptance.rs:75
-- crates/kernel/tests/coexistence.rs:506
+- crates/kernel/tests/acceptance.rs:74
+- crates/kernel/tests/coexistence.rs:505
 
 ## mvp.md §15.1 #1+#2
 - crates/kernel/tests/convergence.rs:15
@@ -242,7 +242,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/iroh_coexistence.rs:25
 
 ## mvp.md §15.2
-- crates/kernel/tests/coexistence.rs:506
+- crates/kernel/tests/coexistence.rs:505
 
 ## networking.md §11.1
 - crates/kernel/tests/attribution.rs:569
@@ -278,10 +278,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/types/tests/limits_shadow.rs:3
 
 ## verification.md §22.5
-- crates/kernel/tests/acceptance.rs:278
+- crates/kernel/tests/acceptance.rs:276
 
 ## verification.md §22.5 — pre-check rejection coverage
-- crates/kernel/tests/perf_carryovers.rs:476
+- crates/kernel/tests/perf_carryovers.rs:466
 
 ## verification.md §22.8 — `PeerHandle::await_digest` must NOT
 - crates/kernel/tests/convergence.rs:810

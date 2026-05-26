@@ -19,7 +19,7 @@
 //!    bootstrapping against peer A — the blob is NOT in peer B's local
 //!    store, so the fetch genuinely traverses the wire via the
 //!    iroh-blobs downloader over `iroh_blobs::ALPN`.
-//! 3. The materialized `BundleAddress::Disk` feeds `InstallFlow::load`
+//! 3. The materialized `BundleAddress::Disk` feeds `install::load`
 //!    (signature verify + canonical bytes round-trip).
 //! 4. `WasmtimeBackend::instantiate_state_apply` instantiates the
 //!    loaded component bytes.
@@ -48,7 +48,7 @@ use std::collections::BTreeSet;
 use bincode::Options;
 use iroh::address_lookup::MemoryLookup;
 use myrhiza_backend::Backend;
-use myrhiza_kernel::{ApplyOutcome, BundleAddress, InstallFlow, StateApplyHandle};
+use myrhiza_kernel::{ApplyOutcome, BundleAddress, StateApplyHandle, install};
 use myrhiza_network::iroh_transport::peer_pubkey_from_iroh;
 use myrhiza_test_utils::bundle::build_signed_counter_bundle_three_components;
 use myrhiza_test_utils::iroh_harness::spawn_iroh_peer;
@@ -143,20 +143,19 @@ async fn b10_fetch_via_iroh_blobs_closes_mvp_15_1_criterion_1() {
         }
     };
 
-    // 4. Load + instantiate. `InstallFlow::load` re-derives
+    // 4. Load + instantiate. `install::load` re-derives
     //    `bundle_content_hash` over the materialized component bytes
     //    and verifies the manifest signature — same path the disk-only
     //    tests exercise. The fact that this succeeds proves the
     //    iroh-blobs fetch produced byte-identical bytes to what was
     //    published (BLAKE3 + Bao verified streaming is load-bearing).
     //
-    //    NOTE: `materialized` MUST outlive `flow.load(...)` because
+    //    NOTE: `materialized` MUST outlive `install::load(...)` because
     //    `MaterializedBundle` owns the tempdir via RAII. Dropping
     //    `materialized` before `load` reads the bytes would delete the
     //    tempdir mid-read. Binding it to a `let` above keeps it alive
     //    through the end of the function.
-    let flow = InstallFlow::new();
-    let loaded = flow.load(disk_addr).expect("install flow loads + verifies");
+    let loaded = install::load(disk_addr).expect("install flow loads + verifies");
 
     let backend = WasmtimeBackend::new().expect("backend constructs");
     let instance = backend

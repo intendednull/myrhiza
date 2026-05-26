@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use bincode::Options;
-use myrhiza_types::{BundleHash, Event, EventHash, GenesisV1, Hlc, canonical_bincode};
+use myrhiza_types::{Event, EventHash, GenesisV1, Hlc, canonical_bincode};
 
 pub use crate::identity::AuthorKeypair;
 
@@ -34,13 +34,7 @@ impl<'a> EventBuilder<'a> {
     /// for well-typed fields).
     #[must_use]
     #[allow(clippy::expect_used)]
-    pub fn genesis(
-        &self,
-        _app_bundle_hash: &BundleHash,
-        seed: [u8; 32],
-        _topic_name: &str,
-        app_payload: Vec<u8>,
-    ) -> Event {
+    pub fn genesis(&self, seed: [u8; 32], app_payload: Vec<u8>) -> Event {
         let payload = GenesisV1 {
             seed,
             founder_pubkey: self.author_key.author,

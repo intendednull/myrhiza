@@ -195,12 +195,7 @@ async fn index_populated_by_heads_summary_receipt() {
     // Correct app_payload for EventBuilder::genesis is the raw counter seed
     // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
     // GenesisV1 struct that EventBuilder::genesis already builds internally.
-    let e1 = builder.genesis(
-        &APP_BUNDLE,
-        TOPIC_SEED,
-        "main",
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let e1 = builder.genesis(TOPIC_SEED, 0_i64.to_be_bytes().to_vec());
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
 
@@ -275,12 +270,7 @@ async fn index_move_to_front_on_repeated_observation() {
     // Correct app_payload for EventBuilder::genesis is the raw counter seed
     // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
     // GenesisV1 struct that EventBuilder::genesis already builds internally.
-    let e1 = builder.genesis(
-        &APP_BUNDLE,
-        TOPIC_SEED,
-        "main",
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let e1 = builder.genesis(TOPIC_SEED, 0_i64.to_be_bytes().to_vec());
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
     let e4 = builder.next(&e3, BTreeSet::new(), 3_i64.to_be_bytes().to_vec());
@@ -491,12 +481,7 @@ async fn index_caps_at_8_peers_per_author() {
     // Correct app_payload for EventBuilder::genesis is the raw counter seed
     // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
     // GenesisV1 struct that EventBuilder::genesis already builds internally.
-    let e1 = builder.genesis(
-        &APP_BUNDLE,
-        TOPIC_SEED,
-        "main",
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let e1 = builder.genesis(TOPIC_SEED, 0_i64.to_be_bytes().to_vec());
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
     injector
@@ -709,12 +694,7 @@ async fn pending_event_with_unknown_author_publishes_heads_summary_nudge() {
     // Correct app_payload for EventBuilder::genesis is the raw counter seed
     // (0_i64 bytes) — NOT genesis_payload(...), which would double-wrap the
     // GenesisV1 struct that EventBuilder::genesis already builds internally.
-    let e1 = builder.genesis(
-        &APP_BUNDLE,
-        TOPIC_SEED,
-        "main",
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let e1 = builder.genesis(TOPIC_SEED, 0_i64.to_be_bytes().to_vec());
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
 
@@ -858,12 +838,7 @@ async fn invalid_chain_uses_direct_stream_when_index_populated() {
     // The peer-authority index has kp_a.public for A's author → direct-stream
     // to A → CapturingHandler records the request from B.
     let builder = EventBuilder::new(&author_kp_a);
-    let e1 = builder.genesis(
-        &APP_BUNDLE,
-        TOPIC_SEED,
-        "main",
-        0_i64.to_be_bytes().to_vec(),
-    );
+    let e1 = builder.genesis(TOPIC_SEED, 0_i64.to_be_bytes().to_vec());
     let e2 = builder.next(&e1, BTreeSet::new(), 1_i64.to_be_bytes().to_vec());
     let e3 = builder.next(&e2, BTreeSet::new(), 2_i64.to_be_bytes().to_vec());
 
