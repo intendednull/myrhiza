@@ -60,6 +60,17 @@ use myrhiza_types::{DirectHeadsRequest, PeerPubkey, Topic};
 /// instance. Per `prior-art/iroh/lessons.md` §Borrow row 1, the
 /// kernel embedder constructs these once and may hand one clone
 /// here while retaining another for router-level work.
+///
+/// `Clone` is derived so multi-peer test harnesses (e.g. `IrohHarness`
+/// in `myrhiza-test-utils`) can hand one clone to `Runtime::start`
+/// while retaining the original on the peer-stack for cleanup
+/// ordering. Cloning is structurally cheap: `iroh::Endpoint` and
+/// `iroh_gossip::Gossip` are themselves `Arc`-backed clone-only
+/// handles, `PeerPubkey` is `Copy`, and `Arc<Mutex<...>>` shares
+/// the request-handler slot across clones — matching the comment
+/// at `request_handler` below ("...so that protocol-handler clones
+/// returned from `protocol_handler()` share state with this instance").
+#[derive(Clone)]
 pub struct IrohNetwork {
     endpoint: iroh::Endpoint,
     gossip: iroh_gossip::Gossip,

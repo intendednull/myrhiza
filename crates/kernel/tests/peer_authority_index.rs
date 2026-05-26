@@ -148,6 +148,7 @@ async fn index_populated_by_heads_summary_receipt() {
         kp_a,
         Some(AuthorKeypair::deterministic(101)),
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -183,6 +184,7 @@ async fn index_populated_by_heads_summary_receipt() {
         kp_b,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -306,6 +308,7 @@ async fn index_move_to_front_on_repeated_observation() {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
         },
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -451,6 +454,7 @@ async fn index_caps_at_8_peers_per_author() {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
         },
+        vec![],
     )
     .await
     .expect("runtime_c start");
@@ -582,6 +586,7 @@ async fn pending_event_with_known_author_uses_direct_stream() {
         kp_a,
         Some(AuthorKeypair::deterministic(401)),
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -624,6 +629,7 @@ async fn pending_event_with_known_author_uses_direct_stream() {
         kp_b,
         None,
         fast_cfg(),
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -689,6 +695,7 @@ async fn pending_event_with_unknown_author_publishes_heads_summary_nudge() {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
         },
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -803,6 +810,7 @@ async fn invalid_chain_uses_direct_stream_when_index_populated() {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
         },
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -831,6 +839,7 @@ async fn invalid_chain_uses_direct_stream_when_index_populated() {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
         },
+        vec![],
     )
     .await
     .expect("runtime_b start");

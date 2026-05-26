@@ -19,6 +19,19 @@ myrhiza-network = { path = "../network", features = ["test-helpers"] }
 bincode.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
+iroh = { workspace = true, optional = true }
+iroh-gossip = { workspace = true, optional = true }
 serde.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+
+[features]
+# Iroh-backed test fixtures (IrohHarness) for kernel-tier acceptance
+# tests that need a real `IrohNetwork` under a real `Runtime`. Default
+# off; mirrors the `network-iroh` feature on `myrhiza-network`. Per
+# docs/specs/2026-05-22-e2e-test-coverage-design.md §3.2.
+network-iroh = [
+    "myrhiza-network/network-iroh",
+    "dep:iroh",
+    "dep:iroh-gossip",
+]

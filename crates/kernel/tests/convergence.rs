@@ -232,6 +232,7 @@ async fn coexistence_two_topics_no_event_crossing() {
         peer_key_1,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(1)),
         cfg.clone(),
+        vec![],
     )
     .await
     .expect("runtime_a");
@@ -247,6 +248,7 @@ async fn coexistence_two_topics_no_event_crossing() {
         peer_key_2,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(2)),
         cfg,
+        vec![],
     )
     .await
     .expect("runtime_b");
@@ -577,6 +579,7 @@ async fn pending_event_triggers_heads_summary_nudge_when_index_empty() {
         peer_key_b,
         None,
         cfg,
+        vec![],
     )
     .await
     .expect("runtime_b");
@@ -726,6 +729,7 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
         peer_key_b2,
         None,
         cfg,
+        vec![],
     )
     .await
     .expect("runtime_b");
@@ -937,6 +941,7 @@ async fn dropped_at_apply_records_rejected_events() {
         peer_key_b3,
         None,
         cfg,
+        vec![],
     )
     .await
     .expect("runtime_b");

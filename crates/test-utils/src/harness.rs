@@ -61,6 +61,17 @@ pub struct PeerHandle {
 }
 
 impl PeerHandle {
+    /// Construct a `PeerHandle` from a [`RuntimeHandle`].
+    ///
+    /// Crate-visible so sibling harness modules (e.g. `iroh_harness`)
+    /// that drive their own `Runtime::start` path can wrap the resulting
+    /// `RuntimeHandle` without exposing the inner field. Tests outside
+    /// `myrhiza-test-utils` cannot construct a `PeerHandle` directly;
+    /// they must go through a harness's `spawn_peer` method.
+    pub(crate) fn from_runtime(runtime: RuntimeHandle) -> Self {
+        Self { runtime }
+    }
+
     /// Author a new event with the given payload + explicit dependency set.
     ///
     /// Forwards to [`AuthorCommand::Author`] on the runtime channel and
@@ -357,9 +368,10 @@ impl InProcessHarness {
             peer_key,
             author_key,
             cfg,
+            vec![],
         )
         .await
         .expect("Runtime::start");
-        PeerHandle { runtime }
+        PeerHandle::from_runtime(runtime)
     }
 }

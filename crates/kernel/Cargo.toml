@@ -39,6 +39,7 @@ async-trait.workspace = true
 # Mirrors the `network-iroh` feature on `myrhiza-network`.
 network-iroh = [
     "myrhiza-network/network-iroh",
+    "myrhiza-test-utils/network-iroh",
     "dep:iroh",
     "dep:iroh-gossip",
 ]

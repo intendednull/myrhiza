@@ -9,6 +9,9 @@ pub mod event_builder;
 pub mod harness;
 pub mod manifest;
 
+#[cfg(feature = "network-iroh")]
+pub mod iroh_harness;
+
 // Re-export from canonical home in myrhiza_kernel for backward-compat.
 pub use harness::{InProcessHarness, PeerHandle};
 pub use myrhiza_kernel::event_builder::{
