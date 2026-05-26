@@ -37,7 +37,7 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 | 23. v1.1 behavior profile + criterion #6 | ❌ | Deferable per mvp.md §15.5. |
 | 24. Dependency-direction CI check | ❌ | No examples yet to enforce direction against. |
 
-**Tally**: 12 items ✅, 5 items 🟡, 7 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback).
+**Tally**: 12 items ✅, 4 items 🟡, 8 items ❌ (4 of which are deferable per the mvp.md §15.5 reduced-scope fallback).
 
 ## v1 acceptance criteria status
 
