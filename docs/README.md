@@ -53,7 +53,9 @@ _No specs yet — networking lives in Runtime core under the Plan B-4 series. Pr
 
 *(component bundling, hashing, versioning, signing, install UX)*
 
-_No specs yet. Prior art: [`prior-art/app-distribution/`](prior-art/app-distribution/) (OCI artifacts + wkg + Sigstore + Spin/wasmCloud/Holochain bundle comparisons)._
+- [Plan B-10 — Bundle distribution + iroh-blobs fetch path](specs/2026-05-26-b-10-bundle-distribution-design.md) — closes the last v1-blocking gap (mvp.md §15.1 #1 "fetched via iroh-blobs"). New `crates/distribution/` owns iroh-blobs publish/fetch + per-author revocation/publication topics; `BundleAddress` becomes a `Disk | IrohBlob` enum so existing disk-loaded tests keep working. `[draft]`
+
+Prior art: [`prior-art/app-distribution/`](prior-art/app-distribution/) (OCI artifacts + wkg + Sigstore + Spin/wasmCloud/Holochain bundle comparisons).
 
 ### Browser viability
 
