@@ -67,6 +67,9 @@ pub fn helpers_only_state_apply_manifest() -> Manifest {
 /// Used by [`crate::bundle::build_signed_counter_bundle_three_components`]
 /// to create a fully-populated counter bundle covering the
 /// `view → dispatch → propose → apply` loop required by spec §3.6.
+/// The bundle's component bytes come from `examples/counter/` (per
+/// docs/specs/2026-05-26-b-8-sdk-design.md §3.3) built via the
+/// Justfile's `_build-example` recipe.
 #[must_use]
 pub fn helpers_only_three_component_manifest() -> Manifest {
     let mut helpers = BTreeMap::new();

@@ -17,14 +17,16 @@ exclude = [
     # `just build-fixtures` and wrapped into components via wasm-tools.
     # Workspace inclusion would force `cargo check --workspace` to
     # attempt cross-compiling on every gate run.
-    "tests/fixtures/counter-state-apply",
+    #
+    # Counter slots used to live here as standalone fixture crates;
+    # per docs/specs/2026-05-26-b-8-sdk-design.md §3.6 (B-8 T6
+    # cutover) they are now a workspace member at `examples/counter/`
+    # and build via the Justfile's `_build-example` recipe.
     "tests/fixtures/echo-state-apply",
     "tests/fixtures/over-importer",
     "tests/fixtures/pre-check-rejector",
     "tests/fixtures/infinite-loop",
     "tests/fixtures/float-banned",
-    "tests/fixtures/counter-state-propose",
-    "tests/fixtures/counter-interaction",
     "tests/fixtures/poll-state-apply",
     "tests/fixtures/poll-state-propose",
     "tests/fixtures/poll-interaction",

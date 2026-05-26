@@ -4,6 +4,13 @@
 //! scripted stdin against the three-component counter bundle. Asserts final
 //! state and the pre-check ≡ apply invariant on every step.
 //!
+//! The three counter components are built from `examples/counter/`
+//! (per docs/specs/2026-05-26-b-8-sdk-design.md §3.3 — the canonical
+//! first-app demo) by the Justfile's `_build-example` recipe; this test
+//! is the determinism canary for that migration (B-8 T6 acceptance),
+//! since the "inc 5 inc 3 yields 8" assertion below pins counter
+//! behavior across the source-of-truth move.
+//!
 //! Per spec §3.7 acceptance criterion: `"inc 5\ninc 3\nquit\n"` must
 //! produce final state == `8_i64.to_be_bytes()`.
 

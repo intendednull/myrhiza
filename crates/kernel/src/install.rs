@@ -238,7 +238,9 @@ mod tests {
         let component_path = dir.join("components/state-apply.wasm");
         std::fs::create_dir_all(component_path.parent().unwrap()).unwrap();
         // Minimal wasm magic bytes; real component bytes provided by
-        // tests/fixtures/built/counter-state-apply.wasm in the e2e test.
+        // tests/fixtures/built/counter-state-apply.wasm in the e2e
+        // test (built from examples/counter/src/state.rs per
+        // docs/specs/2026-05-26-b-8-sdk-design.md §3.3).
         std::fs::write(&component_path, b"\x00asm\x01\x00\x00\x00").unwrap();
         let component_bytes = std::fs::read(&component_path).unwrap();
         let content_hash = bundle_content_hash(Some(&component_bytes), None, None, None);

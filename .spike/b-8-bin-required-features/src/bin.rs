@@ -1,8 +1,10 @@
 // Spike: verify `[[bin]] + required-features` builds on
-// wasm32-unknown-unknown. Bump allocator + panic handler are bit-copied
-// from `tests/fixtures/counter-state-apply/src/lib.rs` lines 1-81 so the
-// shape mirrors what real state-apply binaries will use (minus the
-// wit-bindgen world, which isn't relevant to what the spike verifies).
+// wasm32-unknown-unknown. Bump allocator + panic handler mirror what
+// real state-apply binaries use (now produced by
+// `myrhiza_sdk::myrhiza_app!` per docs/specs/2026-05-26-b-8-sdk-design.md
+// §3.3; the prior counter fixture at `tests/fixtures/counter-state-apply/`
+// was retired during B-8 T6 cutover). The wit-bindgen world isn't
+// relevant to what the spike verifies.
 #![allow(unsafe_op_in_unsafe_fn)]
 #![no_std]
 #![no_main]

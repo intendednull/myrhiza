@@ -39,16 +39,21 @@ check:
 # wrap it into a component with the fixture's WIT. Result: a component
 # with only the imports declared in the fixture's WIT.
 #
+# Counter slots are sourced from `examples/counter/` per spec §3.5
+# (B-8 T6 cutover); the five negative-test fixtures remain in
+# `tests/fixtures/`. Output paths under `tests/fixtures/built/` are
+# unchanged so kernel + CLI consumers don't move.
+#
 # Tools required: rustup target wasm32-unknown-unknown, wasm-tools.
 build-fixtures: \
-    (_build-fixture "counter-state-apply" "counter_state_apply_fixture" "state-apply") \
+    (_build-example "counter-state-apply" "state-apply" "state-apply") \
+    (_build-example "counter-state-propose" "state-propose" "state-propose") \
+    (_build-example "counter-interaction" "interaction" "interaction") \
     (_build-fixture "echo-state-apply" "echo_state_apply_fixture" "state-apply") \
     (_build-fixture "over-importer" "over_importer_fixture" "state-apply") \
     (_build-fixture "pre-check-rejector" "pre_check_rejector_fixture" "state-apply") \
     (_build-fixture "infinite-loop" "infinite_loop_fixture" "state-apply") \
     (_build-fixture "float-banned" "float_banned_fixture" "state-apply") \
-    (_build-fixture "counter-state-propose" "counter_state_propose_fixture" "state-propose") \
-    (_build-fixture "counter-interaction" "counter_interaction_fixture" "interaction") \
     (_build-fixture "poll-state-apply" "poll_state_apply_fixture" "state-apply") \
     (_build-fixture "poll-state-propose" "poll_state_propose_fixture" "state-propose") \
     (_build-fixture "poll-interaction" "poll_interaction_fixture" "interaction")
@@ -71,6 +76,36 @@ _build-fixture dir crate_name world:
         tests/fixtures/built/{{dir}}.embed.wasm \
         -o tests/fixtures/built/{{dir}}.wasm
     rm tests/fixtures/built/{{dir}}.embed.wasm
+
+# Compile one slot of `examples/counter/` into a wasm component. The
+# example crate is a workspace member and exposes three `[[bin]]`
+# artifacts (`counter-state-apply`, `counter-state-propose`,
+# `counter-interaction`), each gated by `required-features` so a single
+# `cargo build --features <feature> --bin <slot>` produces only that
+# binary. `feature` matches the bin's `required-features` (one of
+# `state-apply` / `state-propose` / `interaction`); `world` is the WIT
+# world name passed to `wasm-tools component embed`.
+#
+# Per docs/specs/2026-05-26-b-8-sdk-design.md §3.3 + §3.5: the
+# `[[bin]] + required-features` shape preserves the "one app, three
+# components, one manifest" narrative. `myrhiza_sdk::myrhiza_app!`
+# emits the `extern crate alloc;` + bump allocator + `#[panic_handler]`
+# + `wit_bindgen::generate!` + `export!` boilerplate; the workspace
+# root's `[profile.release]` block (panic=abort, lto, opt-level=z,
+# strip) provides the float-ban-compliance opts.
+_build-example slot feature world:
+    @mkdir -p tests/fixtures/built
+    cargo build --release --target wasm32-unknown-unknown --locked \
+        -p counter-example --features {{feature}} --bin {{slot}}
+    wasm-tools component embed \
+        examples/counter/wit \
+        target/wasm32-unknown-unknown/release/{{slot}}.wasm \
+        --world {{world}} \
+        -o tests/fixtures/built/{{slot}}.embed.wasm
+    wasm-tools component new \
+        tests/fixtures/built/{{slot}}.embed.wasm \
+        -o tests/fixtures/built/{{slot}}.wasm
+    rm tests/fixtures/built/{{slot}}.embed.wasm
 
 spec-coverage:
     ./scripts/spec-coverage.sh

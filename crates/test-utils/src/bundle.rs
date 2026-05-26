@@ -94,6 +94,11 @@ fn fixture_path(name: &str) -> PathBuf {
 /// Read a built fixture by name, panicking with a `just build-fixtures`
 /// hint if the file is missing. Consolidates the per-`build_signed_*`
 /// fixture-reading boilerplate.
+///
+/// Counter components are now sourced from `examples/counter/src/{state,propose,interaction}.rs`
+/// per docs/specs/2026-05-26-b-8-sdk-design.md §3.3, built via the
+/// Justfile's `_build-example` recipe. Output paths under
+/// `tests/fixtures/built/` are preserved so test consumers don't move.
 #[allow(clippy::panic)]
 fn read_fixture(name: &str) -> Vec<u8> {
     let path = fixture_path(name);
@@ -106,9 +111,11 @@ fn read_fixture(name: &str) -> Vec<u8> {
 }
 
 /// Build a signed counter-state-apply bundle from the
-/// reproducibly-built fixture at `tests/fixtures/built/counter-state-apply.wasm`.
-/// Returns the [`TestBundle`] (with on-disk artifacts retained via the
-/// inner [`TempDir`]) and its [`BundleAddress`] (suitable for
+/// reproducibly-built artifact at `tests/fixtures/built/counter-state-apply.wasm`.
+/// Source lives at `examples/counter/src/state.rs` (per
+/// docs/specs/2026-05-26-b-8-sdk-design.md §3.3). Returns the
+/// [`TestBundle`] (with on-disk artifacts retained via the inner
+/// [`TempDir`]) and its [`BundleAddress`] (suitable for
 /// [`myrhiza_kernel::InstallFlow::load`]).
 ///
 /// Requires `just build-fixtures` to have produced the wasm artifact.
