@@ -11,6 +11,7 @@ members = [
     "crates/test-utils",
     "crates/myrhiza-cli",
     "examples/counter",
+    "xtask/dep-direction",
 ]
 exclude = [
     # Wasm-only fixtures — built for wasm32-unknown-unknown by

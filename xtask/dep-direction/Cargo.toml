@@ -1,0 +1,15 @@
+[package]
+name = "dep-direction-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "CI check: examples/ may not depend on kernel-internal crates."
+
+[lints]
+workspace = true
+
+[dependencies]
+cargo_metadata = "0.18"
+
+[dev-dependencies]
+serde_json = "1"
