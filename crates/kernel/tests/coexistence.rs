@@ -16,8 +16,7 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
-use myrhiza_kernel::pending::PendingCfg;
-use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime, RuntimeCfg};
+use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime};
 use myrhiza_kernel::{ApplyOutcome, InstallFlow, StateApplyHandle};
 use myrhiza_network::{MemBus, MemNetwork};
 use myrhiza_test_utils::bundle::build_signed_echo_bundle;
@@ -27,20 +26,6 @@ use myrhiza_wasmtime_backend::WasmtimeBackend;
 use myrhiza_backend::Backend;
 
 mod helpers;
-
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        heads_summary_tick: Duration::from_millis(100),
-        pending_cfg: PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
 
 /// Wait for a `RuntimeHandle::digest_watch` to reach `expected` within
 /// `timeout`. Mirrors the logic in `PeerHandle::await_digest`
@@ -245,7 +230,7 @@ async fn two_apps_coexist_no_event_crossing() {
         "counter and echo topics must differ (distinct app_bundle_hash)"
     );
 
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     // --- Author keypairs ------------------------------------------------------
     // Distinct author keys per runtime so there's no same-author cross-chain

@@ -29,33 +29,11 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_kernel::identity::AuthorKeypair;
-use myrhiza_kernel::pending::PendingCfg;
-use myrhiza_kernel::runtime::RuntimeCfg;
 use myrhiza_network::{GossipMessage, MemNetwork, Network};
 use myrhiza_test_utils::{EventBuilder, InProcessHarness};
 use myrhiza_types::{BundleHash, GenesisV1, Topic, canonical_bincode};
 
 mod helpers;
-
-/// Permissive config used across every test in this file. Mirrors the
-/// pattern in `tests/convergence.rs::fast_cfg()` — no rate limits, no
-/// background `HeadsSummary` chatter that would race the assertions.
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        // Long enough that the periodic HeadsSummary doesn't fire
-        // during a test window — these tests assert on per-insert
-        // counters, not background gossip.
-        heads_summary_tick: Duration::from_hours(1),
-        pending_cfg: PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Test 1: tip_fast_path_taken_for_single_author_via_author_path
@@ -81,7 +59,12 @@ fn fast_cfg() -> RuntimeCfg {
 async fn tip_fast_path_taken_for_single_author_via_author_path() {
     let harness = InProcessHarness::new(256, [0xA1; 32]);
     let peer = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), fast_cfg())
+        .spawn_peer(
+            1,
+            Some(1),
+            helpers::counter_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
 
     let kp = AuthorKeypair::deterministic(1);
@@ -147,12 +130,22 @@ async fn tip_fast_path_taken_for_single_author_via_author_path() {
 async fn replay_fallback_when_topo_reorders() {
     let harness = InProcessHarness::new(256, [0xA2; 32]);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), fast_cfg())
+        .spawn_peer(
+            1,
+            Some(1),
+            helpers::counter_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
     // Peer B is read-only — we author B's events manually below to
     // control their wire_hash via payload variation.
     let _peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), fast_cfg())
+        .spawn_peer(
+            2,
+            None,
+            helpers::counter_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
 
     // Step 1: peer A self-authors genesis → fast path engages once.
@@ -344,7 +337,12 @@ async fn replay_fallback_when_topo_reorders() {
 async fn replay_fallback_when_drain_loop_inserts_multiple() {
     let harness = InProcessHarness::new(256, [0xA3; 32]);
     let peer_a = harness
-        .spawn_peer(1, None, helpers::counter_handle(), fast_cfg())
+        .spawn_peer(
+            1,
+            None,
+            helpers::counter_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
 
     // Construct events on X's and Y's behalf — peer A is read-only.
@@ -501,7 +499,12 @@ async fn replay_fallback_when_drain_loop_inserts_multiple() {
 async fn incremental_apply_reject_records_drop() {
     let harness = InProcessHarness::new(256, [0xA4; 32]);
     let peer = harness
-        .spawn_peer(2, None, helpers::pre_check_rejector_handle(), fast_cfg())
+        .spawn_peer(
+            2,
+            None,
+            helpers::pre_check_rejector_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
 
     // Give B's subscription a chance to settle before the injection.
@@ -580,10 +583,20 @@ async fn incremental_apply_reject_records_drop() {
 async fn convergence_unchanged_after_tip_fast_path_landing() {
     let harness = InProcessHarness::new(256, [0xA5; 32]);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), fast_cfg())
+        .spawn_peer(
+            1,
+            Some(1),
+            helpers::counter_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
     let mut peer_b = harness
-        .spawn_peer(2, Some(2), helpers::counter_handle(), fast_cfg())
+        .spawn_peer(
+            2,
+            Some(2),
+            helpers::counter_handle(),
+            helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+        )
         .await;
 
     // Peer A authors genesis (founder = A).
@@ -682,11 +695,12 @@ async fn compute_anchor_digest_off_loop_does_not_block_membus_publish() {
     const POST_DRIFT_EVENTS: usize = 3;
 
     let harness = InProcessHarness::new(256, [0xA6; 32]);
+    let cfg = helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), fast_cfg())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
         .await;
     let peer_b = harness
-        .spawn_peer(2, Some(2), helpers::counter_handle(), fast_cfg())
+        .spawn_peer(2, Some(2), helpers::counter_handle(), cfg)
         .await;
 
     let kp_a = AuthorKeypair::deterministic(1);

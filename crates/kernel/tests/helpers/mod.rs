@@ -16,8 +16,11 @@
 #![allow(clippy::expect_used)] // test-only module
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use myrhiza_backend::{Backend, ComponentInstance};
+use myrhiza_kernel::pending::PendingCfg;
+use myrhiza_kernel::runtime::RuntimeCfg;
 use myrhiza_kernel::{BundleAddress, InstallFlow, StateApplyHandle};
 use myrhiza_test_utils::bundle::{
     TestBundle, build_signed_counter_bundle, build_signed_echo_bundle, write_bundle,
@@ -26,6 +29,50 @@ use myrhiza_test_utils::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest, sign_manifest,
 };
 use myrhiza_wasmtime_backend::WasmtimeBackend;
+
+// ---- Shared `RuntimeCfg` builders for kernel-tier tests ---------------------
+//
+// `fast_cfg` collapses 8 previously-duplicated definitions in
+// `crates/kernel/tests/*.rs`. The three tick constants below name the
+// three semantic intents that were hidden in those duplicates so call
+// sites read declaratively.
+
+/// Long tick — keeps periodic `HeadsSummary` timers from firing during
+/// test windows that assert on hand-forged messages or per-insert
+/// counters.
+pub const BACKGROUND_QUIET_TICK: Duration = Duration::from_hours(1);
+
+/// Fast gossip tick — convergence-shaped tests need quick `HeadsSummary`
+/// turnaround to catch cross-peer state changes within the test window.
+pub const FAST_GOSSIP_TICK: Duration = Duration::from_millis(100);
+
+/// Faster gossip tick — direct-stream backfill tests and peer-authority
+/// index tests need even quicker turnaround.
+pub const FASTER_GOSSIP_TICK: Duration = Duration::from_millis(50);
+
+/// Permissive `RuntimeCfg` for kernel-tier tests. No drift rate limits,
+/// `heads_summary_tick` chosen per the test's intent (see the three
+/// named tick constants above).
+///
+/// Body uses explicit literals (no `..RuntimeCfg::default()` spread):
+/// if `RuntimeCfg` gains a future field, test code should fail to
+/// compile until someone explicitly chooses the field's test value —
+/// surfacing the question at the right time rather than silently
+/// absorbing a default.
+#[must_use]
+pub fn fast_cfg(heads_summary_tick: Duration) -> RuntimeCfg {
+    RuntimeCfg {
+        drift_interval: 1,
+        drift_min_interval: Duration::from_secs(0),
+        drift_daily_cap: u32::MAX,
+        heads_summary_tick,
+        pending_cfg: PendingCfg::default(),
+        broadcast_capacity: 256,
+        kernel_fuel_table_version: 1,
+        drift_stash_cap: 256,
+        transport_error_halt_threshold: 5,
+    }
+}
 
 /// Install + instantiate the counter-state-apply fixture and return a
 /// fresh `StateApplyHandle`. Each call returns an independent wasmtime

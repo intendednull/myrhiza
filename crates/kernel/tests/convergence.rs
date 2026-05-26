@@ -12,26 +12,12 @@ use myrhiza_types::{GenesisV1, canonical_bincode};
 
 mod helpers;
 
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        heads_summary_tick: Duration::from_millis(100),
-        pending_cfg: PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
-
 /// Covers: mvp.md §15.1 #1+#2, convergence.md §4
 #[tokio::test]
 async fn single_originator_single_receiver_converges() {
     let harness = InProcessHarness::new(256, [0x11; 32]);
 
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
         .await;
@@ -83,7 +69,7 @@ async fn single_originator_single_receiver_converges() {
 #[tokio::test]
 async fn concurrent_multi_author_converges() {
     let harness = InProcessHarness::new(256, [0x22; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
         .await;
@@ -159,7 +145,7 @@ async fn concurrent_multi_author_converges() {
 #[tokio::test]
 async fn late_joiner_backfills_via_heads_summary() {
     let harness = InProcessHarness::new(256, [0x33; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
         .await;
@@ -217,7 +203,7 @@ async fn coexistence_two_topics_no_event_crossing() {
     let topic_b = myrhiza_types::Topic::derive(&app_bundle_hash, &seed_b, "main");
     assert_ne!(topic_a, topic_b);
 
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     // Peer1 spawns runtimes on BOTH topics.
     let peer_key_1 = myrhiza_kernel::identity::PeerKeypair::deterministic(1);
@@ -286,7 +272,7 @@ async fn coexistence_two_topics_no_event_crossing() {
 #[tokio::test]
 async fn drift_detected_when_state_apply_corrupted() {
     let harness = InProcessHarness::new(256, [0x44; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
         .await;
@@ -438,7 +424,7 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
     // overflow cannot accidentally fire; the only lag in the test is
     // the one injected below.
     let harness = InProcessHarness::new(64, [0x66; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
         .await;
@@ -842,7 +828,7 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
 #[tokio::test]
 async fn await_digest_does_not_return_on_stale_already_equal_state() {
     let harness = InProcessHarness::new(64, [0x99; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut peer_b = harness
         .spawn_peer(2, None, helpers::counter_handle(), cfg)
         .await;

@@ -49,13 +49,6 @@ fn topic() -> Topic {
     Topic::derive(&APP_BUNDLE, &TOPIC_SEED, "main")
 }
 
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        heads_summary_tick: Duration::from_millis(50),
-        ..RuntimeCfg::default()
-    }
-}
-
 fn genesis_payload(seed: [u8; 32], founder: AuthorPubkey) -> Vec<u8> {
     let g = GenesisV1 {
         seed,
@@ -147,7 +140,7 @@ async fn index_populated_by_heads_summary_receipt() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(101)),
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -183,7 +176,7 @@ async fn index_populated_by_heads_summary_receipt() {
         helpers::counter_handle(),
         kp_b,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -585,7 +578,7 @@ async fn pending_event_with_known_author_uses_direct_stream() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(401)),
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -628,7 +621,7 @@ async fn pending_event_with_known_author_uses_direct_stream() {
         helpers::counter_handle(),
         kp_b,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
-use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime, RuntimeCfg};
+use myrhiza_kernel::runtime::{AuthorCommand, PeerWarning, Runtime};
 use myrhiza_network::{GossipMessage, MemBus, MemNetwork, Network};
 use myrhiza_types::{
     AuthorHead, AuthorPubkey, BundleHash, DirectHeadsRequest, EventHash, EventRequest, GenesisV1,
@@ -37,16 +37,6 @@ const TOPIC_SEED: [u8; 32] = [0xCD; 32];
 
 fn topic() -> Topic {
     Topic::derive(&APP_BUNDLE, &TOPIC_SEED, "main")
-}
-
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        heads_summary_tick: Duration::from_millis(50),
-        ..RuntimeCfg::default()
-    }
 }
 
 // ---- helpers -----------------------------------------------------------------
@@ -123,7 +113,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(101)),
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -140,7 +130,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         helpers::counter_handle(),
         kp_b,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -227,7 +217,7 @@ async fn direct_backfill_target_peer_unreachable_logs_warning() {
         helpers::counter_handle(),
         kp_b,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -306,7 +296,7 @@ async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
         helpers::counter_handle(),
         kp_a,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -419,7 +409,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(601)),
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -439,7 +429,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         helpers::counter_handle(),
         kp_b,
         Some(AuthorKeypair::deterministic(602)),
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await
@@ -456,7 +446,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         helpers::counter_handle(),
         kp_c,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
     )
     .await

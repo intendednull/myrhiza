@@ -20,25 +20,6 @@ use myrhiza_types::{
 
 mod helpers;
 
-// ---- Helpers ----------------------------------------------------------------
-
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        // Long tick: tests check peer_warnings / hand-forged messages,
-        // not the periodic HeadsSummary path. A 1-hour tick ensures the
-        // timer doesn't fire during the test window and pollute the tap.
-        heads_summary_tick: Duration::from_hours(1),
-        pending_cfg: myrhiza_kernel::pending::PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
-
 // ============================================================================
 // Tests 1-2: sign/verify round-trip (pure-types, default flavor)
 // ============================================================================
@@ -251,7 +232,7 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
         helpers::counter_handle(),
         peer_kp_b_t7,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
         vec![],
     )
     .await
@@ -340,7 +321,7 @@ async fn runtime_drops_drift_with_bad_signature() {
         helpers::counter_handle(),
         peer_kp_b,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
         vec![],
     )
     .await
@@ -463,7 +444,7 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         helpers::counter_handle(),
         kp_for_b_runtime,
         None,
-        fast_cfg(),
+        helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
         vec![],
     )
     .await

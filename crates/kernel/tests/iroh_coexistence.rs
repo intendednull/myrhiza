@@ -16,26 +16,11 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
-use myrhiza_kernel::pending::PendingCfg;
-use myrhiza_kernel::runtime::{AuthorCommand, Runtime, RuntimeCfg};
+use myrhiza_kernel::runtime::{AuthorCommand, Runtime};
 use myrhiza_test_utils::iroh_harness::spawn_iroh_peer;
 use myrhiza_types::{BundleHash, GenesisV1, Topic, canonical_bincode};
 
 mod helpers;
-
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        heads_summary_tick: Duration::from_millis(100),
-        pending_cfg: PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
 
 /// Covers: mvp.md §15.1 #4
 ///
@@ -73,7 +58,7 @@ async fn iroh_two_apps_coexist_no_event_crossing() {
     let echo_topic = Topic::derive(&echo_bundle_hash, &seed, &topic_name);
     assert_ne!(counter_topic, echo_topic);
 
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let kp_counter_author = AuthorKeypair::deterministic(501);
     let kp_echo_author = AuthorKeypair::deterministic(502);
 
