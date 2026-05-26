@@ -214,61 +214,48 @@ macro_rules! __opt_lit {
 #[macro_export]
 macro_rules! myrhiza_app {
     (state_apply, $component:ident) => {
-        extern crate alloc;
-
-        #[global_allocator]
-        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
-
-        #[panic_handler]
-        fn panic(_info: &core::panic::PanicInfo) -> ! {
-            loop {}
-        }
-
-        wit_bindgen::generate!({
-            world: "state-apply",
-        });
-
-        struct $component;
-        export!($component);
+        $crate::__myrhiza_app_impl!("state-apply", $component);
     };
     (state_propose, $component:ident) => {
-        extern crate alloc;
-
-        #[global_allocator]
-        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
-
-        #[panic_handler]
-        fn panic(_info: &core::panic::PanicInfo) -> ! {
-            loop {}
-        }
-
-        wit_bindgen::generate!({
-            world: "state-propose",
-        });
-
-        struct $component;
-        export!($component);
+        $crate::__myrhiza_app_impl!("state-propose", $component);
     };
     (interaction, $component:ident) => {
-        extern crate alloc;
-
-        #[global_allocator]
-        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
-
-        #[panic_handler]
-        fn panic(_info: &core::panic::PanicInfo) -> ! {
-            loop {}
-        }
-
-        wit_bindgen::generate!({
-            world: "interaction",
-        });
-
-        struct $component;
-        export!($component);
+        $crate::__myrhiza_app_impl!("interaction", $component);
     };
     (behavior, $component:ident) => {
         compile_error!("behavior profile is reserved for v1.1; not yet wired in B-8");
+    };
+}
+
+/// Helper sub-macro: emit the boilerplate shared across the three
+/// non-`behavior` arms of [`myrhiza_app!`] (bump-allocator install,
+/// `#[panic_handler]`, `wit_bindgen::generate!` invocation,
+/// `struct + export!` pair). Hidden from the public surface; invoked
+/// only by [`myrhiza_app!`].
+///
+/// Splitting the common body out avoids the ~20 LOC × 3-profile copy
+/// that would otherwise duplicate verbatim — and lets the boilerplate
+/// evolve in one place when wit-bindgen's API shifts.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __myrhiza_app_impl {
+    ($world:literal, $component:ident) => {
+        extern crate alloc;
+
+        #[global_allocator]
+        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
+
+        #[panic_handler]
+        fn panic(_info: &core::panic::PanicInfo) -> ! {
+            loop {}
+        }
+
+        wit_bindgen::generate!({
+            world: $world,
+        });
+
+        struct $component;
+        export!($component);
     };
 }
 

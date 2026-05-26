@@ -35,129 +35,130 @@ Mapping: each spec section to the tests that prove it. Tests carry
 
 ## convergence.md §4
 - crates/kernel/src/state_apply.rs:263
-- crates/kernel/tests/convergence.rs:29
+- crates/kernel/tests/convergence.rs:15
 - crates/types/src/event.rs:177
 
 ## convergence.md §4.1
-- crates/kernel/tests/convergence.rs:82
-- crates/kernel/tests/iroh_convergence.rs:92
+- crates/kernel/tests/convergence.rs:68
+- crates/kernel/tests/iroh_convergence.rs:76
 
 ## convergence.md §4.2
-- crates/kernel/tests/attribution.rs:46
-- crates/kernel/tests/convergence.rs:158
-- crates/kernel/tests/convergence.rs:392
+- crates/kernel/tests/attribution.rs:27
+- crates/kernel/tests/convergence.rs:144
+- crates/kernel/tests/convergence.rs:378
 - crates/kernel/tests/halt_detection.rs:138
 - crates/kernel/tests/halt_detection.rs:162
-- crates/kernel/tests/iroh_convergence.rs:170
+- crates/kernel/tests/iroh_convergence.rs:154
 
 ## convergence.md §4.2 (deterministic variant per review M-9)
-- crates/kernel/tests/convergence.rs:426
+- crates/kernel/tests/convergence.rs:412
 
 ## convergence.md §4.2 — InvalidChain recovery via direct-stream when index populated (B-4.6 §4.1 test 6)
-- crates/kernel/tests/peer_authority_index.rs:766
+- crates/kernel/tests/peer_authority_index.rs:759
 
 ## convergence.md §4.2 — Pending/InvalidChain soft-nudge when index is empty (B-4.7 §3.1)
-- crates/kernel/tests/peer_authority_index.rs:668
+- crates/kernel/tests/peer_authority_index.rs:661
 
 ## convergence.md §4.2 — `MemBus::inject_lag(topic)` test affordance for
 - crates/network/tests/memory_basic.rs:89
 
 ## convergence.md §4.2 — concurrent direct-stream backfills (B-4.5 §4.1 test 6)
-- crates/kernel/tests/direct_backfill.rs:389
+- crates/kernel/tests/direct_backfill.rs:379
 
 ## convergence.md §4.2 — direct-stream HeadsSummary-driven backfill (B-4.5 §4.1 test 1)
-- crates/kernel/tests/direct_backfill.rs:99
+- crates/kernel/tests/direct_backfill.rs:89
 
 ## convergence.md §4.2 — direct-stream backfill failure (B-4.5 §4.1 test 2)
-- crates/kernel/tests/direct_backfill.rs:206
+- crates/kernel/tests/direct_backfill.rs:196
 
 ## convergence.md §4.2 — end-to-end convergence via direct-stream with a populated index (B-4.6 §4.1 test 4)
-- crates/kernel/tests/peer_authority_index.rs:545
+- crates/kernel/tests/peer_authority_index.rs:538
 
 ## convergence.md §4.2 — peer-authority index MRU move-to-front (B-4.6 §4.1 test 2)
-- crates/kernel/tests/peer_authority_index.rs:256
+- crates/kernel/tests/peer_authority_index.rs:249
 
 ## convergence.md §4.2 — peer-authority index capped at 8 per author (B-4.6 §4.1 test 3)
-- crates/kernel/tests/peer_authority_index.rs:427
+- crates/kernel/tests/peer_authority_index.rs:420
 
 ## convergence.md §4.2 — peer-authority index populated by HeadsSummary receipt (B-4.6 §4.1 test 1)
-- crates/kernel/tests/peer_authority_index.rs:125
+- crates/kernel/tests/peer_authority_index.rs:118
 
 ## convergence.md §4.2 — when an inbound event reveals the receiver is
-- crates/kernel/tests/convergence.rs:514
+- crates/kernel/tests/convergence.rs:500
 
 ## convergence.md §4.3
 - crates/kernel/src/digest.rs:70
 
 ## convergence.md §4.3 (deterministic topo-sort under arbitrary
-- crates/kernel/src/dag.rs:844
+- crates/kernel/src/dag.rs:857
 
 ## convergence.md §4.4
 - crates/kernel/tests/acceptance.rs:278
 - crates/kernel/tests/acceptance.rs:75
-- crates/kernel/tests/attribution.rs:220
-- crates/kernel/tests/attribution.rs:403
-- crates/kernel/tests/coexistence.rs:92
+- crates/kernel/tests/attribution.rs:201
+- crates/kernel/tests/attribution.rs:384
+- crates/kernel/tests/coexistence.rs:77
 - crates/kernel/tests/halt_detection.rs:224
 - crates/kernel/tests/halt_detection.rs:315
 - crates/kernel/tests/halt_detection.rs:365
 - crates/kernel/tests/halt_detection.rs:476
 
 ## convergence.md §4.4 — User-visible contract: a single-peer
-- crates/kernel/tests/attribution.rs:501
+- crates/kernel/tests/attribution.rs:482
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
-- crates/kernel/tests/convergence.rs:865
+- crates/kernel/tests/convergence.rs:851
 
 ## convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2)
-- crates/kernel/tests/perf_carryovers.rs:313
+- crates/kernel/tests/perf_carryovers.rs:306
 
 ## convergence.md §4.4 — prefix-mismatch fallback path (B-2.1 §3.4)
-- crates/kernel/tests/perf_carryovers.rs:120
+- crates/kernel/tests/perf_carryovers.rs:103
 
 ## convergence.md §4.4 — rejected branch of `try_tip_incremental` records drop (B-2.1 §3.4)
-- crates/kernel/tests/perf_carryovers.rs:478
+- crates/kernel/tests/perf_carryovers.rs:476
 
 ## convergence.md §4.4 — tip-fast-path on single-author chain (B-2.1 §3)
-- crates/kernel/tests/perf_carryovers.rs:64
+- crates/kernel/tests/perf_carryovers.rs:42
 
 ## convergence.md §4.4 — wire-decode failure surfaces as
 - crates/network/tests/iroh_gossip.rs:186
 
 ## convergence.md §4.4.1
-- crates/kernel/tests/convergence.rs:345
+- crates/kernel/tests/convergence.rs:331
 
 ## convergence.md §4.4.1 + review-finding M-8
-- crates/kernel/tests/convergence.rs:672
+- crates/kernel/tests/convergence.rs:658
 
 ## convergence.md §4.6
-- crates/kernel/tests/attribution.rs:101
-- crates/kernel/tests/attribution.rs:156
-- crates/kernel/tests/convergence.rs:204
+- crates/kernel/tests/attribution.rs:137
+- crates/kernel/tests/attribution.rs:82
+- crates/kernel/tests/coexistence.rs:506
+- crates/kernel/tests/convergence.rs:190
 
 ## convergence.md §4.6 (topic identity)
-- crates/kernel/tests/coexistence.rs:198
+- crates/kernel/tests/coexistence.rs:183
 
 ## convergence.md §4.6 — topic-binding on direct-stream requests (B-4.5 §4.1 test 3)
-- crates/kernel/tests/direct_backfill.rs:281
+- crates/kernel/tests/direct_backfill.rs:271
 
 ## convergence.md §4.7
-- crates/kernel/tests/convergence.rs:285
+- crates/kernel/tests/convergence.rs:271
 
 ## convergence.md §4.7 — `spawn_blocking` off-loop compute for drift-anchor digest (B-2.1 §4.2)
-- crates/kernel/tests/perf_carryovers.rs:646
+- crates/kernel/tests/perf_carryovers.rs:659
 
 ## convergence.md §4.7 — bad-signature drift surfaces as `PeerWarning::SignatureInvalid` (B-4.8 carryover)
-- crates/kernel/tests/attribution.rs:313
+- crates/kernel/tests/attribution.rs:294
 
 ## convergence.md §4.7 — multi-author convergence regression guard for tip-fast-path landing (B-2.1 §5 test 5)
-- crates/kernel/tests/perf_carryovers.rs:573
+- crates/kernel/tests/perf_carryovers.rs:576
 
 ## convergence.md §4.7 — off-loop digest byte-identical to direct in-line compute (B-2.1 §4.2)
-- crates/kernel/tests/perf_carryovers.rs:798
+- crates/kernel/tests/perf_carryovers.rs:812
 
 ## convergence.md §4.8
-- crates/kernel/tests/convergence.rs:392
+- crates/kernel/tests/convergence.rs:378
 
 ## crypto.md §9.1
 - crates/kernel/tests/persistence.rs:108
@@ -220,15 +221,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:408
 - crates/kernel/tests/acceptance.rs:51
 - crates/kernel/tests/acceptance.rs:75
+- crates/kernel/tests/coexistence.rs:506
 
 ## mvp.md §15.1 #1+#2
-- crates/kernel/tests/convergence.rs:29
+- crates/kernel/tests/convergence.rs:15
 
 ## mvp.md §15.1 #2
-- crates/kernel/tests/convergence.rs:82
-- crates/kernel/tests/iroh_convergence.rs:170
-- crates/kernel/tests/iroh_convergence.rs:36
-- crates/kernel/tests/iroh_convergence.rs:92
+- crates/kernel/tests/convergence.rs:68
+- crates/kernel/tests/iroh_convergence.rs:154
+- crates/kernel/tests/iroh_convergence.rs:20
+- crates/kernel/tests/iroh_convergence.rs:76
 
 ## mvp.md §15.1 #3
 - crates/myrhiza-cli/tests/cli_binary.rs:123
@@ -236,14 +238,17 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/myrhiza-cli/tests/cli_binary.rs:94
 
 ## mvp.md §15.1 #4
-- crates/kernel/tests/convergence.rs:204
-- crates/kernel/tests/iroh_coexistence.rs:40
+- crates/kernel/tests/convergence.rs:190
+- crates/kernel/tests/iroh_coexistence.rs:25
+
+## mvp.md §15.2
+- crates/kernel/tests/coexistence.rs:506
 
 ## networking.md §11.1
-- crates/kernel/tests/attribution.rs:588
+- crates/kernel/tests/attribution.rs:569
 
 ## networking.md §11.1 — `IrohNetwork::publish` and the
-- crates/kernel/tests/attribution.rs:618
+- crates/kernel/tests/attribution.rs:599
 
 ## networking.md §11.1 — iroh's `NodeID` pubkey
 - crates/network/tests/iroh_skeleton.rs:15
@@ -276,7 +281,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/acceptance.rs:278
 
 ## verification.md §22.5 — pre-check rejection coverage
-- crates/kernel/tests/perf_carryovers.rs:478
+- crates/kernel/tests/perf_carryovers.rs:476
 
 ## verification.md §22.8 — `PeerHandle::await_digest` must NOT
-- crates/kernel/tests/convergence.rs:824
+- crates/kernel/tests/convergence.rs:810
