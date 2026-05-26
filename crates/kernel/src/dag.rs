@@ -462,23 +462,36 @@ impl EventDag {
         let mut sub_indegree: BTreeMap<EventHash, usize> = BTreeMap::new();
         for hash in &in_subset {
             let event = &self.by_hash[hash];
-            let mut count = 0usize;
+            // Build a BTreeSet of in-subset parent hashes, mirroring
+            // the dedup discipline of `Self::insert` (lines 329–338).
+            // Without dedup, a non-founder seq=1 event whose explicit
+            // `deps` already contains the topic genesis would be
+            // counted twice (once in the `deps` loop, once in the
+            // implicit-genesis branch) — but `parents_to_children`
+            // dedups via BTreeSet, so only one decrement fires, the
+            // indegree never reaches 0, and the structural-invariant
+            // guard panics. Per plan-B-6 spec §6.3, poll is the first
+            // fixture whose events legitimately carry
+            // `deps = {genesis_hash}` on a non-founder chain head;
+            // K2 (`poll_multi_author_voting`) surfaces the regression
+            // if this dedup is removed.
+            let mut parents: BTreeSet<EventHash> = event
+                .deps
+                .iter()
+                .copied()
+                .filter(|d| in_subset.contains(d))
+                .collect();
             if event.prev != EventHash::ZERO && in_subset.contains(&event.prev) {
-                count += 1;
-            }
-            for d in &event.deps {
-                if in_subset.contains(d) {
-                    count += 1;
-                }
+                parents.insert(event.prev);
             }
             if event.seq == 1
                 && let Some(g_author) = self.genesis_author
                 && event.author != g_author
-                && genesis_in_subset.is_some()
+                && let Some(g_hash) = genesis_in_subset
             {
-                count += 1;
+                parents.insert(g_hash);
             }
-            sub_indegree.insert(*hash, count);
+            sub_indegree.insert(*hash, parents.len());
         }
 
         let mut ready: BTreeSet<EventHash> = sub_indegree
