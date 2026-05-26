@@ -12,26 +12,10 @@ use std::time::Duration;
 
 use bincode::Options;
 use myrhiza_kernel::identity::AuthorKeypair;
-use myrhiza_kernel::pending::PendingCfg;
-use myrhiza_kernel::runtime::RuntimeCfg;
 use myrhiza_test_utils::iroh_harness::IrohHarness;
 use myrhiza_types::{GenesisV1, canonical_bincode};
 
 mod helpers;
-
-fn fast_cfg() -> RuntimeCfg {
-    RuntimeCfg {
-        drift_interval: 1,
-        drift_min_interval: Duration::from_secs(0),
-        drift_daily_cap: u32::MAX,
-        heads_summary_tick: Duration::from_millis(100),
-        pending_cfg: PendingCfg::default(),
-        broadcast_capacity: 256,
-        kernel_fuel_table_version: 1,
-        drift_stash_cap: 256,
-        transport_error_halt_threshold: 5,
-    }
-}
 
 /// Covers: mvp.md §15.1 #2
 ///
@@ -42,7 +26,7 @@ fn fast_cfg() -> RuntimeCfg {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iroh_single_originator_single_receiver_converges() {
     let mut harness = IrohHarness::new([0x11; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
@@ -99,7 +83,7 @@ async fn iroh_single_originator_single_receiver_converges() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iroh_concurrent_multi_author_converges() {
     let mut harness = IrohHarness::new([0x22; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     let mut peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
@@ -178,7 +162,7 @@ async fn iroh_concurrent_multi_author_converges() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iroh_late_joiner_backfills_via_heads_summary() {
     let mut harness = IrohHarness::new([0x33; 32]);
-    let cfg = fast_cfg();
+    let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
         .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
