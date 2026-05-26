@@ -8,6 +8,7 @@ members = [
     "crates/kernel",
     "crates/network",
     "crates/sdk",
+    "crates/distribution",
     "crates/test-utils",
     "crates/myrhiza-cli",
     "examples/counter",
