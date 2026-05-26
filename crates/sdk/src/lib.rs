@@ -14,6 +14,7 @@
 #[cfg(target_arch = "wasm32")]
 extern crate alloc;
 
+pub mod macros;
 pub mod manifest;
 pub mod prelude;
 pub mod types;

@@ -1,9 +1,10 @@
 //! `use myrhiza_sdk::prelude::*;` brings the common SDK surface into
 //! scope.
 //!
-//! The macros (`manifest!`, `myrhiza_app!`) land in T2/T3 — this
-//! prelude is type-only for now.
+//! Includes manifest schema types, common Myrhiza types, and the
+//! `manifest!` declarative macro. (`myrhiza_app!` lands in T3.)
 
+pub use crate::manifest;
 pub use crate::manifest::{
     AbiSection, AppSection, AuthorIdentityClass, AuthorPolicy, CapabilitiesSection,
     ComponentsSection, DeterminismSection, DriftDetectionSection, HighValueOps, Manifest,
