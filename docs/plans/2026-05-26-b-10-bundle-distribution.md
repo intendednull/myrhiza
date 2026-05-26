@@ -70,13 +70,16 @@ No crate-level use yet — that comes in T1. This task is the workspace-level pi
 
 ```bash
 cargo metadata --format-version=1 > /dev/null
-cargo tree -p iroh-blobs 2>&1 | head -30
-# Expected: iroh-blobs v0.101.0 visible. Its `iroh` dep should be
-# exactly 1.0.0-rc.0 with no duplicate iroh versions in the tree.
 
-cargo tree -p iroh 2>&1 | grep "iroh v" | sort -u
-# Expected: single iroh version. Multiple lines = transitive
-# conflict; per spec §4.7 contingency paths, escalate.
+# Assert iroh-blobs is pinned to exactly 0.101.0.
+[ "$(cargo tree -p iroh-blobs 2>&1 | grep -E '^iroh-blobs v0\.101\.0' | wc -l)" = "1" ] \
+    && echo "iroh-blobs 0.101.0 OK" \
+    || { echo "MISMATCH: iroh-blobs not at 0.101.0"; exit 1; }
+
+# Assert iroh transitively resolves to exactly 1.0.0-rc.0, single version.
+[ "$(cargo tree -p iroh 2>&1 | grep -E '^iroh v=?1\.0\.0-rc\.0' | wc -l)" = "1" ] \
+    && echo "iroh 1.0.0-rc.0 OK" \
+    || { echo "MISMATCH: iroh not exactly 1.0.0-rc.0 or duplicated"; exit 1; }
 
 cargo check --workspace
 cargo check --workspace --all-features
@@ -542,6 +545,7 @@ publish/fetch land in later tasks.
 - Modify: `crates/manifest/src/schema.rs` (add 4 hash fields to `ComponentsSection`)
 - Modify: `crates/manifest/src/canonical.rs::tests` (extend `sample_manifest` to populate new fields with `None`)
 - Modify: any in-crate `ComponentsSection { ... }` literal construction (likely just `tests`)
+- Modify: `crates/test-utils/src/bundle.rs` — extend `build_signed_counter_bundle` + `build_signed_counter_bundle_three_components` to compute `BlobHash::blake3` over each on-disk component's bytes and populate the corresponding `*_hash` field before signing. State-tier test asserts the populated hashes match the on-disk blob bytes.
 
 **Implementation notes:**
 
@@ -593,15 +597,51 @@ pub struct ComponentsSection {
 }
 ```
 
-Field order matters for canonical-bincode determinism: add each `_hash` field IMMEDIATELY after its sibling path. This grouping is the convention; canonical-bincode is positional so adding fields at the end vs interleaved both produce different bytes — pick interleaved (matches the spec's diagram in §4.1).
+> **CALLOUT — byte-stability concession (do NOT skim past):**
+>
+> Field order matters for canonical-bincode determinism: add each
+> `_hash` field IMMEDIATELY after its sibling path. This grouping is
+> the convention; canonical-bincode is positional so adding fields at
+> the end vs interleaved both produce different bytes — pick
+> interleaved (matches the spec's diagram in §4.1).
+>
+> A schema delta to `ComponentsSection` IS a manifest-bytes break:
+> any pre-existing on-disk `manifest.bincode` from before B-10 no
+> longer decodes under the new schema, and any pre-signed manifest
+> fixture's signature no longer re-verifies under the new field
+> layout. This is acceptable because B-10 has not yet shipped any
+> persisted manifests outside test tempdirs (see Risk block below for
+> the grep verification step). Future schema deltas after B-10 ships
+> production manifests will require a versioned envelope; that's out
+> of scope here.
 
 **Existing fixtures that construct `ComponentsSection` literally:**
 
-Update each to add the four new fields as `None`. Per `grep -rn "ComponentsSection {" crates/`:
+Update each to add the four new fields as `None` (disk-only path bundles) OR with computed `BlobHash::blake3` (iroh-path bundles). Per `grep -rn "ComponentsSection {" crates/`:
 
 - `crates/manifest/src/canonical.rs::sample_manifest` — add 4 `None`s after each `state_apply`/`state_propose`/etc.
-- `crates/kernel/src/install.rs` (lines ~277-281, ~358-364) — extend test fixtures `write_fixture_bundle` + `write_two_component_fixture_bundle`.
+- `crates/kernel/src/install.rs` (lines ~277-281, ~358-364) — extend test fixtures `write_fixture_bundle` + `write_two_component_fixture_bundle`. These remain disk-only paths; `*_hash` fields stay `None`.
 - `crates/test-utils/src/bundle.rs` — `helpers_only_state_apply_manifest()`, `helpers_only_three_component_manifest()`, `helpers_only_state_apply_manifest_with_extra_cap()` — extend each.
+
+**Fixture-builder extension (the iroh-path bundles):** `build_signed_counter_bundle` and `build_signed_counter_bundle_three_components` in `crates/test-utils/src/bundle.rs` are the fixtures used by T11's kernel-tier acceptance test for the publish-on-A → fetch-on-B loop. They MUST populate the `*_hash` fields with the actual BLAKE3 of each on-disk component before signing the manifest, so the manifest signature commits to the hash claim and `BundleDistribution::fetch` can cross-check.
+
+Concretely, after building each `Vec<u8>` of component bytes and before constructing the `ComponentsSection`:
+
+```rust
+let state_apply_bytes: Vec<u8> = std::fs::read(&state_apply_path).expect("read");
+let state_apply_hash = myrhiza_types::BlobHash::blake3(&state_apply_bytes);
+// repeat for state_propose, interaction, behavior (if present)
+
+let components = ComponentsSection {
+    state_apply: Some("components/state-apply.wasm".into()),
+    state_apply_hash: Some(state_apply_hash),
+    state_propose: Some("components/state-propose.wasm".into()),
+    state_propose_hash: Some(state_propose_hash),
+    // ...
+};
+```
+
+The signing path is unchanged — `signed_body_bytes` already serializes the entire `ComponentsSection` and the signature commits to it; the only delta is that the populated `*_hash` fields now carry load-bearing values instead of `None`.
 
 **Signing-target byte stability check:** the manifest signature commits to `canonical_bincode(SignedBody)` per `crates/manifest/src/canonical.rs::signed_body_bytes`, where `SignedBody` includes `components`. Adding the new hash fields to `ComponentsSection` means **existing test fixtures' signatures will not re-verify** after the schema update — every fixture that hard-codes a manifest and signs it must be re-signed with the new schema.
 
@@ -630,6 +670,43 @@ fn components_section_hash_fields_roundtrip() {
     assert_eq!(cs, decoded);
 }
 ```
+
+**Fixture-builder hash-matching state-tier test** (in `crates/test-utils/src/bundle.rs::tests` or `crates/test-utils/tests/`, whichever the existing test pattern uses):
+
+```rust
+#[test]
+fn build_signed_counter_bundle_populates_hashes_matching_on_disk_bytes() {
+    use myrhiza_manifest::canonical;
+    use myrhiza_types::{BlobHash, canonical_bincode};
+
+    let bundle = build_signed_counter_bundle();
+    // Decode the signed manifest written by the fixture.
+    let manifest_bytes = std::fs::read(
+        bundle.bundle_dir.join(&bundle.manifest_path),
+    ).expect("read manifest");
+    let manifest: myrhiza_manifest::schema::Manifest = canonical_bincode()
+        .deserialize(&manifest_bytes)
+        .expect("decode manifest");
+    let on_disk_bytes = std::fs::read(
+        bundle.bundle_dir.join(manifest.components.state_apply.as_deref().unwrap()),
+    ).expect("read state-apply");
+
+    assert_eq!(
+        manifest.components.state_apply_hash,
+        Some(BlobHash::blake3(&on_disk_bytes)),
+        "fixture builder must populate state_apply_hash matching the on-disk bytes",
+    );
+}
+
+#[test]
+fn build_signed_counter_bundle_three_components_populates_all_hashes() {
+    // Same shape, but also asserts state_propose_hash + interaction_hash
+    // match their respective on-disk bytes.
+    // (Body elided — same pattern as the two-component test above.)
+}
+```
+
+This test fails on the unmodified fixture (which produces `state_apply_hash: None`) and passes only after the fixture-builder extension above lands. It catches any future regression where the fixture builder forgets to recompute the hash after changing a component file.
 
 **Verification commands:**
 
@@ -845,6 +922,15 @@ must first call BundleDistribution::fetch (T8).
 **Spec ref:** §4.4 (revocation schema + state machine — `RevocationLog::apply(prior, event) -> RevocationLog` purity); §6.1 (state-tier test enumeration).
 
 **Subject:** Implement `RevocationEvent`, `RevocationLog`, `RevocationError` in `crates/distribution/src/revocation.rs`. The state machine is a pure function of `(prior state, signed event)`: no clock, no network, no I/O. State-tier tests cover signature verification, seq monotonicity, `MAX_REVOCATION_JUMP` boundary, double-revoke semantic idempotence.
+
+> **MANDATORY (purity invariant):** the `revoked_at` field is
+> informational only. `RevocationLog::apply` MUST NOT consult
+> `SystemTime::now`, any clock, or any non-deterministic source.
+> Cross-peer convergence depends on this — purity invariant per
+> CLAUDE.md ("State-apply components must be pure functions of
+> `(prior state, event)` plus the deterministic helper set"). The
+> revocation log is a kernel-resident state machine analog and
+> inherits the same contract.
 
 **Files touched:**
 - Create: `crates/distribution/src/revocation.rs`
@@ -1549,44 +1635,41 @@ The exact `iroh_blobs` API names will differ from this sketch. Spec §12 questio
 
 When adapting, follow the existing precedent from `crates/network/src/iroh_transport.rs` (which adapted plan-B-4.0's hypothetical names against rc.0 reality) and document in the commit body.
 
-**Unit test** (single fast smoke):
+**Unit tests at T7:**
+
+Keep any pure-data unit tests (e.g. `check_hash` matching / mismatching with synthetic byte arrays — no endpoint required) inline in the `blobs.rs::tests` module:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn publish_returns_manifest_hash_consistent_with_blake3() {
-        // Construct a minimal iroh endpoint over loopback. This is a
-        // single-peer smoke test — full publish-then-fetch lives in
-        // the kernel-tier acceptance test (T11).
-        let lookup = iroh::address_lookup::MemoryLookup::default();
-        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
-            .address_lookup(lookup)
-            .bind()
-            .await
-            .expect("bind");
+    #[test]
+    fn check_hash_accepts_none_declared() {
+        // disk-only bundles: no declared hash → trivially OK
+        assert!(BundleDistribution::check_hash(b"any", None).is_ok());
+    }
 
-        let dist = BundleDistribution::new(endpoint);
+    #[test]
+    fn check_hash_accepts_matching_declared() {
+        let bytes = b"\x00asm\x01\x00\x00\x00";
+        let h = BlobHash::blake3(bytes);
+        assert!(BundleDistribution::check_hash(bytes, Some(h)).is_ok());
+    }
 
-        let fake_state_apply = b"\x00asm\x01\x00\x00\x00".to_vec();
-        let state_apply_hash = BlobHash::blake3(&fake_state_apply);
-        // ... build a minimal Manifest, sign it, encode canonical bincode ...
-        // (Detail elided here — see test fixture in T10's IrohHarness
-        // extension.)
-
-        // The published manifest_hash MUST equal BLAKE3(manifest_bytes).
-        let manifest_bytes = b"placeholder canonical bincode".to_vec();
-        // The result must equal the iroh-blobs Hash of the bytes:
-        let expected = BlobHash::blake3(&manifest_bytes);
-        // (This test will need a fully constructed Manifest — the
-        // implementer must build one with hash fields populated.
-        // Keep this test simple; if it grows above ~30 lines, defer
-        // the deeper assertion to T11's kernel-tier test.)
+    #[test]
+    fn check_hash_rejects_mismatched_declared() {
+        let bytes = b"\x00asm\x01\x00\x00\x00";
+        let wrong = BlobHash::from_bytes([0xAA; 32]);
+        let err = BundleDistribution::check_hash(bytes, Some(wrong)).expect_err("must reject");
+        assert!(matches!(err, PublishError::ComponentHashMismatch { .. }));
     }
 }
 ```
+
+These exercise `BundleDistribution::check_hash` purely — no `iroh::Endpoint`, no `MemoryLookup`, no test-utils dep on `crates/distribution/`.
+
+**iroh-blobs integration is verified at T11 (kernel-tier e2e), not T7.** The publish+fetch round-trip through real iroh-blobs over loopback QUIC requires the `IrohHarness` from `crates/test-utils/` (extended at T10). `crates/distribution/` does NOT depend on `crates/test-utils/` (dep direction per spec §4.6 is the other way — test-utils gains `myrhiza-distribution` at T10). Constructing an iroh `Endpoint` standalone inside `crates/distribution/`'s unit tests would either (a) duplicate harness logic in the production crate, or (b) introduce a cyclic dev-dep through test-utils. Both are wrong; defer to T11.
 
 **Verification commands:**
 
@@ -1808,25 +1891,25 @@ impl BundleDistribution {
 }
 ```
 
-**Crate-boundary handling (the question raised in the handoff):**
+**Crate-boundary handling — `BundleAddress` move (known-up-front per spec §4.6):**
 
-`MaterializedBundle::address` is a `myrhiza_kernel::BundleAddress::Disk`. To construct it, `crates/distribution` must import `crates/kernel`. **This is intentional and matches spec §4.6** (`crates/kernel depends-on: crates/distribution (new dep)`). The dependency direction is:
+Move `BundleAddress` from `crates/kernel/src/install.rs` to `crates/types/src/bundle_address.rs` (a known-up-front step per spec §4.6's declared dep direction).
+
+Spec §4.6 declares `distribution → types, manifest, network` and `kernel → distribution`. `MaterializedBundle::address: BundleAddress` (returned from `BundleDistribution::fetch`) requires `BundleAddress` to be reachable from `crates/distribution/`. Per the declared dep direction, the only place it can live without inducing a circular dep is `crates/types/` — alongside `BlobHash`, `EventHash`, `BundleHash`, all pure-data locator newtypes.
+
+The move is reserved for T8 (not T4) because the dependency the move enables — `distribution` returning `BundleAddress` from `fetch` — only manifests at T8; relocating in T4 would be premature.
+
+The clean dep direction after the move:
 
 ```
-distribution → kernel (for BundleAddress)
-kernel → distribution (for BundleDistribution + MaterializedBundle)
+distribution → types (for BundleAddress)
+kernel       → types (for BundleAddress)
+kernel       → distribution (for BundleDistribution + MaterializedBundle)
 ```
 
-Wait — that's circular. **Re-read spec §4.6 carefully**: it says "`crates/kernel/ depends-on: crates/distribution (new dep)`" but does NOT list `crates/kernel` as a dep of distribution. Yet `MaterializedBundle::address: BundleAddress` requires the type to come from somewhere.
+`crates/kernel/src/lib.rs` retains `pub use myrhiza_types::BundleAddress` as the backwards-compat re-export so external code referring to `myrhiza_kernel::BundleAddress` continues to compile.
 
-**Resolution (matches spec §3.7 / §4.6 intent):** Move the `BundleAddress` enum from `crates/kernel/src/install.rs` into a more-foundational crate. Two options:
-
-(a) Move `BundleAddress` to `crates/types/` — clean dep direction (`distribution → types`, `kernel → types`, no circular).
-(b) Move `BundleAddress` to `crates/distribution/` (and have `crates/kernel` import it from there).
-
-**Pick (a)** — `BundleAddress` is a pure-data locator (variant tag + `PathBuf` + `BlobHash`), no I/O, no behavior. It belongs in `crates/types/` alongside `BlobHash`, `EventHash`, `BundleHash`. This change extends T4's scope retroactively — call this out in the migration commit body OR move the enum in this task as part of the T8 wiring. **Move it in T8** (the dependency the move makes possible — `distribution` returning `BundleAddress` from `fetch` — only manifests at T8; the move at T4 would be premature).
-
-So: **T8 also moves `BundleAddress` from `crates/kernel/src/install.rs` to `crates/types/src/bundle_address.rs`**:
+**Concrete change at T8:** create `crates/types/src/bundle_address.rs`:
 
 ```rust
 // crates/types/src/bundle_address.rs
@@ -1886,8 +1969,8 @@ decode; pull each declared component blob; verify each *_hash matches
 manifest claim; materialize into tempdir; return BundleAddress::Disk.
 
 Crate-boundary: move BundleAddress from crates/kernel/src/install.rs
-to crates/types/src/bundle_address.rs (myrhiza_kernel still re-exports
-it for backwards compat). This breaks the would-be circular dep —
+to crates/types/src/bundle_address.rs (a known-up-front step per spec
+§4.6 dep direction; myrhiza_kernel re-exports for backwards compat).
 distribution returns BundleAddress; kernel imports BundleDistribution.
 
 myrhiza-kernel gains dep on myrhiza-distribution; network-iroh feature
@@ -2170,6 +2253,26 @@ pub async fn spawn_iroh_peer(
 
 **API note**: `iroh_blobs::ALPN` (top-level const) per spec §6.3. If the actual const is `iroh_blobs::BlobsProtocol::ALPN` (associated const), adapt. The `protocol_handler().clone()` invocation assumes `BlobsProtocol: Clone` (likely — iroh's protocol handlers Clone via Arc); if not, take a reference or stash the handle differently. **The structural goal is: `BlobsProtocol::ALPN` registered against the same router that holds gossip + heads.**
 
+**Pre-integration: confirm the ALPN const name in iroh-blobs 0.101.0.**
+
+The spec sketches `iroh_blobs::ALPN` (top-level) but the actual const may be `iroh_blobs::BlobsProtocol::ALPN` (associated) or a different identifier in the rc-pinned crate. Run ONE of the following before writing the `.accept(...)` line:
+
+```bash
+# Option A: grep the iroh-blobs source under cargo's registry cache
+cargo metadata --format-version 1 \
+    | jq -r '.packages[] | select(.name=="iroh-blobs") | .manifest_path' \
+    | xargs dirname \
+    | xargs -I{} rg 'pub const ALPN|impl ProtocolHandler' {}/src/ \
+    | head -10
+
+# Option B: build the docs and grep the generated HTML / module index
+cargo doc -p iroh-blobs --no-deps 2>/dev/null \
+    && rg 'pub const ALPN|impl ProtocolHandler' target/doc/iroh_blobs/ \
+    | head -10
+```
+
+Implementer MUST confirm the exact const path (`iroh_blobs::ALPN` vs `iroh_blobs::BlobsProtocol::ALPN` vs other) before writing the integration line in `iroh_harness.rs`. Document the actual path used in the commit body if it differs from the spec sketch.
+
 **Verification commands:**
 
 ```bash
@@ -2277,11 +2380,11 @@ async fn b10_fetch_via_iroh_blobs_closes_mvp_15_1_criterion_1() {
         std::fs::read(test_bundle.bundle_dir.join(p)).expect("read interaction")
     });
 
-    // **The existing fixture builder DOES NOT POPULATE *_hash fields**
-    // (that's T3's work, and updating build_signed_counter_bundle_three_components
-    // is part of T3 if it didn't already happen). Verify the fixture
-    // populates them now; if not, this test fails on
-    // ComponentMissingHash and the fixture builder needs the patch.
+    // T3 extended `build_signed_counter_bundle_three_components` to
+    // populate the *_hash fields with the BLAKE3 of each on-disk
+    // component before signing. If this test fails on
+    // FetchError::ComponentMissingHash, the fixture builder regressed
+    // — root-cause in the fixture, not here.
 
     // PUBLISH on peer A.
     let manifest_hash = stack_a
@@ -2476,7 +2579,7 @@ The plan's mechanical enforcement:
 | T5 | Pure-function purity in apply — accidentally introducing a `SystemTime::now` would be a correctness bug | Test that compares two runs of apply with identical inputs across two threads must produce identical outputs (byte-equal). Add this as the first state-tier test. |
 | T6 | Structural drift from `RevocationLog` shape | Keep `apply` skeleton parallel; deviate only on `latest_announcement` semantics. |
 | T7 | iroh-blobs API name uncertainty | Adapt at impl time + document in commit body; precedent from B-4.0 / B-4.1. |
-| T8 | Crate-boundary handling (would-be circular dep distribution↔kernel via `BundleAddress`) | Move `BundleAddress` to `crates/types/` (foundational crate); `crates/kernel/` re-exports for backwards compat. |
+| T8 | `BundleAddress` move (known-up-front per spec §4.6) is a public-surface migration | Move `BundleAddress` to `crates/types/` (foundational crate); `crates/kernel/` re-exports for backwards compat. The move is the dep-direction prerequisite for `BundleDistribution::fetch` returning `BundleAddress` from `crates/distribution/`. |
 | T9 | Reusing `PeerWarning::SignatureInvalid` from B-4.8 — may need a new variant if shape doesn't fit | Inspect `runtime.rs:240`; if needed, add `PeerWarning::RevocationSignatureInvalid` rather than overload. Within spec scope. |
 | T10 | Existing iroh tests must continue to pass after ALPN registration | Per-task verification re-runs `iroh_convergence` + `iroh_coexistence`. |
 | T11 | Test flake under iroh-blobs API churn or network jitter | `tokio::time::timeout(30s)`; release-mode validation. Settle-time before fetch per E2E-1 precedent. |
@@ -2500,11 +2603,18 @@ Matches spec §11's 5-7 day envelope:
 
 **Risk-adjusted upper bound: 7 days. Likely-case middle: 5-6 days.** Matches spec §11.
 
+> **Risk note (T11 slip):** T11 may slip by 1 day per spec §5 risk row 1
+> (iroh-blobs API rotation under exact-version pin — the iroh-blobs
+> 0.101.0 surface differs from the spec's sketch in §4.3 in ways that
+> only manifest under real fetch). Buffer is Day 5.5–6; if T11 still
+> doesn't pass by end of Day 6, escalate per spec §5 contingency
+> rather than expanding T11 into T12's docs window.
+
 ---
 
 ## Self-review (per writing-plans skill)
 
 1. **Spec coverage**: Every spec section maps to at least one task. The deferred §6.4 (revocation propagation kernel-tier test) is explicitly called out as "optional within budget" in T9; if time-pressed, it becomes a follow-up PR.
 2. **Placeholder scan**: One acknowledged placeholder — the T7/T8 `iroh-blobs` API names are tagged "adapt at impl time" with spec §4.3 / §9 / `prior-art/iroh/lessons.md` §Avoid row 1 backing the uncertainty. This matches the precedent set by B-4.0 (where iroh's preset arg + endpoint_id naming was similarly adapted at impl time). NOT a plan failure — it's documented uncertainty.
-3. **Type consistency**: `BlobHash` defined in T1 used identically across T2–T11. `BundleAddress` enum from T4 (in `crates/kernel`) moves to `crates/types` in T8 — flagged explicitly in T8's "Crate-boundary handling" subsection so the implementer doesn't trip over the migration.
+3. **Type consistency**: `BlobHash` defined in T1 used identically across T2–T11. `BundleAddress` enum lands in `crates/kernel` at T4 and relocates to `crates/types` at T8 per spec §4.6's declared dep direction — the move is reserved for T8 because that's when the cross-crate dependency first materializes; `crates/kernel/src/lib.rs` re-exports for backwards compat.
 4. **Task order**: each task's deps precede it. T0 (workspace dep) before any feature-gated code. T1 (`BlobHash`) before T3 (manifest fields use it) + T2 (conversions use it). T3 (manifest fields) before T7 (publish populates them) + T8 (fetch reads them). T4 (`BundleAddress` enum) before T8 (fetch returns it). T5 + T6 (state machines) before T9 (dispatch wires them). T10 (harness) before T11 (test uses harness). T11 closes the v1 criterion; T12 polishes.
