@@ -18,3 +18,9 @@ pub mod macros;
 pub mod manifest;
 pub mod prelude;
 pub mod types;
+
+// Boilerplate is only relevant on wasm32 targets — re-exposed via the
+// `myrhiza_app!` macro, not directly consumed. See spec §3.1.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub mod __boilerplate;

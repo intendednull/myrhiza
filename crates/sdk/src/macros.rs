@@ -151,3 +151,122 @@ macro_rules! __opt_lit {
         Some($lit.into())
     };
 }
+
+/// Application initializer macro — replaces ~80 LOC of per-component
+/// boilerplate with one invocation.
+///
+/// Per docs/specs/2026-05-26-b-8-sdk-design.md §2.1 + §3.1 + §3.2.
+///
+/// Four arms map to the four component profiles. `state_apply`,
+/// `state_propose`, and `interaction` emit the standard boilerplate
+/// (`#![no_std]`, `#![no_main]`, bump allocator, `#[panic_handler]`,
+/// `wit_bindgen::generate!`, `export!`). The `behavior` arm is
+/// reserved for v1.1 and surfaces a `compile_error!`.
+///
+/// # Example
+///
+/// ```ignore
+/// // In a wasm32-unknown-unknown cdylib crate:
+/// use myrhiza_sdk::prelude::*;
+///
+/// myrhiza_app!(state_apply, Component);
+///
+/// impl Guest for Component {
+///     fn apply(prior_state: Vec<u8>, event: Vec<u8>) -> (Verdict, Vec<u8>) {
+///         // ...
+///     }
+///     fn state_digest(state: Vec<u8>) -> Vec<u8> {
+///         // ...
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! myrhiza_app {
+    (state_apply, $component:ident) => {
+        #![no_std]
+        #![no_main]
+        #![allow(unsafe_op_in_unsafe_fn)]
+        extern crate alloc;
+
+        #[global_allocator]
+        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
+
+        #[panic_handler]
+        fn panic(_info: &core::panic::PanicInfo) -> ! {
+            loop {}
+        }
+
+        wit_bindgen::generate!({
+            world: "state-apply",
+            path: $crate::local_wit_dir!(),
+        });
+
+        struct $component;
+        export!($component);
+    };
+    (state_propose, $component:ident) => {
+        #![no_std]
+        #![no_main]
+        #![allow(unsafe_op_in_unsafe_fn)]
+        extern crate alloc;
+
+        #[global_allocator]
+        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
+
+        #[panic_handler]
+        fn panic(_info: &core::panic::PanicInfo) -> ! {
+            loop {}
+        }
+
+        wit_bindgen::generate!({
+            world: "state-propose",
+            path: $crate::local_wit_dir!(),
+        });
+
+        struct $component;
+        export!($component);
+    };
+    (interaction, $component:ident) => {
+        #![no_std]
+        #![no_main]
+        #![allow(unsafe_op_in_unsafe_fn)]
+        extern crate alloc;
+
+        #[global_allocator]
+        static GLOBAL: $crate::__boilerplate::BumpAlloc = $crate::__boilerplate::BumpAlloc;
+
+        #[panic_handler]
+        fn panic(_info: &core::panic::PanicInfo) -> ! {
+            loop {}
+        }
+
+        wit_bindgen::generate!({
+            world: "interaction",
+            path: $crate::local_wit_dir!(),
+        });
+
+        struct $component;
+        export!($component);
+    };
+    (behavior, $component:ident) => {
+        compile_error!("behavior profile is reserved for v1.1; not yet wired in B-8");
+    };
+}
+
+/// Resolve the consumer crate's `wit/` directory.
+///
+/// Expands to `concat!(env!("CARGO_MANIFEST_DIR"), "/wit")` — the macro
+/// lives in the SDK but emits the **consumer's** path. `CARGO_MANIFEST_DIR`
+/// is set by Cargo to the caller's manifest dir at macro-expansion time,
+/// so the resolved path points at `examples/<app>/wit/` (kept in sync with
+/// `crates/sdk/wit/` via `just sync-wit`, asserted by the in-sync test).
+///
+/// The `local_` prefix encodes the "lives-in-SDK, emits-consumer-path"
+/// semantic asymmetry that would otherwise surprise readers expecting
+/// `myrhiza_sdk::local_wit_dir!()` to return the SDK's own dir.
+#[macro_export]
+macro_rules! local_wit_dir {
+    () => {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/wit")
+    };
+}
