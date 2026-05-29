@@ -43,11 +43,12 @@ use std::time::Duration;
 use myrhiza_kernel::drift::DriftDetected;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
 use myrhiza_kernel::runtime::{
-    AuthorCommand, EquivocationFlag, PeerWarning, Runtime, RuntimeCfg, RuntimeHandle,
+    AuthorCommand, EquivocationFlag, PeerWarning, PublicationAnnounced, RevocationApplied, Runtime,
+    RuntimeCfg, RuntimeHandle,
 };
 use myrhiza_kernel::state_apply::StateApplyHandle;
 use myrhiza_network::{MemBus, MemNetwork};
-use myrhiza_types::{BundleHash, EventHash, Topic};
+use myrhiza_types::{AuthorPubkey, BundleHash, EventHash, Topic};
 use tokio::sync::oneshot;
 
 /// Test-side handle to a single peer inside an [`InProcessHarness`].
@@ -249,6 +250,47 @@ impl PeerHandle {
             .clone()
     }
 
+    /// Snapshot the peer's revocation-applied log (B-11 §4.3 surface).
+    ///
+    /// Each entry is a [`RevocationApplied`] the runtime pushed after a
+    /// gossip-edge-verified + monotonic-seq-accepted [`RevocationEvent`]
+    /// on an installed author's revocation topic. Mirrors the
+    /// `drift_log()` / `peer_warnings()` clone-out pattern.
+    ///
+    /// [`RevocationEvent`]: myrhiza_distribution::RevocationEvent
+    ///
+    /// # Panics
+    /// Panics if the underlying `revocation_events` mutex is poisoned —
+    /// i.e., if the runtime task panicked while holding the lock. In a
+    /// healthy test run this is structurally unreachable.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn revocation_events(&self) -> Vec<RevocationApplied> {
+        self.runtime
+            .revocation_events
+            .lock()
+            .expect("revocation_events mutex")
+            .clone()
+    }
+
+    /// Snapshot the peer's publication-announced log (B-11 §4.3 surface).
+    ///
+    /// Twin of [`Self::revocation_events`] over [`PublicationAnnounced`].
+    ///
+    /// # Panics
+    /// Panics if the underlying `publication_events` mutex is poisoned —
+    /// i.e., if the runtime task panicked while holding the lock. In a
+    /// healthy test run this is structurally unreachable.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn publication_events(&self) -> Vec<PublicationAnnounced> {
+        self.runtime
+            .publication_events
+            .lock()
+            .expect("publication_events mutex")
+            .clone()
+    }
+
     /// Snapshot the peer's map of events rejected by `state-apply`,
     /// keyed by event `wire_hash` and valued with the reject reason.
     ///
@@ -343,6 +385,10 @@ impl InProcessHarness {
     /// Spawn a peer with the given keypair seeds + state-apply handle.
     /// `author_seed = None` makes the peer read-only.
     ///
+    /// `installed_authors` are the authors whose revocation + publication
+    /// topics this peer auto-subscribes (B-11 §3.3); pass `vec![]` for
+    /// the common case where the test does not exercise revocation.
+    ///
     /// # Panics
     /// Panics if [`Runtime::start`] fails — which only occurs if the
     /// initial topic subscription fails on the in-memory network. The
@@ -355,6 +401,7 @@ impl InProcessHarness {
         author_seed: Option<u64>,
         handle: StateApplyHandle,
         cfg: RuntimeCfg,
+        installed_authors: Vec<AuthorPubkey>,
     ) -> PeerHandle {
         let peer_key = PeerKeypair::deterministic(peer_seed);
         let net = MemNetwork::new(self.bus.clone(), peer_key.public);
@@ -369,6 +416,7 @@ impl InProcessHarness {
             author_key,
             cfg,
             vec![],
+            installed_authors,
         )
         .await
         .expect("Runtime::start");

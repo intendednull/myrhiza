@@ -64,6 +64,7 @@ async fn tip_fast_path_taken_for_single_author_via_author_path() {
             Some(1),
             helpers::counter_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
 
@@ -135,6 +136,7 @@ async fn replay_fallback_when_topo_reorders() {
             Some(1),
             helpers::counter_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
     // Peer B is read-only — we author B's events manually below to
@@ -145,6 +147,7 @@ async fn replay_fallback_when_topo_reorders() {
             None,
             helpers::counter_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
 
@@ -337,6 +340,7 @@ async fn replay_fallback_when_drain_loop_inserts_multiple() {
             None,
             helpers::counter_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
 
@@ -494,6 +498,7 @@ async fn incremental_apply_reject_records_drop() {
             None,
             helpers::pre_check_rejector_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
 
@@ -573,6 +578,7 @@ async fn convergence_unchanged_after_tip_fast_path_landing() {
             Some(1),
             helpers::counter_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
     let mut peer_b = harness
@@ -581,6 +587,7 @@ async fn convergence_unchanged_after_tip_fast_path_landing() {
             Some(2),
             helpers::counter_handle(),
             helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
+            vec![],
         )
         .await;
 
@@ -682,10 +689,10 @@ async fn compute_anchor_digest_off_loop_does_not_block_membus_publish() {
     let harness = InProcessHarness::new(256, [0xA6; 32]);
     let cfg = helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
     let peer_b = harness
-        .spawn_peer(2, Some(2), helpers::counter_handle(), cfg)
+        .spawn_peer(2, Some(2), helpers::counter_handle(), cfg, vec![])
         .await;
 
     let kp_a = AuthorKeypair::deterministic(1);

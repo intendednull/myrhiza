@@ -16,12 +16,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bincode::Options;
+use myrhiza_distribution::topic::{derive_publication_topic, derive_revocation_topic};
+use myrhiza_distribution::{
+    PublicationEvent, PublicationLog, RevocationEvent, RevocationLog, dispatch,
+};
 use myrhiza_network::{
     ArcRequestHandler, GossipMessage, HeadsResponder, HeadsStream, NetError, Network,
     RequestHandler, SubError, Subscription,
 };
 use myrhiza_types::{
-    AuthorPubkey, AuthorSeq, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
+    AuthorPubkey, AuthorSeq, BlobHash, BundleHash, DirectHeadsRequest, DriftAnchor, DriftMessage,
     DriftSignedPayload, Event, EventHash, HeadsSummary, HeadsSummarySignedPayload, Hlc, PeerPubkey,
     Topic, canonical_bincode,
 };
@@ -158,6 +162,49 @@ pub struct EquivocationFlag {
 
     /// Peer that delivered the conflicting event, when known.
     pub peer: Option<PeerPubkey>,
+}
+
+/// Observation-log record: a peer-author's revocation event verified at
+/// the gossip edge and applied to that author's [`RevocationLog`].
+///
+/// Surfaced via the `RuntimeHandle::revocation_events` poll-log (wired in
+/// B-11 T3). Carries the bundle hash an embedder correlates against
+/// installed bundles to drive the uninstall prompt
+/// ([`distribution.md`] §10.5 step 7). This is an
+/// observation event, not a state-apply path — surfacing order is the
+/// per-peer gossip-arrival order (non-converging by design, like
+/// [`DriftDetected`]). Per B-11 spec §3.6 / §4.2.
+///
+/// [`RevocationLog`]: myrhiza_distribution::RevocationLog
+/// [`distribution.md`]: ../../../docs/specs/2026-05-09-myrhiza-master-design/distribution.md
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RevocationApplied {
+    /// Author whose revocation log advanced.
+    pub author: AuthorPubkey,
+    /// Bundle hash the author revoked.
+    pub revoked_bundle_hash: BlobHash,
+    /// `revocation_seq` of the applied event (monotonic per author).
+    pub revocation_seq: u64,
+}
+
+/// Observation-log record: a peer-author's publication event verified at
+/// the gossip edge and applied to that author's [`PublicationLog`].
+///
+/// Surfaced via the `RuntimeHandle::publication_events` poll-log (wired
+/// in B-11 T3). Per B-11 spec §3.6 / §4.2. Like [`RevocationApplied`],
+/// an observation event with no determinism contract.
+///
+/// [`PublicationLog`]: myrhiza_distribution::PublicationLog
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicationAnnounced {
+    /// Author whose publication log advanced.
+    pub author: AuthorPubkey,
+    /// Hash of the manifest the author published.
+    pub manifest_hash: BlobHash,
+    /// Version string the author announced.
+    pub version: String,
+    /// `publication_seq` of the applied event (monotonic per author).
+    pub publication_seq: u64,
 }
 
 /// Observation-log record: non-fatal peer / runtime warning.
@@ -413,6 +460,21 @@ pub struct RuntimeHandle {
     /// compiles the kernel library without `--test` when building
     /// dependent integration test crates).
     pub tip_fast_path_hits: Arc<Mutex<usize>>,
+
+    /// Append-only log of revocation events verified + applied for an
+    /// installed author's revocation topic. Clone of the same `Arc` the
+    /// runtime task writes (spec §3.5 poll-log pattern, twin of
+    /// `drift_log`). An embedder polls this to learn which bundle hashes
+    /// were flagged and drive the [`distribution.md`] §10.5 step-7
+    /// uninstall prompt. Per B-11 spec §4.3.
+    ///
+    /// [`distribution.md`]: ../../../docs/specs/2026-05-09-myrhiza-master-design/distribution.md
+    pub revocation_events: Arc<Mutex<Vec<RevocationApplied>>>,
+
+    /// Append-only log of publication events verified + applied for an
+    /// installed author's publication topic. Twin of `revocation_events`.
+    /// Per B-11 spec §4.3.
+    pub publication_events: Arc<Mutex<Vec<PublicationAnnounced>>>,
 }
 
 /// Bounded count of peers tracked per author in the
@@ -546,6 +608,36 @@ pub struct Runtime {
     /// `request_author_chain_gap` to pick a direct-stream target.
     /// Per B-4.6 spec §3.1.
     peer_authority_index: BTreeMap<AuthorPubkey, Vec<PeerPubkey>>,
+
+    /// Per-author revocation-log state. One entry per installed author
+    /// (lazily defaulted on first inbound event). Advanced by
+    /// [`Self::handle_revocation`] after the gossip-edge signature check
+    /// and the monotonic-seq / flood-cap checks in
+    /// [`RevocationLog::apply`]. Per B-11 spec §4.3.
+    revocation_logs: BTreeMap<AuthorPubkey, RevocationLog>,
+
+    /// Per-author publication-log state. Structural twin of
+    /// `revocation_logs`; advanced by [`Self::handle_publication`].
+    /// Per B-11 spec §4.3.
+    publication_logs: BTreeMap<AuthorPubkey, PublicationLog>,
+
+    /// Mailbox for inbound revocation/publication gossip. Each
+    /// `(author, GossipMessage)` is forwarded here by a per-subscription
+    /// [`drain_distribution_sub`] task (one per derived topic per
+    /// installed author). Drained by the select loop's
+    /// `distribution_rx.recv()` arm and dispatched via
+    /// [`Self::handle_distribution_message`]. The single-channel fan-in
+    /// (spec §3.2) mirrors the `internal_event_tx` drainer pattern.
+    distribution_rx: mpsc::Receiver<(AuthorPubkey, GossipMessage)>,
+
+    /// Observation log — surfaced via `RuntimeHandle::revocation_events`.
+    /// Appended by [`Self::handle_revocation`] on a verified+applied
+    /// event. Per B-11 spec §3.5 / §4.3.
+    revocation_events: Arc<Mutex<Vec<RevocationApplied>>>,
+
+    /// Observation log — surfaced via `RuntimeHandle::publication_events`.
+    /// Structural twin of `revocation_events`. Per B-11 spec §3.5 / §4.3.
+    publication_events: Arc<Mutex<Vec<PublicationAnnounced>>>,
 }
 
 impl Runtime {
@@ -576,9 +668,19 @@ impl Runtime {
         author_key: Option<AuthorKeypair>,
         cfg: RuntimeCfg,
         bootstrap: Vec<PeerPubkey>,
+        installed_authors: Vec<AuthorPubkey>,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let erased = NetworkErased::new(network);
-        let sub = erased.subscribe(topic, bootstrap).await?;
+        let sub = erased.subscribe(topic, bootstrap.clone()).await?;
+
+        // B-11 §3.3 / §4.1: auto-subscribe each installed author's
+        // revocation + publication topics, returning the receive side of
+        // the single shared channel the sixth select arm polls (§3.2 —
+        // mirrors the `internal_event_tx` drainer→mpsc→select-arm
+        // pattern). `installed_authors` empty ⇒ zero extra subscriptions,
+        // zero behavior change.
+        let distribution_rx =
+            subscribe_distribution_topics(&erased, &installed_authors, &bootstrap).await?;
 
         let (author_tx, author_rx) = mpsc::channel(64);
 
@@ -605,6 +707,8 @@ impl Runtime {
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
         let dropped_at_apply = Arc::new(Mutex::new(HashMap::new()));
         let tip_fast_path_hits = Arc::new(Mutex::new(0_usize));
+        let revocation_events = Arc::new(Mutex::new(Vec::new()));
+        let publication_events = Arc::new(Mutex::new(Vec::new()));
         let (digest_watch_tx, digest_watch) = watch::channel(Vec::<u8>::new());
         let (halt_watch_tx, halt_watch) = watch::channel(None::<String>);
 
@@ -643,6 +747,12 @@ impl Runtime {
             internal_event_tx,
             // NEW (B-4.6):
             peer_authority_index: BTreeMap::new(),
+            // NEW (B-11):
+            revocation_logs: BTreeMap::new(),
+            publication_logs: BTreeMap::new(),
+            distribution_rx,
+            revocation_events: revocation_events.clone(),
+            publication_events: publication_events.clone(),
         };
 
         tokio::spawn(async move {
@@ -664,6 +774,8 @@ impl Runtime {
             digest_watch,
             halt_watch,
             tip_fast_path_hits,
+            revocation_events,
+            publication_events,
         })
     }
 
@@ -696,6 +808,13 @@ impl Runtime {
                 }
                 Some(event) = self.internal_event_rx.recv() => {
                     let _ = self.handle_event(event).await;
+                }
+                // B-11 §4.1 (SELECT ARM 6): inbound revocation/publication
+                // gossip fanned in from the per-author drainer tasks. The
+                // handler is non-async (pure log-state advance + poll-log
+                // push), so no `.await` here.
+                Some((author, msg)) = self.distribution_rx.recv() => {
+                    self.handle_distribution_message(author, msg);
                 }
                 recv_result = sub.recv() => match recv_result {
                     Ok(Some(m)) => {
@@ -785,6 +904,143 @@ impl Runtime {
             .await?;
         Ok(())
     }
+
+    /// Dispatch an inbound revocation/publication message (fanned in
+    /// from a per-author drainer task) to the variant-specific handler.
+    ///
+    /// `author` is the topic-owner the message arrived for — carried
+    /// alongside the message by [`drain_distribution_sub`] because the
+    /// per-author topic is derived from this key and
+    /// [`RevocationLog::apply`] / [`PublicationLog::apply`] need it to
+    /// cross-check the signature.
+    ///
+    /// A message of any other [`GossipMessage`] variant on a
+    /// distribution topic is structurally impossible from an honest peer
+    /// (the runtime only ever publishes `Revocation`/`Publication` on
+    /// these topics); receiving one means a peer misrouted (or forged)
+    /// wire traffic, so it is discarded with a
+    /// [`PeerWarning::DecodeFailed`] — matching the spec §4.1 default arm
+    /// and the app-topic `handle_message` mirror.
+    ///
+    /// Per B-11 spec §3.4 / §4.1.
+    fn handle_distribution_message(&mut self, author: AuthorPubkey, msg: GossipMessage) {
+        match msg {
+            GossipMessage::Revocation(ev) => self.handle_revocation(author, &ev),
+            GossipMessage::Publication(ev) => self.handle_publication(author, ev),
+            GossipMessage::Event(_) | GossipMessage::HeadsSummary(_) | GossipMessage::Drift(_) => {
+                #[allow(clippy::expect_used)]
+                self.peer_warnings
+                    .lock()
+                    .expect("peer_warnings mutex poisoned")
+                    .push(PeerWarning::DecodeFailed { peer: None });
+            }
+        }
+    }
+
+    /// Verify + apply an inbound [`RevocationEvent`] for `author`.
+    ///
+    /// Edge-verification order is load-bearing (spec §3.4): the
+    /// gossip-edge signature check ([`dispatch::verify_revocation`]) runs
+    /// FIRST so a forged-signature event is classified as a forgery
+    /// rather than mis-attributed as a benign stale-seq duplicate (which
+    /// is what [`RevocationLog::apply`]'s internal `reason-len →
+    /// seq-monotonic → seq-jump → signature` order would do). On a verify
+    /// failure we push [`PeerWarning::SignatureInvalid`] and drop.
+    ///
+    /// On verify success we clone the prior log, call `apply` (which
+    /// consumes the clone), and:
+    /// - `Ok(new)` — install the advanced log and push a
+    ///   [`RevocationApplied`] onto the poll-log surface.
+    /// - `Err(_)` — a seq/length rejection (the signature already
+    ///   verified). Push [`PeerWarning::DecodeFailed`] and re-insert the
+    ///   unchanged prior log (the only correct pattern for `apply`'s
+    ///   consume-and-return API; spec §5 last row).
+    ///
+    /// Per B-11 spec §3.4 / §4.1.
+    ///
+    /// `ev` is borrowed (not consumed): every field surfaced onto
+    /// [`RevocationApplied`] is `Copy`, so the caller's owned event need
+    /// not be moved — unlike [`Self::handle_publication`], which moves
+    /// the `version` `String`.
+    #[allow(clippy::expect_used)]
+    fn handle_revocation(&mut self, author: AuthorPubkey, ev: &RevocationEvent) {
+        if dispatch::verify_revocation(ev, &author).is_err() {
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::SignatureInvalid { peer: None });
+            return;
+        }
+        let prior = self
+            .revocation_logs
+            .get(&author)
+            .cloned()
+            .unwrap_or_default();
+        if let Ok(new) = prior.clone().apply(ev, &author) {
+            self.revocation_logs.insert(author, new);
+            self.revocation_events
+                .lock()
+                .expect("revocation_events mutex poisoned")
+                .push(RevocationApplied {
+                    author,
+                    revoked_bundle_hash: ev.revoked_bundle_hash,
+                    revocation_seq: ev.revocation_seq,
+                });
+        } else {
+            // Signature already verified above, so this is a seq /
+            // length rejection. Surface as DecodeFailed and restore the
+            // unchanged prior log.
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::DecodeFailed { peer: None });
+            self.revocation_logs.insert(author, prior);
+        }
+    }
+
+    /// Verify + apply an inbound [`PublicationEvent`] for `author`.
+    ///
+    /// Structural twin of [`Self::handle_revocation`] — same
+    /// verify-edge-first ordering, same clone-prior / re-insert-on-Err
+    /// pattern — over [`PublicationLog`] / [`PublicationAnnounced`]. Kept
+    /// as a separate explicit method (rather than a shared generic) for
+    /// clarity, per spec §12.4. Per B-11 spec §3.4 / §4.1.
+    #[allow(clippy::expect_used)]
+    fn handle_publication(&mut self, author: AuthorPubkey, ev: PublicationEvent) {
+        if dispatch::verify_publication(&ev, &author).is_err() {
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::SignatureInvalid { peer: None });
+            return;
+        }
+        let prior = self
+            .publication_logs
+            .get(&author)
+            .cloned()
+            .unwrap_or_default();
+        // `ev` is taken by value: the `Ok` arm moves `ev.version` (a
+        // `String`) onto `PublicationAnnounced`. `apply` only borrows it,
+        // so the move stays valid in the success branch.
+        if let Ok(new) = prior.clone().apply(&ev, &author) {
+            self.publication_logs.insert(author, new);
+            self.publication_events
+                .lock()
+                .expect("publication_events mutex poisoned")
+                .push(PublicationAnnounced {
+                    author,
+                    manifest_hash: ev.manifest_hash,
+                    version: ev.version,
+                    publication_seq: ev.publication_seq,
+                });
+        } else {
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::DecodeFailed { peer: None });
+            self.publication_logs.insert(author, prior);
+        }
+    }
 }
 
 /// Type-erasing [`Network`] wrapper.
@@ -863,6 +1119,21 @@ impl Runtime {
                 // Else: SignatureInvalid was pushed (or loopback) — drop.
             }
             GossipMessage::Drift(d) => self.process_drift_message(d).await,
+            // Revocation / Publication envelopes (B-11 §3.1) ride the
+            // per-author revocation/publication topics, NOT the app topic
+            // this subscription consumes. Receiving one here means a peer
+            // misrouted (or forged) wire traffic onto the app topic; treat
+            // it like any other "parsed cleanly but doesn't belong here"
+            // case — discard with a DecodeFailed warning, matching the
+            // spec §4.1 default arm. The legitimate receive path is the
+            // dedicated distribution select arm wired in B-11 T4.
+            GossipMessage::Revocation(_) | GossipMessage::Publication(_) => {
+                #[allow(clippy::expect_used)]
+                self.peer_warnings
+                    .lock()
+                    .expect("peer_warnings mutex poisoned")
+                    .push(PeerWarning::DecodeFailed { peer: None });
+            }
         }
         Ok(())
     }
@@ -2125,5 +2396,208 @@ async fn drain_heads_response(mut stream: HeadsStream, tx: mpsc::Sender<Event>) 
                 return;
             }
         }
+    }
+}
+
+/// Auto-subscribe each installed author's revocation + publication
+/// topics on `network`, spawning a [`drain_distribution_sub`] task per
+/// subscription that forwards inbound `(author, GossipMessage)` into a
+/// single shared channel. Returns the receive half of that channel for
+/// the runtime's sixth select arm.
+///
+/// Extracted from [`Runtime::start`] (B-11 §3.3 / §4.1) so `start` stays
+/// within the line budget; the subscribe-and-spawn loop is the whole of
+/// the distribution wiring and reads as one unit here. Bounded at 256
+/// like the other runtime mailboxes. An empty `installed_authors` makes
+/// this a no-op beyond constructing the (then-idle) channel.
+///
+/// # Errors
+/// Propagates any [`NetError`] from a per-topic [`Network::subscribe`]
+/// (wrapped in [`RuntimeError::Network`]).
+async fn subscribe_distribution_topics<N: Network>(
+    network: &N,
+    installed_authors: &[AuthorPubkey],
+    bootstrap: &[PeerPubkey],
+) -> Result<mpsc::Receiver<(AuthorPubkey, GossipMessage)>, RuntimeError>
+where
+    N::Subscription: Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<(AuthorPubkey, GossipMessage)>(256);
+    for &author in installed_authors {
+        let rsub = network
+            .subscribe(
+                Topic::from_bytes(derive_revocation_topic(author)),
+                bootstrap.to_vec(),
+            )
+            .await?;
+        let psub = network
+            .subscribe(
+                Topic::from_bytes(derive_publication_topic(author)),
+                bootstrap.to_vec(),
+            )
+            .await?;
+        tokio::spawn(drain_distribution_sub(author, rsub, tx.clone()));
+        tokio::spawn(drain_distribution_sub(author, psub, tx.clone()));
+    }
+    Ok(rx)
+}
+
+/// Per-subscription drainer for an installed author's revocation OR
+/// publication topic. Spawned once per derived topic per installed
+/// author by [`Runtime::start`]; forwards each inbound message, tagged
+/// with the `author` whose topic it arrived on, into the shared
+/// distribution channel polled by the runtime's sixth select arm.
+///
+/// `author` is carried because the per-author topic is derived from it
+/// and the downstream `dispatch::verify_*` / `*Log::apply` calls need
+/// it; the drainer cannot recover it from the message alone.
+///
+/// Lifecycle (spec §4.4): loops until the subscription closes
+/// (`Ok(None)`) or the channel receiver is dropped (runtime task gone).
+/// A `recv` error ([`SubError::Lagged`] / `DecodeFailed` /
+/// `TransportError`) is non-fatal here: the loop continues so a single
+/// transient error on the distribution topic does not tear down the
+/// drainer. Forwarding these sub-errors to the runtime as structured
+/// [`PeerWarning`]s is an explicit deferred follow-up (spec §2) — the
+/// drainer runs outside the select loop with no `&mut self` handle to
+/// the warnings log, and the workspace carries no logging facade to emit
+/// into, so the error is dropped rather than surfaced. The generic
+/// `S: Subscription` bound accepts the erased `Box<dyn Subscription +
+/// Send>` the runtime's `subscribe` returns (via the blanket
+/// `Subscription for Box<S>` impl).
+///
+/// Per B-11 spec §3.2 / §4.4.
+async fn drain_distribution_sub<S: Subscription + Send + 'static>(
+    author: AuthorPubkey,
+    mut sub: S,
+    tx: mpsc::Sender<(AuthorPubkey, GossipMessage)>,
+) {
+    loop {
+        match sub.recv().await {
+            Ok(Some(msg)) => {
+                if tx.send((author, msg)).await.is_err() {
+                    // Runtime task gone; stop draining.
+                    break;
+                }
+            }
+            Ok(None) => break, // subscription closed
+            // Non-fatal: continue draining (see fn-level doc — sub-error
+            // forwarding is deferred per spec §2).
+            Err(_e) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use myrhiza_types::BlobHash;
+
+    /// B-11 spec §4.2: `RevocationApplied` is the outward surface record
+    /// the kernel pushes after a verified+applied revocation event. Pins
+    /// the field set + accessibility so the surface stays stable.
+    #[test]
+    fn revocation_applied_fields_accessible() {
+        let author = AuthorPubkey::from_bytes([7u8; 32]);
+        let revoked_bundle_hash = BlobHash::from_bytes([9u8; 32]);
+        let revocation_seq = 3u64;
+
+        let applied = RevocationApplied {
+            author,
+            revoked_bundle_hash,
+            revocation_seq,
+        };
+
+        assert_eq!(applied.author, author);
+        assert_eq!(applied.revoked_bundle_hash, revoked_bundle_hash);
+        assert_eq!(applied.revocation_seq, revocation_seq);
+
+        // Clone + PartialEq + Debug derives (spec §4.2) are part of the
+        // surface contract — the poll-log pattern clones records out.
+        assert_eq!(applied.clone(), applied);
+        let _ = format!("{applied:?}");
+    }
+
+    /// B-11 spec §4.2: `PublicationAnnounced` is the outward surface
+    /// record for a verified+applied publication event.
+    #[test]
+    fn publication_announced_fields_accessible() {
+        let author = AuthorPubkey::from_bytes([7u8; 32]);
+        let manifest_hash = BlobHash::from_bytes([11u8; 32]);
+        let version = "1.2.3".to_string();
+        let publication_seq = 5u64;
+
+        let announced = PublicationAnnounced {
+            author,
+            manifest_hash,
+            version: version.clone(),
+            publication_seq,
+        };
+
+        assert_eq!(announced.author, author);
+        assert_eq!(announced.manifest_hash, manifest_hash);
+        assert_eq!(announced.version, version);
+        assert_eq!(announced.publication_seq, publication_seq);
+
+        assert_eq!(announced.clone(), announced);
+        let _ = format!("{announced:?}");
+    }
+
+    /// B-11 spec §4.4 (plan T3): a [`drain_distribution_sub`] task
+    /// forwards an inbound `GossipMessage::Revocation` published on the
+    /// author's derived revocation topic into the shared distribution
+    /// channel, tagged with the author. Exercises the drainer + the
+    /// per-author topic isolation (`MemBus` routes by exact topic bytes,
+    /// spec §12.3) end-to-end without spinning a full `Runtime`.
+    #[tokio::test]
+    async fn distribution_rx_receives_forwarded_message() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use myrhiza_network::{MemBus, MemNetwork, Network};
+
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let author = AuthorPubkey::from_bytes(sk.verifying_key().to_bytes());
+
+        // Sign a genuine revocation event (seq 1).
+        let mut ev = RevocationEvent {
+            revoked_bundle_hash: BlobHash::from_bytes([0xAA; 32]),
+            reason: "compromised".to_string(),
+            revoked_at: 0,
+            revocation_seq: 1,
+            signature: [0u8; 64],
+        };
+        ev.signature = sk.sign(&ev.signing_target()).to_bytes();
+
+        let bus = MemBus::new(256);
+        let revocation_topic = Topic::from_bytes(derive_revocation_topic(author));
+
+        // Receiver side: subscribe the revocation topic + spawn the
+        // drainer the runtime uses.
+        let recv_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0x01; 32]));
+        let sub = recv_net
+            .subscribe(revocation_topic, vec![])
+            .await
+            .expect("subscribe revocation topic");
+        let (tx, mut rx) = mpsc::channel::<(AuthorPubkey, GossipMessage)>(8);
+        tokio::spawn(drain_distribution_sub(author, sub, tx));
+
+        // Publisher side: a separate MemNetwork on the same bus emits the
+        // revocation envelope on the author's revocation topic.
+        let pub_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0x02; 32]));
+        pub_net
+            .publish(revocation_topic, GossipMessage::Revocation(ev.clone()))
+            .await
+            .expect("publish revocation");
+
+        let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("drainer forwarded within timeout")
+            .expect("channel open");
+
+        assert_eq!(received.0, author, "tagged with the author topic-owner");
+        assert!(
+            matches!(received.1, GossipMessage::Revocation(got) if got == ev),
+            "drainer must forward the exact Revocation envelope",
+        );
     }
 }

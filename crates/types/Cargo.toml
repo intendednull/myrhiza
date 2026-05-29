@@ -25,6 +25,10 @@ thiserror.workspace = true
 myrhiza-network = { path = "../network" }
 # Used by tests/wire_freeze.rs to pin bundle-content-hash bytes.
 myrhiza-manifest = { path = "../manifest" }
+# Used by tests/wire_freeze.rs to pin the GossipMessage::{Revocation,Publication}
+# variant tags (B-11). Dev-dep only — same dev-dep-cycle rationale as
+# myrhiza-network above (types is a transitive dep of distribution).
+myrhiza-distribution = { path = "../distribution" }
 
 [build-dependencies]
 # Aligned with wasmtime 36 line (transitively pulls wit-parser 0.236.x);

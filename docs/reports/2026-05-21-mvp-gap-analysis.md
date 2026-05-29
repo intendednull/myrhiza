@@ -41,6 +41,8 @@ Cross-referenced against [implementation.md §20](../specs/2026-05-09-myrhiza-ma
 
 Update 2026-05-26 (post-merge re-audit): item 14 (Bundle distribution) ❌→✅ with B-10; item 16 (Poll app) ❌→✅ with B-6; items 20 (SDK ergonomics) + 24 (dep-direction CI check) ❌→✅ with B-8; item 15 (Counter app) ❌→✅ (B-7 added propose/interaction, B-8 cut over to `examples/counter/`); item 17 (State-tier tests) ❌→✅ (B-6 shipped `poll_state_apply.rs` against real WASM); item 18 (Kernel-tier tests) 🟡→✅ (B-5 closed the coexistence gap — back-fill, never recorded at the time).
 
+Update 2026-05-28 (B-11): the item-14 deferral — *"Kernel-tier runtime subscription wiring for revocation is deferred to a follow-up (see B-10 spec §10)"* — is **resolved**. B-11 wired the `crates/distribution` pure tier into the kernel `Runtime`: `Runtime::start(installed_authors)` auto-subscribes each installed author's revocation + publication topics; a sixth select-loop arm dispatches inbound gossip through `dispatch::verify_*` → `RevocationLog`/`PublicationLog::apply` → the `RuntimeHandle.{revocation_events,publication_events}` poll-log surface. `crates/kernel/tests/iroh_revocation.rs` (4 tests over real iroh-gossip) closes B-10 spec §6.4; `crates/kernel/tests/revocation.rs` adds the MemNetwork-tier acceptance set. The revocation mechanism is now operationally live, not just resident.
+
 ## v1 acceptance criteria status
 
 Cross-checking against [mvp.md §15.1](../specs/2026-05-09-myrhiza-master-design/mvp.md):
