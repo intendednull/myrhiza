@@ -107,6 +107,24 @@ _build-example slot feature world:
         -o tests/fixtures/built/{{slot}}.wasm
     rm tests/fixtures/built/{{slot}}.embed.wasm
 
+# Rebuild all wasm fixtures and fail if the committed
+# tests/fixtures/built/*.wasm differ from a fresh build. The committed
+# artifacts are the source of truth for contributors without a wasm
+# toolchain (`cargo test` loads them directly), so they must stay in
+# lockstep with the examples/counter/ + tests/fixtures/* sources.
+# Mirrors spec-coverage-check below; CI runs this instead of bare
+# build-fixtures.
+#
+# NOTE: build-fixtures cannot run from a git worktree created under
+# .claude/worktrees/ — the excluded standalone fixture crates walk past
+# the worktree root to the main repo's workspace, which does not list
+# the worktree-path copies. Run from the primary checkout.
+build-fixtures-check: build-fixtures
+    @if ! git diff --exit-code tests/fixtures/built/; then \
+        echo "tests/fixtures/built/*.wasm is stale. Run 'just build-fixtures' and commit."; \
+        exit 1; \
+    fi
+
 spec-coverage:
     ./scripts/spec-coverage.sh
 

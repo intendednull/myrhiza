@@ -1,7 +1,8 @@
 //! Event DAG per convergence.md §4.
 //!
 //! Per-author chain integrity, cross-author deps, topo-sort. All
-//! in-memory for B-1; persistence is B-7.
+//! in-memory; durable persistence is deferred to the storage layer
+//! (B-9, `crates/storage/`).
 //!
 //! Per plan-B-1 spec §4.2, [`EventDag::insert`] validates events in
 //! strict order: signature -> duplicate -> genesis-specific checks
