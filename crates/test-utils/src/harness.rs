@@ -291,6 +291,19 @@ impl PeerHandle {
             .clone()
     }
 
+    /// Installed authors with no fresh distribution sync within
+    /// `threshold` of `now` (B-12 §3.7 staleness surface). Delegates to
+    /// [`RuntimeHandle::stale_authors`]; `now` is a parameter so tests are
+    /// deterministic. The installed set comes from the runtime handle.
+    #[must_use]
+    pub fn stale_authors(
+        &self,
+        now: std::time::SystemTime,
+        threshold: std::time::Duration,
+    ) -> Vec<myrhiza_types::AuthorPubkey> {
+        self.runtime.stale_authors(now, threshold)
+    }
+
     /// Snapshot the peer's map of events rejected by `state-apply`,
     /// keyed by event `wire_hash` and valued with the reject reason.
     ///

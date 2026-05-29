@@ -338,6 +338,65 @@ fn gossip_message_publication_variant_tag_is_four_u32_be() {
 }
 
 // ---------------------------------------------------------------------------
+// B-12 GossipMessage heads-summary variant wire-freeze (spec §3.2 / §4.1).
+//
+// B-12 appends two MORE variants AFTER B-11's Revocation=3/Publication=4 so
+// every existing tag (0..=4) stays frozen. These tests pin the new tags at
+// 5 (RevocationHeads) and 6 (PublicationHeads) so an accidental reorder —
+// a wire-incompatible change — fails CI loudly.
+//
+//   GossipMessage::RevocationHeads  = 5
+//   GossipMessage::PublicationHeads = 6
+//
+// The summary payloads are UNSIGNED (spec §3.6 / §14.1): a forged summary can
+// only trigger the hearer to PULL already author-signed events it then
+// independently verifies — bounded by a per-advertiser dial-limit
+// (DISTRIBUTION_DIAL_DAILY_CAP), never injecting state directly.
+// ---------------------------------------------------------------------------
+
+fn sample_revocation_heads() -> myrhiza_distribution::RevocationHeads {
+    myrhiza_distribution::RevocationHeads {
+        author: AuthorPubkey::from_bytes([0u8; 32]),
+        advertiser: PeerPubkey::from_bytes([0u8; 32]),
+        last_observed_seq: 0,
+    }
+}
+
+fn sample_publication_heads() -> myrhiza_distribution::PublicationHeads {
+    myrhiza_distribution::PublicationHeads {
+        author: AuthorPubkey::from_bytes([0u8; 32]),
+        advertiser: PeerPubkey::from_bytes([0u8; 32]),
+        last_observed_seq: 0,
+    }
+}
+
+#[test]
+fn gossip_message_revocation_heads_variant_tag_is_five_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::RevocationHeads(sample_revocation_heads());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x05],
+        "variant tag for GossipMessage::RevocationHeads must be 5 (u32 BE)"
+    );
+}
+
+#[test]
+fn gossip_message_publication_heads_variant_tag_is_six_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::PublicationHeads(sample_publication_heads());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x06],
+        "variant tag for GossipMessage::PublicationHeads must be 6 (u32 BE)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // B-4.2 Signed-payload wire-freeze tests.
 //
 // Pin the canonical-bincode byte layout of HeadsSummarySignedPayload and

@@ -46,11 +46,16 @@ use iroh_gossip::api::{Event, GossipTopic};
 use myrhiza_types::canonical_bincode;
 use std::sync::{Arc, Mutex};
 
+use crate::distribution_request::{
+    ArcDistributionHandler, DISTRIBUTION_REQUEST_ALPN, DISTRIBUTION_STREAM_CHANNEL_CAPACITY,
+    DistributionResponder, DistributionStream, DistributionStreamError,
+};
 use crate::request::{
     ArcRequestHandler, HEADS_REQUEST_ALPN, HEADS_STREAM_CHANNEL_CAPACITY, HeadsResponder,
     HeadsStream, HeadsStreamError, build_length_prefixed_frame,
 };
 use crate::{GossipMessage, NetError, Network, SubError, Subscription};
+use myrhiza_distribution::{DistributionBackfillRequest, DistributionEnvelope};
 use myrhiza_types::{DirectHeadsRequest, PeerPubkey, Topic};
 
 /// Iroh-backed [`Network`] implementation.
@@ -86,6 +91,14 @@ pub struct IrohNetwork {
     /// wins), so `OnceLock` is unsuitable.
     /// Per B-4.4 spec §3.4.3.
     request_handler: Arc<Mutex<Option<ArcRequestHandler>>>,
+    /// Installed distribution-backfill handler. Set via
+    /// [`Network::install_distribution_handler`]; consumed by
+    /// [`DistributionRequestProtocol::accept`] (T3) on inbound requests.
+    /// `Arc<Mutex<Option<_>>>` mirrors `request_handler` (shared with
+    /// protocol-handler clones returned from
+    /// [`IrohNetwork::distribution_protocol_handler`]; last-call-wins
+    /// re-installation). Per B-12 spec §14.2/§14.3.
+    distribution_handler: Arc<Mutex<Option<ArcDistributionHandler>>>,
 }
 
 impl IrohNetwork {
@@ -112,6 +125,7 @@ impl IrohNetwork {
             gossip,
             peer_pubkey,
             request_handler: Arc::new(Mutex::new(None)),
+            distribution_handler: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -273,6 +287,81 @@ impl Network for IrohNetwork {
     fn install_request_handler(&self, handler: ArcRequestHandler) {
         let mut slot = self
             .request_handler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(handler);
+    }
+
+    async fn request_distribution(
+        &self,
+        peer: PeerPubkey,
+        request: DistributionBackfillRequest,
+    ) -> Result<DistributionStream, NetError> {
+        // Structurally identical to `request_heads`: dial the advertiser
+        // on the distribution ALPN, write the length-prefixed request
+        // frame, then spawn a reader that decodes `DistributionEnvelope`
+        // frames off the recv side into a `DistributionStream`. The
+        // event-DAG `request_heads` protocol is untouched (spec §14.2).
+        let target_id =
+            iroh_endpoint_id_from_peer_pubkey(peer).map_err(|e| NetError::RequestFailed {
+                peer,
+                reason: format!("invalid target pubkey: {e}"),
+            })?;
+
+        let connection = self
+            .endpoint
+            .connect(target_id, DISTRIBUTION_REQUEST_ALPN)
+            .await
+            .map_err(|e| NetError::RequestFailed {
+                peer,
+                reason: format!("connect: {e}"),
+            })?;
+
+        let (mut send_stream, recv_stream) =
+            connection
+                .open_bi()
+                .await
+                .map_err(|e| NetError::RequestFailed {
+                    peer,
+                    reason: format!("open_bi: {e}"),
+                })?;
+
+        // Encode + write the request.
+        let req_bytes =
+            canonical_bincode()
+                .serialize(&request)
+                .map_err(|e| NetError::RequestFailed {
+                    peer,
+                    reason: format!("encode request: {e}"),
+                })?;
+        let frame = build_length_prefixed_frame(&req_bytes);
+        send_stream
+            .write_all(&frame)
+            .await
+            .map_err(|e| NetError::RequestFailed {
+                peer,
+                reason: format!("write request: {e}"),
+            })?;
+
+        // `SendStream::finish()` is sync-fallible in iroh-1.0.0-rc.0 (see
+        // the `request_heads` note); no `.await`.
+        send_stream.finish().map_err(|e| NetError::RequestFailed {
+            peer,
+            reason: format!("finish send: {e}"),
+        })?;
+
+        // Spawn reader task that decodes incoming frames into the stream.
+        let (tx, rx) = tokio::sync::mpsc::channel(DISTRIBUTION_STREAM_CHANNEL_CAPACITY);
+        tokio::spawn(read_distribution_frames(recv_stream, tx));
+        Ok(DistributionStream::new(rx))
+    }
+
+    fn install_distribution_handler(&self, handler: ArcDistributionHandler) {
+        // Store into the slot; the accept-side `DistributionRequestProtocol`
+        // (returned by `distribution_protocol_handler`) reads from it.
+        // Mirrors `install_request_handler` (last-call-wins).
+        let mut slot = self
+            .distribution_handler
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *slot = Some(handler);
@@ -524,6 +613,54 @@ async fn read_event_frames(
     }
 }
 
+/// Reader task spawned by [`IrohNetwork::request_distribution`]. Decodes
+/// length-prefixed canonical-bincode [`DistributionEnvelope`] frames from
+/// the recv side of a bidi stream until EOF or error.
+///
+/// Structurally identical to [`read_event_frames`] but for the
+/// distribution ledger's narrow envelope type — it shares the frame
+/// reader ([`read_length_prefixed_frame_from_iroh_recv`]) and maps that
+/// helper's [`HeadsStreamError`] onto the distribution stream's
+/// [`DistributionStreamError`] (same transport/decode shape, distinct
+/// type so the two streams' items cannot be confused). Per B-12 spec §14.2.
+async fn read_distribution_frames(
+    mut recv_stream: iroh::endpoint::RecvStream,
+    tx: tokio::sync::mpsc::Sender<Result<DistributionEnvelope, DistributionStreamError>>,
+) {
+    loop {
+        let payload = match read_length_prefixed_frame_from_iroh_recv(&mut recv_stream).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return, // clean EOF
+            Err(e) => {
+                // The shared frame reader reports transport-level failures
+                // as `HeadsStreamError::Transport`; re-wrap onto the
+                // distribution stream's transport variant.
+                let _ = tx
+                    .send(Err(DistributionStreamError::Transport(e.to_string())))
+                    .await;
+                return;
+            }
+        };
+
+        let envelope: DistributionEnvelope = match canonical_bincode().deserialize(&payload) {
+            Ok(env) => env,
+            Err(e) => {
+                let _ = tx
+                    .send(Err(DistributionStreamError::Decode(format!(
+                        "envelope decode: {e}"
+                    ))))
+                    .await;
+                return;
+            }
+        };
+
+        if tx.send(Ok(envelope)).await.is_err() {
+            // Requester dropped the stream — stop reading.
+            return;
+        }
+    }
+}
+
 // ---- Accept-side: HeadsRequestProtocol ProtocolHandler ----
 
 impl IrohNetwork {
@@ -736,6 +873,194 @@ impl iroh::protocol::ProtocolHandler for HeadsRequestProtocol {
             let _ = send_stream.finish();
             // Keep the connection alive until the requester closes from their
             // side (same FIN-vs-CONNECTION_CLOSE race fix as above).
+            connection.closed().await;
+            Ok(())
+        }
+    }
+}
+
+// ---- Accept-side: DistributionRequestProtocol ProtocolHandler ----
+
+impl IrohNetwork {
+    /// Return an [`iroh::protocol::ProtocolHandler`] impl for the
+    /// direct-stream distribution-backfill ALPN. Embedders register this
+    /// on their [`iroh::protocol::Router`] at startup, alongside the
+    /// event-DAG [`HeadsRequestProtocol`](IrohNetwork::protocol_handler):
+    ///
+    /// ```ignore
+    /// let router = iroh::protocol::Router::builder(endpoint)
+    ///     .accept(iroh_gossip::ALPN, gossip.clone())
+    ///     .accept(myrhiza_network::HEADS_REQUEST_ALPN,
+    ///             network.protocol_handler())
+    ///     .accept(myrhiza_network::DISTRIBUTION_REQUEST_ALPN,
+    ///             network.distribution_protocol_handler())
+    ///     .spawn();
+    /// ```
+    ///
+    /// The returned handler shares the installed
+    /// [`crate::distribution_request::DistributionHandler`] with this
+    /// `IrohNetwork` instance via an internal `Arc<Mutex<Option<_>>>`.
+    /// Re-installing a handler via
+    /// [`crate::Network::install_distribution_handler`] is immediately
+    /// visible to the returned protocol handler (last-call-wins).
+    ///
+    /// This is the distribution-ledger twin of [`Self::protocol_handler`];
+    /// the two protocols are disjoint (own ALPN, own handler slot — spec
+    /// §14.2). Per B-12 spec §14.2/§14.3.
+    #[must_use]
+    pub fn distribution_protocol_handler(&self) -> DistributionRequestProtocol {
+        DistributionRequestProtocol {
+            handler_slot: Arc::clone(&self.distribution_handler),
+        }
+    }
+}
+
+/// [`iroh::protocol::ProtocolHandler`] impl for
+/// [`DISTRIBUTION_REQUEST_ALPN`].
+///
+/// Accepts an inbound bidi stream, reads the length-prefixed
+/// [`DistributionBackfillRequest`] frame, looks up the installed
+/// [`crate::distribution_request::DistributionHandler`], and writes
+/// response [`DistributionEnvelope`] frames back over the send side.
+///
+/// Structurally identical to [`HeadsRequestProtocol`] — same stream
+/// lifecycle, same FIN-vs-CONNECTION_CLOSE race guards, same
+/// no-handler/clean-EOF behavior — but for the distribution ledger's
+/// request/response types. Kept as a distinct protocol (own ALPN, own
+/// handler slot) so the event-DAG backfill stays untouched (spec §14.2).
+/// If no handler is installed, the send stream is closed cleanly (the
+/// requester sees zero envelopes + EOF).
+///
+/// **Debug note**: `ArcDistributionHandler` is a `dyn DistributionHandler`
+/// trait object which does not require `Debug`; the `Debug` impl is
+/// written manually to satisfy
+/// [`iroh::protocol::ProtocolHandler`]'s `std::fmt::Debug` bound without
+/// constraining the handler trait — same posture as
+/// [`HeadsRequestProtocol`].
+#[derive(Clone)]
+pub struct DistributionRequestProtocol {
+    handler_slot: Arc<Mutex<Option<ArcDistributionHandler>>>,
+}
+
+impl std::fmt::Debug for DistributionRequestProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_handler = self
+            .handler_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        f.debug_struct("DistributionRequestProtocol")
+            .field("has_handler", &has_handler)
+            .finish()
+    }
+}
+
+impl iroh::protocol::ProtocolHandler for DistributionRequestProtocol {
+    fn accept(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> impl std::future::Future<Output = Result<(), iroh::protocol::AcceptError>> + Send {
+        let handler_slot = Arc::clone(&self.handler_slot);
+        async move {
+            // `Connection::remote_id()` is infallible in iroh-1.0.0-rc.0
+            // (returns `EndpointId` directly) — same as `HeadsRequestProtocol`.
+            let requester_id = connection.remote_id();
+            let requester = peer_pubkey_from_iroh(requester_id);
+
+            let (mut send_stream, mut recv_stream) = connection
+                .accept_bi()
+                .await
+                .map_err(|e| std::io::Error::other(format!("accept_bi: {e}")))?;
+
+            // Read the request frame using the shared helper so there is
+            // no duplicated length-prefix logic.
+            let req_bytes = match read_length_prefixed_frame_from_iroh_recv(&mut recv_stream).await
+            {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    // Clean EOF before any request bytes — close our send
+                    // side with FIN and keep the connection alive until the
+                    // requester closes (same FIN-vs-CLOSE race fix as
+                    // `HeadsRequestProtocol`).
+                    let _ = send_stream.finish();
+                    connection.closed().await;
+                    return Ok(());
+                }
+                Err(e) => {
+                    return Err(std::io::Error::other(format!("read request: {e}")).into());
+                }
+            };
+
+            let request: DistributionBackfillRequest = canonical_bincode()
+                .deserialize(&req_bytes)
+                .map_err(|e| std::io::Error::other(format!("decode request: {e}")))?;
+
+            // Snapshot the Arc so the Mutex is not held across the handler
+            // invocation.
+            let installed = {
+                let lock = handler_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                lock.clone()
+            };
+
+            let Some(handler) = installed else {
+                // No handler installed — close stream cleanly (requester
+                // sees zero envelopes + EOF).
+                let _ = send_stream.finish();
+                connection.closed().await;
+                return Ok(());
+            };
+
+            // Spawn the handler task with a fresh channel. The forward loop
+            // below reads from the channel and writes each envelope as a
+            // length-prefixed frame to the QUIC send stream.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<
+                Result<DistributionEnvelope, DistributionStreamError>,
+            >(DISTRIBUTION_STREAM_CHANNEL_CAPACITY);
+            let responder = DistributionResponder::new(tx);
+            let handler_task = tokio::spawn(async move {
+                handler.handle(requester, request, responder).await;
+                // Responder drops here -> channel closes -> rx.recv()
+                // returns None -> forward loop below exits cleanly.
+            });
+
+            while let Some(item) = rx.recv().await {
+                match item {
+                    Ok(envelope) => {
+                        let bytes = match canonical_bincode().serialize(&envelope) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                handler_task.abort();
+                                return Err(
+                                    std::io::Error::other(format!("encode envelope: {e}")).into()
+                                );
+                            }
+                        };
+                        let frame = build_length_prefixed_frame(&bytes);
+                        if send_stream.write_all(&frame).await.is_err() {
+                            // Requester dropped mid-stream — abort the
+                            // handler and return Ok; wait for the connection
+                            // to close (same FIN-vs-CLOSE race guard).
+                            handler_task.abort();
+                            connection.closed().await;
+                            return Ok(());
+                        }
+                    }
+                    Err(_handler_err) => {
+                        // Handler signalled an error via the channel. Abort
+                        // the spawned task explicitly (mirrors the abort sites
+                        // above) and stop forwarding.
+                        handler_task.abort();
+                        break;
+                    }
+                }
+            }
+
+            // Drain the handler task, close the send side cleanly, and keep
+            // the connection alive until the requester closes.
+            let _ = handler_task.await;
+            let _ = send_stream.finish();
             connection.closed().await;
             Ok(())
         }

@@ -67,6 +67,7 @@ pub fn fast_cfg(heads_summary_tick: Duration) -> RuntimeCfg {
         drift_min_interval: Duration::from_secs(0),
         drift_daily_cap: u32::MAX,
         heads_summary_tick,
+        distribution_sync_tick: heads_summary_tick,
         pending_cfg: PendingCfg::default(),
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,

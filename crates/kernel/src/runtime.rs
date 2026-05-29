@@ -13,15 +13,17 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bincode::Options;
 use myrhiza_distribution::topic::{derive_publication_topic, derive_revocation_topic};
 use myrhiza_distribution::{
-    PublicationEvent, PublicationLog, RevocationEvent, RevocationLog, dispatch,
+    DistributionBackfillRequest, DistributionEnvelope, DistributionLogKind, PublicationEvent,
+    PublicationHeads, PublicationLog, RevocationEvent, RevocationHeads, RevocationLog, dispatch,
 };
 use myrhiza_network::{
-    ArcRequestHandler, GossipMessage, HeadsResponder, HeadsStream, NetError, Network,
+    ArcDistributionHandler, ArcRequestHandler, DistributionHandler, DistributionResponder,
+    DistributionStream, GossipMessage, HeadsResponder, HeadsStream, NetError, Network,
     RequestHandler, SubError, Subscription,
 };
 use myrhiza_types::{
@@ -63,6 +65,13 @@ pub struct RuntimeCfg {
     /// backfill.
     pub heads_summary_tick: Duration,
 
+    /// Cadence at which distribution-log head summaries
+    /// (`RevocationHeads`/`PublicationHeads`) are broadcast for
+    /// stale-network backfill. Distribution logs change far less often
+    /// than the event DAG, so this is slower than `heads_summary_tick`.
+    /// Per B-12 spec §3.5.
+    pub distribution_sync_tick: Duration,
+
     /// Out-of-order event buffer configuration.
     pub pending_cfg: PendingCfg,
 
@@ -92,6 +101,7 @@ impl Default for RuntimeCfg {
             drift_min_interval: Duration::from_mins(1),
             drift_daily_cap: 1024,
             heads_summary_tick: Duration::from_secs(5),
+            distribution_sync_tick: Duration::from_secs(30),
             pending_cfg: PendingCfg::default(),
             broadcast_capacity: 256,
             kernel_fuel_table_version: 1,
@@ -409,6 +419,89 @@ impl RequestHandler for KernelRequestHandler {
     }
 }
 
+/// Command sent to the runtime task by [`KernelDistributionHandler`] when
+/// an inbound direct-stream `DistributionBackfillRequest` arrives.
+///
+/// Drained by the select loop's `distribution_req_rx.recv()` arm and
+/// processed via [`Runtime::serve_distribution_request`]. This is the
+/// serve-side twin of [`HeadsRequestCommand`] for the B-12 §14 corrected
+/// transport: a behind peer dials this peer over
+/// [`DISTRIBUTION_REQUEST_ALPN`](myrhiza_network::DISTRIBUTION_REQUEST_ALPN)
+/// and pulls the missing signed envelopes from this peer's archive.
+///
+/// Per B-12 spec §14.4.
+pub(crate) struct DistributionRequestCommand {
+    /// QUIC-TLS-confirmed pubkey of the peer that issued the request.
+    /// Captured for parity with [`HeadsRequestCommand`] and a future
+    /// per-requester rate-limit hook; the serve path does not yet branch
+    /// on it (the author gate already lives in the handler).
+    pub(crate) requester: PeerPubkey,
+    /// The decoded backfill request (already author-validated by the
+    /// handler shim — see [`KernelDistributionHandler`]).
+    pub(crate) request: DistributionBackfillRequest,
+    /// Sender half of the response stream; the runtime pushes envelopes
+    /// through `responder.send(envelope)`; dropping the responder signals
+    /// clean EOF to the requester.
+    pub(crate) responder: DistributionResponder,
+}
+
+/// [`DistributionHandler`] impl installed by [`Runtime::start`] on the
+/// underlying [`Network`], alongside [`KernelRequestHandler`]. Forwards
+/// inbound direct-stream distribution-backfill requests to the runtime
+/// task via mpsc, after gating on the requested author.
+///
+/// **Author gate (defense in depth, spec §14.4):** the handler serves a
+/// request only when its `author` is one this runtime is installed for.
+/// A request for any other author is dropped (the responder is dropped →
+/// clean EOF to the requester), so this peer never streams envelopes for
+/// an author it does not track — symmetric with the topic gate on
+/// [`KernelRequestHandler`]. The `IrohNetwork` already routes by peer+ALPN;
+/// this guards against a confused-deputy pull for an unrelated author.
+///
+/// Per B-12 spec §14.4.
+pub(crate) struct KernelDistributionHandler {
+    /// Sender half of the runtime's inbound-distribution-request mailbox.
+    tx: mpsc::Sender<DistributionRequestCommand>,
+    /// The authors this runtime serves. Inbound requests for any other
+    /// author are silently dropped (clean EOF).
+    installed_authors: Vec<AuthorPubkey>,
+}
+
+#[async_trait::async_trait]
+impl DistributionHandler for KernelDistributionHandler {
+    /// Author-gate then forward the request into the runtime task's
+    /// mailbox. Returns immediately (dropping the responder → clean EOF
+    /// to the requester) when the request targets an author this handler
+    /// does not serve. Otherwise moves the responder into the
+    /// [`DistributionRequestCommand`] and sends; if the runtime task has
+    /// already exited, the send fails silently and dropping the responder
+    /// yields clean EOF on the requester side too. Per B-12 spec §14.4.
+    async fn handle(
+        &self,
+        requester: PeerPubkey,
+        request: DistributionBackfillRequest,
+        responder: DistributionResponder,
+    ) {
+        // Author gate — only serve authors this runtime is installed for.
+        // A request for any other author drops the responder here →
+        // requester sees a clean EOF (empty stream).
+        if !self.installed_authors.contains(&request.author) {
+            return;
+        }
+        // Forward to runtime. If the runtime task has exited, the send
+        // fails; dropping the responder yields EOF to the requester. No
+        // diagnostic surfaced — the runtime has already shut down.
+        let _ = self
+            .tx
+            .send(DistributionRequestCommand {
+                requester,
+                request,
+                responder,
+            })
+            .await;
+    }
+}
+
 /// Owner-side handle to a spawned per-topic runtime task.
 ///
 /// Holding this handle is the only way to issue author commands or
@@ -475,12 +568,83 @@ pub struct RuntimeHandle {
     /// installed author's publication topic. Twin of `revocation_events`.
     /// Per B-11 spec §4.3.
     pub publication_events: Arc<Mutex<Vec<PublicationAnnounced>>>,
+
+    /// Per-author wall-clock of the last received distribution message
+    /// (event or summary), cloned from the runtime task's map. Poll it —
+    /// or use [`RuntimeHandle::stale_authors`] — to surface the master
+    /// `distribution.md` §10.7 "potentially stale" warning before
+    /// installing a new version. Per B-12 spec §3.7.
+    pub last_distribution_sync: Arc<Mutex<BTreeMap<AuthorPubkey, SystemTime>>>,
+
+    /// The authors this runtime was started with (its distribution
+    /// subscription set). Retained on the handle so [`Self::stale_authors`]
+    /// knows the full installed set — including authors that have *never*
+    /// synced and so have no `last_distribution_sync` entry. Per B-12 spec
+    /// §3.7.
+    pub installed_authors: Vec<AuthorPubkey>,
+}
+
+impl RuntimeHandle {
+    /// Installed authors with no fresh distribution sync within
+    /// `threshold` of `now` — i.e. those for which a "potentially stale"
+    /// warning should be surfaced before installing a new version (master
+    /// `distribution.md` §10.7; default threshold 24h). An author with no
+    /// recorded sync is always stale. `now` is a parameter (not
+    /// `SystemTime::now()`) so tests are deterministic. The installed set is
+    /// taken from the handle (`installed_authors`), not a caller argument —
+    /// the runtime already knows which authors it serves. Per B-12 spec
+    /// §3.7 / §12 Q5.
+    ///
+    /// # Panics
+    /// Panics if the `last_distribution_sync` mutex is poisoned — i.e. the
+    /// runtime task panicked while holding it. Structurally unreachable in a
+    /// healthy run (the runtime task is the only writer).
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn stale_authors(&self, now: SystemTime, threshold: Duration) -> Vec<AuthorPubkey> {
+        let map = self
+            .last_distribution_sync
+            .lock()
+            .expect("last_distribution_sync mutex poisoned");
+        self.installed_authors
+            .iter()
+            .filter(|author| match map.get(author) {
+                // Never synced ⇒ always stale.
+                None => true,
+                // Synced in the future (clock skew) counts as fresh; only
+                // an elapsed gap strictly greater than the threshold is stale.
+                Some(last) => now
+                    .duration_since(*last)
+                    .is_ok_and(|elapsed| elapsed > threshold),
+            })
+            .copied()
+            .collect()
+    }
 }
 
 /// Bounded count of peers tracked per author in the
 /// peer-authority index. Older entries are evicted on overflow.
 /// Per B-4.6 spec §2 (decision table).
 pub(crate) const PEER_AUTHORITY_PER_AUTHOR_CAP: usize = 8;
+
+/// Maximum number of backfill *dials* a peer will issue for a single
+/// advertiser within the trailing-24h window (`distribution_dial_limit`
+/// bucket capacity, spec §14.1 / §12 Q3).
+///
+/// In the corrected pull transport (spec §14) a behind peer that hears an
+/// advertiser's above-our-head summary *dials* that advertiser to pull
+/// the missing envelopes. A forged-high summary therefore costs at most
+/// one wasted dial; this cap bounds how *often* a single advertiser can
+/// goad us into dialing within the window, so a flood of forged-high
+/// summaries cannot weaponise us into a dial storm against one peer. One
+/// "dial" is one `request_distribution` call (which may stream a
+/// contiguous range of envelopes back — the range size is bounded by the
+/// author's own log length, not by this cap). Chosen generously
+/// (distribution logs change a handful of times per author *ever*, so a
+/// legitimate peer never approaches this) while still bounding a forged
+/// flood. Per B-12 spec §12 Q3 ("start from `DriftRateLimit` defaults,
+/// tune if the flood test needs it").
+pub(crate) const DISTRIBUTION_DIAL_DAILY_CAP: u32 = 32;
 
 /// Per-topic runtime — owns the event DAG, pending buffer, and
 /// state-apply handle for a single `(topic, app_bundle_hash)` binding.
@@ -583,6 +747,15 @@ pub struct Runtime {
     /// Per B-4.5 spec §3.3.
     heads_req_rx: mpsc::Receiver<HeadsRequestCommand>,
 
+    /// Mailbox for inbound direct-stream distribution-backfill requests.
+    /// The [`KernelDistributionHandler`] installed on `network` at startup
+    /// (alongside the heads handler) is the only sender. Drained by the
+    /// select loop's `distribution_req_rx.recv()` arm and processed by
+    /// [`Self::serve_distribution_request`], which streams the requested
+    /// envelopes back from `revocation_archive` / `publication_latest`.
+    /// The serve-side twin of `heads_req_rx`. Per B-12 spec §14.4.
+    distribution_req_rx: mpsc::Receiver<DistributionRequestCommand>,
+
     /// Mailbox for events arriving on direct-stream backfill responses.
     /// The drainer task spawned by [`Self::issue_direct_backfill`] is
     /// the only sender (cloned from `internal_event_tx`). Drained by
@@ -621,6 +794,62 @@ pub struct Runtime {
     /// Per B-11 spec §4.3.
     publication_logs: BTreeMap<AuthorPubkey, PublicationLog>,
 
+    /// Archive of signed revocation envelopes, keyed by author then
+    /// `revocation_seq`. The pure-tier [`RevocationLog`] folds events
+    /// into a `revoked_bundles` set + `last_observed_seq` and discards
+    /// the signatures, so it cannot *serve* a backfill; this archive
+    /// retains the full per-author envelope sequence (revocation
+    /// accumulates — every event contributes a distinct
+    /// `revoked_bundle_hash`, so a complete set needs every event in
+    /// range). Populated in [`Self::handle_revocation`] on a successful
+    /// apply, so gossip-received and backfill-received events archive
+    /// uniformly. A backfill-serving concern, deliberately kept in the
+    /// kernel rather than the deterministic fold. Per B-12 spec
+    /// §3.3 / §4.2.
+    revocation_archive: BTreeMap<AuthorPubkey, BTreeMap<u64, RevocationEvent>>,
+
+    /// Latest signed publication envelope per author. Publication is
+    /// latest-wins, so a single newest envelope reconstructs the entire
+    /// observable state and is all a served backfill needs (asymmetric
+    /// with `revocation_archive`, which keeps the full range — see its
+    /// doc). Populated in [`Self::handle_publication`] on a successful
+    /// apply; read by [`Self::serve_distribution_request`] to answer a
+    /// behind peer's pull. Per B-12 spec §3.3 / §4.2.
+    publication_latest: BTreeMap<AuthorPubkey, PublicationEvent>,
+
+    /// Dial guard for backfill pulls — one token bucket per advertiser.
+    /// In the corrected pull transport (spec §14) a behind peer that hears
+    /// an advertiser's above-our-head `RevocationHeads`/`PublicationHeads`
+    /// summary *dials* that advertiser to pull the missing envelopes. Each
+    /// such dial must first consume a bucket slot keyed by the advertiser;
+    /// a burst of forged-high summaries from one advertiser is absorbed by
+    /// the bucket rather than weaponising this peer into a dial storm
+    /// against that advertiser
+    /// ([`Self::handle_revocation_heads`] / [`Self::handle_publication_heads`]).
+    /// Reuses the [`DriftRateLimit`] sliding-window shape (lazily created
+    /// per advertiser on first dial opportunity). Per B-12 spec §14.1 / §14.4.
+    distribution_dial_limit: BTreeMap<PeerPubkey, DriftRateLimit>,
+
+    /// In-flight distribution pulls, keyed by `(author, kind)`. Set when
+    /// [`Self::issue_distribution_backfill`] spawns a drainer, cleared by
+    /// the drainer when the response stream ends. A fresh
+    /// above-our-head summary for an `(author, kind)` already being pulled
+    /// is a no-op, so a burst of advertisements (e.g. several ahead peers
+    /// each re-advertising) does not fan out into redundant concurrent
+    /// dials for the same gap. Shared with the drainer task via `Arc`.
+    /// Per B-12 spec §14.4 (the optional in-flight guard).
+    distribution_in_flight: Arc<Mutex<BTreeSet<(AuthorPubkey, DistributionLogKind)>>>,
+
+    /// Sender half of the shared distribution channel (clone of the half
+    /// [`subscribe_distribution_topics`] wired into the per-author drainer
+    /// tasks). Retained so [`Self::issue_distribution_backfill`]'s drainer
+    /// can re-inject pulled envelopes into the apply path as
+    /// `GossipMessage::Revocation`/`Publication`, reusing
+    /// [`Self::handle_distribution_message`] (verify-edge → apply →
+    /// archive → surface), identical to the gossip-received path. Per
+    /// B-12 spec §14.4.
+    distribution_tx: mpsc::Sender<(AuthorPubkey, GossipMessage)>,
+
     /// Mailbox for inbound revocation/publication gossip. Each
     /// `(author, GossipMessage)` is forwarded here by a per-subscription
     /// [`drain_distribution_sub`] task (one per derived topic per
@@ -638,6 +867,21 @@ pub struct Runtime {
     /// Observation log — surfaced via `RuntimeHandle::publication_events`.
     /// Structural twin of `revocation_events`. Per B-11 spec §3.5 / §4.3.
     publication_events: Arc<Mutex<Vec<PublicationAnnounced>>>,
+
+    /// Authors whose distribution topics this runtime subscribed on start.
+    /// Retained so [`Self::broadcast_distribution_heads`] can advertise a
+    /// head summary per author on the on-start + periodic sync. Per B-12
+    /// spec §3.5 / §4.4.
+    installed_authors: Vec<AuthorPubkey>,
+
+    /// Per-author wall-clock of the last distribution message (event or
+    /// summary) received from the network — evidence the author's
+    /// distribution topic is reachable. Surfaced via
+    /// `RuntimeHandle::last_distribution_sync` and the 24h
+    /// `RuntimeHandle::stale_authors` helper (spec §3.7). Wall-clock lives
+    /// only in this kernel orchestration task, never in any deterministic
+    /// state-apply path. Per B-12 spec §3.7 / §4.2.
+    last_distribution_sync: Arc<Mutex<BTreeMap<AuthorPubkey, SystemTime>>>,
 }
 
 impl Runtime {
@@ -679,8 +923,10 @@ impl Runtime {
         // mirrors the `internal_event_tx` drainer→mpsc→select-arm
         // pattern). `installed_authors` empty ⇒ zero extra subscriptions,
         // zero behavior change.
-        let distribution_rx =
-            subscribe_distribution_topics(&erased, &installed_authors, &bootstrap).await?;
+        let DistributionChannel {
+            tx: distribution_tx,
+            rx: distribution_rx,
+        } = subscribe_distribution_topics(&erased, &installed_authors, &bootstrap).await?;
 
         let (author_tx, author_rx) = mpsc::channel(64);
 
@@ -692,6 +938,13 @@ impl Runtime {
         let (heads_req_tx, heads_req_rx) = mpsc::channel::<HeadsRequestCommand>(32);
         let (internal_event_tx, internal_event_rx) = mpsc::channel::<Event>(128);
 
+        // NEW (B-12 §14.4): the serve-side mailbox for inbound
+        // distribution-backfill requests, twin of `heads_req_rx`. Same
+        // capacity as the heads-request mailbox — backfills are tiny and
+        // rare, so 32 in-flight requests is ample.
+        let (distribution_req_tx, distribution_req_rx) =
+            mpsc::channel::<DistributionRequestCommand>(32);
+
         // NEW (B-4.5): construct + install the handler on the erased
         // network. The trait method takes `&self`; NetworkErased delegates
         // to the inner N. Must run BEFORE the `Arc::new(erased)` below
@@ -702,6 +955,17 @@ impl Runtime {
         };
         erased.install_request_handler(Arc::new(handler));
 
+        // NEW (B-12 §14.4): install the distribution-backfill serve handler
+        // alongside the heads handler. It author-gates on `installed_authors`
+        // (the set this runtime serves) and forwards admitted requests into
+        // `distribution_req_rx` for `serve_distribution_request`. Installed
+        // before `Arc::new(erased)` for the same reason as the heads handler.
+        let distribution_handler = KernelDistributionHandler {
+            tx: distribution_req_tx,
+            installed_authors: installed_authors.clone(),
+        };
+        erased.install_distribution_handler(Arc::new(distribution_handler));
+
         let drift_log = Arc::new(Mutex::new(Vec::new()));
         let equivocation_log = Arc::new(Mutex::new(Vec::new()));
         let peer_warnings = Arc::new(Mutex::new(Vec::new()));
@@ -709,6 +973,7 @@ impl Runtime {
         let tip_fast_path_hits = Arc::new(Mutex::new(0_usize));
         let revocation_events = Arc::new(Mutex::new(Vec::new()));
         let publication_events = Arc::new(Mutex::new(Vec::new()));
+        let last_distribution_sync = Arc::new(Mutex::new(BTreeMap::new()));
         let (digest_watch_tx, digest_watch) = watch::channel(Vec::<u8>::new());
         let (halt_watch_tx, halt_watch) = watch::channel(None::<String>);
 
@@ -745,14 +1010,24 @@ impl Runtime {
             heads_req_rx,
             internal_event_rx,
             internal_event_tx,
+            // NEW (B-12 §14.4):
+            distribution_req_rx,
             // NEW (B-4.6):
             peer_authority_index: BTreeMap::new(),
             // NEW (B-11):
             revocation_logs: BTreeMap::new(),
             publication_logs: BTreeMap::new(),
+            // NEW (B-12):
+            revocation_archive: BTreeMap::new(),
+            publication_latest: BTreeMap::new(),
+            distribution_dial_limit: BTreeMap::new(),
+            distribution_in_flight: Arc::new(Mutex::new(BTreeSet::new())),
+            distribution_tx,
             distribution_rx,
             revocation_events: revocation_events.clone(),
             publication_events: publication_events.clone(),
+            installed_authors: installed_authors.clone(),
+            last_distribution_sync: last_distribution_sync.clone(),
         };
 
         tokio::spawn(async move {
@@ -776,6 +1051,8 @@ impl Runtime {
             tip_fast_path_hits,
             revocation_events,
             publication_events,
+            last_distribution_sync,
+            installed_authors,
         })
     }
 
@@ -790,7 +1067,14 @@ impl Runtime {
         mut author_rx: mpsc::Receiver<AuthorCommand>,
     ) -> Result<(), RuntimeError> {
         let mut ticker = tokio::time::interval(self.cfg.heads_summary_tick);
+        let mut dist_ticker = tokio::time::interval(self.cfg.distribution_sync_tick);
         self.publish_heads_summary().await?;
+        // B-12 §3.5 / §14.1: advertise our distribution-log heads on start
+        // (the "sync on start" of master `distribution.md` §10.7) so a peer
+        // that is *behind* hears our head and dials us to pull any missed
+        // revocation/publication events (pull-on-behind). No-op when no
+        // authors are installed.
+        self.broadcast_distribution_heads().await?;
         loop {
             tokio::select! {
                 biased;
@@ -806,15 +1090,30 @@ impl Runtime {
                 Some(cmd) = self.heads_req_rx.recv() => {
                     self.serve_direct_heads_request(cmd).await;
                 }
+                // B-12 §14.4 (SELECT ARM 8): inbound direct-stream
+                // distribution-backfill requests forwarded by the
+                // KernelDistributionHandler. A behind peer dialed us; serve
+                // the requested envelopes from the archive. Serve-side twin
+                // of the heads-request arm above.
+                Some(cmd) = self.distribution_req_rx.recv() => {
+                    self.serve_distribution_request(cmd).await;
+                }
                 Some(event) = self.internal_event_rx.recv() => {
                     let _ = self.handle_event(event).await;
                 }
                 // B-11 §4.1 (SELECT ARM 6): inbound revocation/publication
-                // gossip fanned in from the per-author drainer tasks. The
-                // handler is non-async (pure log-state advance + poll-log
-                // push), so no `.await` here.
+                // gossip fanned in from the per-author drainer tasks. Also
+                // carries pulled-backfill envelopes re-injected by
+                // `drain_distribution_response` (spec §14.4).
+                // B-12 §4.3 / §14.1: the handler is `async` — an above-our-head
+                // `RevocationHeads`/`PublicationHeads` summary makes it dial
+                // the advertiser and pull the missing envelopes
+                // (pull-on-behind), so the arm must `.await` it. The dial is
+                // fire-and-forget (spawns a drainer) and bounded by the
+                // per-advertiser `distribution_dial_limit` bucket (§14.1), so
+                // this `.await` cannot stall the loop on a forged-summary flood.
                 Some((author, msg)) = self.distribution_rx.recv() => {
-                    self.handle_distribution_message(author, msg);
+                    let _ = self.handle_distribution_message(author, msg).await;
                 }
                 recv_result = sub.recv() => match recv_result {
                     Ok(Some(m)) => {
@@ -874,6 +1173,10 @@ impl Runtime {
                     }
                 },
                 _ = ticker.tick() => { self.publish_heads_summary().await?; }
+                // B-12 §3.5 (SELECT ARM 7): periodically re-advertise our
+                // distribution-log heads, recovering from transient
+                // partitions / `SubError::Lagged` on the distribution subs.
+                _ = dist_ticker.tick() => { self.broadcast_distribution_heads().await?; }
             }
         }
     }
@@ -905,6 +1208,74 @@ impl Runtime {
         Ok(())
     }
 
+    /// Broadcast a head summary (`RevocationHeads`/`PublicationHeads`)
+    /// advertising our current `last_observed_seq` for each installed
+    /// author on its derived distribution topics.
+    ///
+    /// Called once on start (the "sync on start" of master
+    /// `distribution.md` §10.7) and from the `distribution_sync_tick` arm.
+    /// Every peer advertises its head; a behind peer that hears an
+    /// *above-our-head* summary dials the advertiser and pulls the delta
+    /// (pull-on-behind, [`Self::handle_revocation_heads`]). The advertiser
+    /// identity carried on each summary is the dial target. Convergence is
+    /// the fixpoint of everyone advertising + behind-peers pulling
+    /// (spec §14.1, the corrected transport — gossip-push is gone). An
+    /// empty `installed_authors` makes this a no-op.
+    ///
+    /// # Errors
+    /// Propagates a [`NetError`] (wrapped) from a summary `publish`.
+    async fn broadcast_distribution_heads(&mut self) -> Result<(), RuntimeError> {
+        // Our peer identity, stamped on each summary so receivers can filter
+        // loopback (spec §3.2) and, in the corrected transport (spec §13),
+        // know whom to dial for the pull.
+        let advertiser = self.peer_key.public;
+        // Clone the small author list so the publish calls below can take
+        // `&mut self` without holding an immutable borrow of the field.
+        for author in self.installed_authors.clone() {
+            let rev_seq = self
+                .revocation_logs
+                .get(&author)
+                .map_or(0, |log| log.last_observed_seq);
+            self.network
+                .publish(
+                    Topic::from_bytes(derive_revocation_topic(author)),
+                    GossipMessage::RevocationHeads(RevocationHeads {
+                        author,
+                        advertiser,
+                        last_observed_seq: rev_seq,
+                    }),
+                )
+                .await?;
+            let pub_seq = self
+                .publication_logs
+                .get(&author)
+                .map_or(0, |log| log.last_observed_seq);
+            self.network
+                .publish(
+                    Topic::from_bytes(derive_publication_topic(author)),
+                    GossipMessage::PublicationHeads(PublicationHeads {
+                        author,
+                        advertiser,
+                        last_observed_seq: pub_seq,
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Refresh the staleness clock for `author` — any inbound distribution
+    /// message (event or summary, even a misroute) is evidence the topic
+    /// is reachable (spec §3.7). The wall-clock read is confined to this
+    /// kernel orchestration task; it never enters a state-apply path.
+    #[allow(clippy::expect_used)]
+    fn note_distribution_sync(&self, author: AuthorPubkey) {
+        self.last_distribution_sync
+            .lock()
+            .expect("last_distribution_sync mutex poisoned")
+            .insert(author, SystemTime::now());
+    }
+
     /// Dispatch an inbound revocation/publication message (fanned in
     /// from a per-author drainer task) to the variant-specific handler.
     ///
@@ -914,19 +1285,72 @@ impl Runtime {
     /// [`RevocationLog::apply`] / [`PublicationLog::apply`] need it to
     /// cross-check the signature.
     ///
-    /// A message of any other [`GossipMessage`] variant on a
-    /// distribution topic is structurally impossible from an honest peer
-    /// (the runtime only ever publishes `Revocation`/`Publication` on
-    /// these topics); receiving one means a peer misrouted (or forged)
-    /// wire traffic, so it is discarded with a
+    /// The runtime publishes `Revocation`, `Publication`, `RevocationHeads`,
+    /// and `PublicationHeads` on these topics (the latter two added in
+    /// B-12 T4's `broadcast_distribution_heads`). Any other
+    /// [`GossipMessage`] variant on a distribution topic is structurally
+    /// impossible from an honest peer; receiving one means a peer
+    /// misrouted (or forged) wire traffic, so it is discarded with a
     /// [`PeerWarning::DecodeFailed`] — matching the spec §4.1 default arm
     /// and the app-topic `handle_message` mirror.
     ///
-    /// Per B-11 spec §3.4 / §4.1.
-    fn handle_distribution_message(&mut self, author: AuthorPubkey, msg: GossipMessage) {
+    /// This is `async` (B-12 §4.3 / §4.5): the `RevocationHeads` /
+    /// `PublicationHeads` summary arms dispatch to the pull-on-behind
+    /// handlers, which dial the advertiser and pull the missing signed
+    /// envelopes when a summary lands *above* our head (spec §14.1). The
+    /// returned `Result` is dropped by the sixth select arm (matching the
+    /// `handle_event` / `handle_message` non-fatal-per-message pattern): a
+    /// transient dial failure is surfaced as
+    /// [`PeerWarning::DirectRequestFailed`] and recovered by the next
+    /// `distribution_sync_tick` (spec §3.5), not a loop-halting fault.
+    ///
+    /// # Errors
+    /// Currently infallible on the summary arms (the pull is fire-and-forget
+    /// with errors surfaced as warnings); the `Result` is retained for the
+    /// arm contract above.
+    ///
+    /// Per B-11 spec §3.4 / §4.1 and B-12 spec §3.2 / §14.1.
+    async fn handle_distribution_message(
+        &mut self,
+        author: AuthorPubkey,
+        msg: GossipMessage,
+    ) -> Result<(), RuntimeError> {
+        // B-12 §3.7: any inbound distribution message is evidence the
+        // author's topic is reachable — refresh the staleness clock before
+        // dispatch (covers events, summaries, and misroutes alike).
+        //
+        // Loopback filter (spec §3.2): a peer must ignore its own advertised
+        // summaries. MemNetwork — and gossip overlays generally — may deliver
+        // a peer its own broadcast; acting on it would make us "push to
+        // ourselves" (then re-apply the push as a stale duplicate) and would
+        // falsely refresh our own staleness clock. Mirrors the event-DAG
+        // `HeadsSummary` loopback skip (`signed_by_peer != self`). Checked
+        // BEFORE the sync-clock bump so a self-summary is not mistaken for
+        // network reachability.
+        match &msg {
+            GossipMessage::RevocationHeads(h) if h.advertiser == self.peer_key.public => {
+                return Ok(());
+            }
+            GossipMessage::PublicationHeads(h) if h.advertiser == self.peer_key.public => {
+                return Ok(());
+            }
+            _ => {}
+        }
+        self.note_distribution_sync(author);
         match msg {
             GossipMessage::Revocation(ev) => self.handle_revocation(author, &ev),
             GossipMessage::Publication(ev) => self.handle_publication(author, ev),
+            // RevocationHeads / PublicationHeads are legitimate B-12
+            // backfill summaries that ride these distribution topics
+            // (spec §3.2) — NOT misroutes, so they must NOT be classified
+            // as DecodeFailed. They drive the pull-on-behind receive path
+            // (dial the advertiser when its head is above ours, spec §14.1).
+            GossipMessage::RevocationHeads(heads) => {
+                self.handle_revocation_heads(author, heads).await?;
+            }
+            GossipMessage::PublicationHeads(heads) => {
+                self.handle_publication_heads(author, heads).await?;
+            }
             GossipMessage::Event(_) | GossipMessage::HeadsSummary(_) | GossipMessage::Drift(_) => {
                 #[allow(clippy::expect_used)]
                 self.peer_warnings
@@ -935,6 +1359,232 @@ impl Runtime {
                     .push(PeerWarning::DecodeFailed { peer: None });
             }
         }
+        Ok(())
+    }
+
+    /// Handle an inbound [`RevocationHeads`] summary: pull-on-behind for
+    /// the revocation log (B-12 spec §14.1 / §14.4, the corrected pull
+    /// transport).
+    ///
+    /// `topic_author` is the topic-owner the drainer tagged the message
+    /// with (the key the per-author revocation topic was derived from);
+    /// `heads.author` is the author the *summary* claims to describe. A
+    /// mismatch means the summary arrived on the wrong per-author topic —
+    /// a misroute or forgery — so it is discarded with
+    /// [`PeerWarning::DecodeFailed`], mirroring the misrouted-`Revocation`
+    /// guard (spec §3.2 / §4.3).
+    ///
+    /// On a matching author: if the advertised `last_observed_seq` is
+    /// *above* our own log head (we are behind) and the per-advertiser
+    /// dial-limit admits, we **dial the advertiser** and pull the missing
+    /// envelopes via [`Self::issue_distribution_backfill`] — a
+    /// point-to-point QUIC request, not a gossip re-broadcast, because the
+    /// behind→ahead gossip path is unreliable for a late joiner (spec §13).
+    /// The advertiser serves the contiguous `local+1..=remote` range from
+    /// its archive; we feed each pulled envelope back through
+    /// [`Self::handle_distribution_message`], idempotent via the
+    /// monotonic-seq check. A summary at-or-below our head is a no-op
+    /// beyond the (caller's) sync-clock bump — push-on-behind is gone, so
+    /// hearing a *behind* peer's low summary no longer makes us act.
+    ///
+    /// # Errors
+    /// Infallible in practice (the dial is fire-and-forget; request
+    /// failures surface as [`PeerWarning::DirectRequestFailed`] inside
+    /// [`Self::issue_distribution_backfill`]); the `Result` is retained for
+    /// symmetry with the dispatch arm.
+    #[allow(clippy::expect_used)]
+    async fn handle_revocation_heads(
+        &mut self,
+        topic_author: AuthorPubkey,
+        heads: RevocationHeads,
+    ) -> Result<(), RuntimeError> {
+        if heads.author != topic_author {
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::DecodeFailed { peer: None });
+            return Ok(());
+        }
+        let author = topic_author;
+        let remote = heads.last_observed_seq;
+        let local = self
+            .revocation_logs
+            .get(&author)
+            .map_or(0, |log| log.last_observed_seq);
+        // At or ahead of the advertiser — nothing to pull.
+        if remote <= local {
+            return Ok(());
+        }
+        // We are behind: pull the gap from the advertiser (spec §14.1). The
+        // per-advertiser dial-limit + in-flight guard live in
+        // `issue_distribution_backfill`.
+        self.issue_distribution_backfill(
+            heads.advertiser,
+            author,
+            DistributionLogKind::Revocation,
+            local,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Handle an inbound [`PublicationHeads`] summary: pull-on-behind for
+    /// the publication log (B-12 spec §14.1 / §14.4).
+    ///
+    /// Structural twin of [`Self::handle_revocation_heads`]: on a summary
+    /// *above* our head (matching author, dial-limit admits) we dial the
+    /// advertiser and pull. Publication is latest-wins, so the advertiser
+    /// serves the single newest envelope; the seq comparison and the
+    /// pulled-envelope apply path are otherwise identical to the revocation
+    /// twin. Mismatched-author summaries are discarded as
+    /// [`PeerWarning::DecodeFailed`] exactly as in the revocation twin.
+    ///
+    /// # Errors
+    /// Infallible in practice (see [`Self::handle_revocation_heads`]).
+    #[allow(clippy::expect_used)]
+    async fn handle_publication_heads(
+        &mut self,
+        topic_author: AuthorPubkey,
+        heads: PublicationHeads,
+    ) -> Result<(), RuntimeError> {
+        if heads.author != topic_author {
+            self.peer_warnings
+                .lock()
+                .expect("peer_warnings mutex poisoned")
+                .push(PeerWarning::DecodeFailed { peer: None });
+            return Ok(());
+        }
+        let author = topic_author;
+        let remote = heads.last_observed_seq;
+        let local = self
+            .publication_logs
+            .get(&author)
+            .map_or(0, |log| log.last_observed_seq);
+        if remote <= local {
+            return Ok(());
+        }
+        self.issue_distribution_backfill(
+            heads.advertiser,
+            author,
+            DistributionLogKind::Publication,
+            local,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Consume one slot from the per-advertiser backfill-dial token bucket
+    /// (spec §14.1). Lazily creates the bucket on first use. Returns `true`
+    /// if the dial is admitted, `false` if the bucket is exhausted (the
+    /// dial-storm guard has tripped).
+    ///
+    /// `min_interval` is zero: the cap is purely the trailing-24h dial
+    /// count (`DISTRIBUTION_DIAL_DAILY_CAP`), so legitimate back-to-back
+    /// catch-up across distinct authors served by the same advertiser is
+    /// not throttled while a forged-high-summary flood from one advertiser
+    /// is still bounded.
+    fn admit_distribution_dial(&mut self, advertiser: PeerPubkey) -> bool {
+        let bucket = self
+            .distribution_dial_limit
+            .entry(advertiser)
+            .or_insert_with(|| {
+                DriftRateLimit::new(Duration::from_secs(0), DISTRIBUTION_DIAL_DAILY_CAP)
+            });
+        bucket.try_emit(std::time::Instant::now()).is_ok()
+    }
+
+    /// Dial `advertiser` and pull the missing distribution envelopes for
+    /// `(author, kind)`, feeding each pulled envelope back into the apply
+    /// path (spec §14.4, the pull counterpart to the deleted push branch).
+    ///
+    /// Gated twice before the dial: the per-advertiser dial-limit
+    /// ([`Self::admit_distribution_dial`]) bounds how often one advertiser
+    /// can goad us into dialing (a forged-high-summary defense), and the
+    /// per-`(author, kind)` in-flight guard suppresses a redundant
+    /// concurrent dial when a pull for the same gap is already running
+    /// (e.g. several ahead peers re-advertising the same head). Either gate
+    /// failing is a silent no-op.
+    ///
+    /// On admit, issues `network.request_distribution(advertiser, …)` for
+    /// envelopes with `seq > from_seq`, then spawns
+    /// [`drain_distribution_response`] to forward each received
+    /// [`DistributionEnvelope`] into [`Self::distribution_tx`] as a
+    /// `GossipMessage::Revocation`/`Publication` — the runtime then
+    /// processes them through [`Self::handle_distribution_message`]
+    /// exactly as if they had arrived over gossip (verify-edge → apply →
+    /// archive → surface), idempotent via the monotonic-seq check. The
+    /// drainer clears the in-flight marker when the stream ends.
+    ///
+    /// On `NetError::RequestFailed`, pushes a
+    /// [`PeerWarning::DirectRequestFailed`] and returns (clearing the
+    /// in-flight marker); the next periodic `distribution_sync_tick` or a
+    /// fresh inbound summary triggers a retry. Mirrors
+    /// [`Self::issue_direct_backfill`] (the event-DAG pull).
+    #[allow(clippy::expect_used)]
+    async fn issue_distribution_backfill(
+        &mut self,
+        advertiser: PeerPubkey,
+        author: AuthorPubkey,
+        kind: DistributionLogKind,
+        from_seq: u64,
+    ) {
+        // Suppress a redundant concurrent pull for the same gap. Insert
+        // returns false if the marker was already present.
+        {
+            let mut in_flight = self
+                .distribution_in_flight
+                .lock()
+                .expect("distribution_in_flight mutex poisoned");
+            if !in_flight.insert((author, kind)) {
+                return;
+            }
+        }
+        // Per-advertiser dial-limit (forged-high-summary dial-storm guard).
+        // Checked AFTER claiming the in-flight slot so a denied dial must
+        // release it again.
+        if !self.admit_distribution_dial(advertiser) {
+            self.clear_distribution_in_flight(author, kind);
+            return;
+        }
+        let request = DistributionBackfillRequest {
+            author,
+            kind,
+            from_seq,
+        };
+        let stream = match self.network.request_distribution(advertiser, request).await {
+            Ok(s) => s,
+            Err(e) => {
+                self.peer_warnings
+                    .lock()
+                    .expect("peer_warnings mutex poisoned")
+                    .push(PeerWarning::DirectRequestFailed {
+                        peer: advertiser,
+                        reason: format!("{e}"),
+                    });
+                self.clear_distribution_in_flight(author, kind);
+                return;
+            }
+        };
+        // Spawn a drainer that re-injects each pulled envelope into the
+        // shared distribution channel (tagged with `author`, as the gossip
+        // drainers do) and clears the in-flight marker on completion.
+        let tx = self.distribution_tx.clone();
+        let in_flight = self.distribution_in_flight.clone();
+        tokio::spawn(drain_distribution_response(
+            stream, author, kind, tx, in_flight,
+        ));
+    }
+
+    /// Clear the `(author, kind)` in-flight-pull marker. Called on the
+    /// early-return dial-denied / request-failed paths in
+    /// [`Self::issue_distribution_backfill`]; the drainer clears it on the
+    /// happy path. Idempotent (removing an absent key is a no-op).
+    #[allow(clippy::expect_used)]
+    fn clear_distribution_in_flight(&self, author: AuthorPubkey, kind: DistributionLogKind) {
+        self.distribution_in_flight
+            .lock()
+            .expect("distribution_in_flight mutex poisoned")
+            .remove(&(author, kind));
     }
 
     /// Verify + apply an inbound [`RevocationEvent`] for `author`.
@@ -978,6 +1628,14 @@ impl Runtime {
             .unwrap_or_default();
         if let Ok(new) = prior.clone().apply(ev, &author) {
             self.revocation_logs.insert(author, new);
+            // B-12 §3.3 / §4.3: archive the signed envelope so this peer
+            // can serve a backfill pull later (§14.4). Keyed by author then
+            // `revocation_seq` (the contiguous range a behind-peer needs).
+            // `ev` is borrowed, so clone into the archive.
+            self.revocation_archive
+                .entry(author)
+                .or_default()
+                .insert(ev.revocation_seq, ev.clone());
             self.revocation_events
                 .lock()
                 .expect("revocation_events mutex poisoned")
@@ -1024,6 +1682,11 @@ impl Runtime {
         // so the move stays valid in the success branch.
         if let Ok(new) = prior.clone().apply(&ev, &author) {
             self.publication_logs.insert(author, new);
+            // B-12 §3.3 / §4.3: archive the latest signed envelope so this
+            // peer can serve a backfill pull (§14.4; publication is
+            // latest-wins, so one envelope suffices). Clone BEFORE the
+            // `PublicationAnnounced` push below moves `ev.version` out of `ev`.
+            self.publication_latest.insert(author, ev.clone());
             self.publication_events
                 .lock()
                 .expect("publication_events mutex poisoned")
@@ -1098,6 +1761,18 @@ impl<N: Network> Network for NetworkErased<N> {
     fn install_request_handler(&self, handler: ArcRequestHandler) {
         self.inner.install_request_handler(handler);
     }
+
+    async fn request_distribution(
+        &self,
+        peer: PeerPubkey,
+        request: DistributionBackfillRequest,
+    ) -> Result<DistributionStream, NetError> {
+        self.inner.request_distribution(peer, request).await
+    }
+
+    fn install_distribution_handler(&self, handler: ArcDistributionHandler) {
+        self.inner.install_distribution_handler(handler);
+    }
 }
 
 // The blanket `impl Subscription for Box<S>` lives in the
@@ -1119,15 +1794,19 @@ impl Runtime {
                 // Else: SignatureInvalid was pushed (or loopback) — drop.
             }
             GossipMessage::Drift(d) => self.process_drift_message(d).await,
-            // Revocation / Publication envelopes (B-11 §3.1) ride the
-            // per-author revocation/publication topics, NOT the app topic
+            // Revocation / Publication envelopes (B-11 §3.1) and the
+            // RevocationHeads / PublicationHeads summaries (B-12 §3.2) all
+            // ride the per-author distribution topics, NOT the app topic
             // this subscription consumes. Receiving one here means a peer
             // misrouted (or forged) wire traffic onto the app topic; treat
             // it like any other "parsed cleanly but doesn't belong here"
             // case — discard with a DecodeFailed warning, matching the
             // spec §4.1 default arm. The legitimate receive path is the
             // dedicated distribution select arm wired in B-11 T4.
-            GossipMessage::Revocation(_) | GossipMessage::Publication(_) => {
+            GossipMessage::Revocation(_)
+            | GossipMessage::Publication(_)
+            | GossipMessage::RevocationHeads(_)
+            | GossipMessage::PublicationHeads(_) => {
                 #[allow(clippy::expect_used)]
                 self.peer_warnings
                     .lock()
@@ -1754,6 +2433,69 @@ impl Runtime {
                     // Requester dropped the stream — stop early.
                     return;
                 }
+            }
+        }
+        // Responder drops at end of function -> requester sees clean EOF.
+    }
+
+    /// Serve an inbound direct-stream distribution-backfill request from a
+    /// behind peer (B-12 spec §14.4, the corrected pull transport).
+    ///
+    /// The request was already author-gated by [`KernelDistributionHandler`]
+    /// (we only reach here for an author this runtime serves). Streams the
+    /// missing signed envelopes back through `cmd.responder`:
+    ///
+    /// - [`DistributionLogKind::Revocation`] → the contiguous range
+    ///   `from_seq+1..=max` from [`Self::revocation_archive`]. Revocation
+    ///   accumulates (every envelope contributes a distinct revoked bundle
+    ///   to the set), so a behind peer needs every envelope in the gap.
+    /// - [`DistributionLogKind::Publication`] → the single
+    ///   [`Self::publication_latest`] envelope, and only if its
+    ///   `publication_seq` exceeds `from_seq` (latest-wins: one envelope
+    ///   reconstructs the entire observable state, so the head alone is the
+    ///   whole backfill).
+    ///
+    /// **Borrow discipline (mirrors [`Self::serve_direct_heads_request`]):**
+    /// the envelopes are snapshotted (cloned) into an owned `Vec` *before*
+    /// the first `responder.send(...).await`, so no immutable borrow of
+    /// `self.revocation_archive` / `self.publication_latest` is held across
+    /// an await point. A `send` error means the requester dropped the
+    /// stream — we stop early. The responder drops at end of function,
+    /// yielding clean EOF to the requester.
+    async fn serve_distribution_request(&mut self, cmd: DistributionRequestCommand) {
+        // `requester` is captured for parity with the heads serve path and
+        // a future per-requester rate-limit hook; the author gate already
+        // ran in the handler, so the serve path does not branch on it.
+        let _requester = cmd.requester;
+        let responder = cmd.responder;
+        let author = cmd.request.author;
+        let from_seq = cmd.request.from_seq;
+
+        // Snapshot the envelopes to serve BEFORE any await so the immutable
+        // borrow of the archive ends before `responder.send`.
+        let to_send: Vec<DistributionEnvelope> = match cmd.request.kind {
+            DistributionLogKind::Revocation => self
+                .revocation_archive
+                .get(&author)
+                .map(|archive| {
+                    archive
+                        .range(from_seq.saturating_add(1)..)
+                        .map(|(_, ev)| DistributionEnvelope::Revocation(ev.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            DistributionLogKind::Publication => self
+                .publication_latest
+                .get(&author)
+                .filter(|ev| ev.publication_seq > from_seq)
+                .map(|ev| vec![DistributionEnvelope::Publication(ev.clone())])
+                .unwrap_or_default(),
+        };
+
+        for envelope in to_send {
+            if responder.send(envelope).await.is_err() {
+                // Requester dropped the stream — stop early.
+                return;
             }
         }
         // Responder drops at end of function -> requester sees clean EOF.
@@ -2399,6 +3141,63 @@ async fn drain_heads_response(mut stream: HeadsStream, tx: mpsc::Sender<Event>) 
     }
 }
 
+/// Drain a [`DistributionStream`] pulled from an advertiser, re-injecting
+/// each [`DistributionEnvelope`] into the shared distribution channel as a
+/// `GossipMessage::Revocation`/`Publication` tagged with `author`, so the
+/// runtime applies it through [`Runtime::handle_distribution_message`]
+/// exactly as if it had arrived over gossip (verify-edge → apply → archive
+/// → surface). The distribution counterpart of [`drain_heads_response`]
+/// (B-12 spec §14.4).
+///
+/// Lifecycle: forwards until the stream ends (`None`, clean EOF), a
+/// stream-level error arrives (terminate — the next summary retries the
+/// gap), or the channel receiver is dropped (runtime task gone). On exit —
+/// by any path — the `(author, kind)` in-flight marker is cleared so a
+/// later summary for the same gap can dial again. The
+/// [`DistributionEnvelope`] variant is mapped to the matching
+/// `GossipMessage` variant; `kind` is carried only to key the in-flight
+/// clear (the envelope variant alone determines the dispatch).
+#[allow(clippy::expect_used)]
+async fn drain_distribution_response(
+    mut stream: DistributionStream,
+    author: AuthorPubkey,
+    kind: DistributionLogKind,
+    tx: mpsc::Sender<(AuthorPubkey, GossipMessage)>,
+    in_flight: Arc<Mutex<BTreeSet<(AuthorPubkey, DistributionLogKind)>>>,
+) {
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(DistributionEnvelope::Revocation(ev)) => {
+                if tx
+                    .send((author, GossipMessage::Revocation(ev)))
+                    .await
+                    .is_err()
+                {
+                    break; // runtime task gone
+                }
+            }
+            Ok(DistributionEnvelope::Publication(ev)) => {
+                if tx
+                    .send((author, GossipMessage::Publication(ev)))
+                    .await
+                    .is_err()
+                {
+                    break; // runtime task gone
+                }
+            }
+            Err(_e) => {
+                // Stream-level error — terminate. The next summary for
+                // this gap retries.
+                break;
+            }
+        }
+    }
+    in_flight
+        .lock()
+        .expect("distribution_in_flight mutex poisoned")
+        .remove(&(author, kind));
+}
+
 /// Auto-subscribe each installed author's revocation + publication
 /// topics on `network`, spawning a [`drain_distribution_sub`] task per
 /// subscription that forwards inbound `(author, GossipMessage)` into a
@@ -2418,7 +3217,7 @@ async fn subscribe_distribution_topics<N: Network>(
     network: &N,
     installed_authors: &[AuthorPubkey],
     bootstrap: &[PeerPubkey],
-) -> Result<mpsc::Receiver<(AuthorPubkey, GossipMessage)>, RuntimeError>
+) -> Result<DistributionChannel, RuntimeError>
 where
     N::Subscription: Send + 'static,
 {
@@ -2439,7 +3238,22 @@ where
         tokio::spawn(drain_distribution_sub(author, rsub, tx.clone()));
         tokio::spawn(drain_distribution_sub(author, psub, tx.clone()));
     }
-    Ok(rx)
+    // The `tx` is returned alongside `rx` (rather than dropped after the
+    // drainer spawns) so the runtime can retain a clone: a distribution
+    // *pull* drainer ([`Runtime::issue_distribution_backfill`]) re-injects
+    // pulled envelopes into this same channel as
+    // `GossipMessage::Revocation`/`Publication`, reusing
+    // [`Runtime::handle_distribution_message`]. Per B-12 spec §14.4.
+    Ok(DistributionChannel { tx, rx })
+}
+
+/// Both halves of the shared distribution channel returned by
+/// [`subscribe_distribution_topics`]. The runtime keeps `rx` for the
+/// inbound-gossip select arm and retains `tx` as the re-injection point
+/// for pulled-backfill envelopes (spec §14.4).
+struct DistributionChannel {
+    tx: mpsc::Sender<(AuthorPubkey, GossipMessage)>,
+    rx: mpsc::Receiver<(AuthorPubkey, GossipMessage)>,
 }
 
 /// Per-subscription drainer for an installed author's revocation OR
@@ -2493,6 +3307,186 @@ async fn drain_distribution_sub<S: Subscription + Send + 'static>(
 mod tests {
     use super::*;
     use myrhiza_types::BlobHash;
+
+    /// Build a minimal in-process [`Runtime`] for unit-testing the
+    /// distribution handlers' archive population (B-12 §3.3 / §4.3).
+    ///
+    /// The revocation/publication handlers never touch the state-apply
+    /// component (they verify the envelope signature, fold the pure-tier
+    /// log, append to the poll-log, and — new in B-12 — populate the
+    /// kernel archive), so a [`StateApplyHandle::tombstone`] is a sound,
+    /// never-invoked stand-in: it would panic only if a state-apply
+    /// method were called, which these code paths never do. Building the
+    /// full struct directly (rather than going through
+    /// [`Runtime::start`], which spawns the value into a task and only
+    /// returns a `RuntimeHandle`) is what lets the test read the private
+    /// `revocation_archive` / `publication_latest` fields.
+    fn test_runtime() -> Runtime {
+        use myrhiza_network::{MemBus, MemNetwork};
+
+        let bus = MemBus::new(64);
+        let net = MemNetwork::new(bus, PeerPubkey::from_bytes([0xA1; 32]));
+        let erased = NetworkErased::new(net);
+
+        let topic = Topic::from_bytes([0u8; 32]);
+        let app_bundle_hash = BundleHash::from_bytes([0u8; 32]);
+        let topic_name = "test".to_string();
+        let cfg = RuntimeCfg::default();
+
+        let (digest_watch_tx, _digest_watch) = watch::channel(Vec::<u8>::new());
+        let (halt_watch_tx, _halt_watch) = watch::channel(None::<String>);
+        let (_heads_req_tx, heads_req_rx) = mpsc::channel::<HeadsRequestCommand>(1);
+        let (internal_event_tx, internal_event_rx) = mpsc::channel::<Event>(1);
+        let (_dist_req_tx, distribution_req_rx) = mpsc::channel::<DistributionRequestCommand>(1);
+        let (distribution_tx, distribution_rx) = mpsc::channel::<(AuthorPubkey, GossipMessage)>(1);
+
+        let rate_limit = DriftRateLimit::new(cfg.drift_min_interval, cfg.drift_daily_cap);
+        let dag = EventDag::new(topic, app_bundle_hash, topic_name.clone());
+        let pending = PendingBuffer::new(cfg.pending_cfg.clone());
+
+        Runtime {
+            network: Arc::new(erased),
+            topic,
+            app_bundle_hash,
+            topic_name,
+            dag,
+            pending,
+            handle: StateApplyHandle::tombstone(),
+            state: Vec::new(),
+            last_topo_order: Vec::new(),
+            peer_key: PeerKeypair::deterministic(1),
+            author_key: None,
+            cfg,
+            rate_limit,
+            own_digest_cache: BTreeMap::new(),
+            incoming_drift_pending: BTreeMap::new(),
+            drift_log: Arc::new(Mutex::new(Vec::new())),
+            equivocation_log: Arc::new(Mutex::new(Vec::new())),
+            peer_warnings: Arc::new(Mutex::new(Vec::new())),
+            dropped_at_apply: Arc::new(Mutex::new(HashMap::new())),
+            digest_watch_tx,
+            halt_watch_tx,
+            hlc_logical_counter: 0,
+            tip_fast_path_hits: Arc::new(Mutex::new(0)),
+            consecutive_transport_errors: 0,
+            heads_req_rx,
+            distribution_req_rx,
+            internal_event_rx,
+            internal_event_tx,
+            peer_authority_index: BTreeMap::new(),
+            revocation_logs: BTreeMap::new(),
+            publication_logs: BTreeMap::new(),
+            revocation_archive: BTreeMap::new(),
+            publication_latest: BTreeMap::new(),
+            distribution_dial_limit: BTreeMap::new(),
+            distribution_in_flight: Arc::new(Mutex::new(BTreeSet::new())),
+            distribution_tx,
+            distribution_rx,
+            revocation_events: Arc::new(Mutex::new(Vec::new())),
+            publication_events: Arc::new(Mutex::new(Vec::new())),
+            installed_authors: Vec::new(),
+            last_distribution_sync: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    /// Sign a genuine [`RevocationEvent`] for `author` at `seq`.
+    fn signed_revocation(
+        sk: &ed25519_dalek::SigningKey,
+        revoked: BlobHash,
+        seq: u64,
+    ) -> RevocationEvent {
+        use ed25519_dalek::Signer;
+        let mut ev = RevocationEvent {
+            revoked_bundle_hash: revoked,
+            reason: "compromised".to_string(),
+            revoked_at: 0,
+            revocation_seq: seq,
+            signature: [0u8; 64],
+        };
+        ev.signature = sk.sign(&ev.signing_target()).to_bytes();
+        ev
+    }
+
+    /// Sign a genuine [`PublicationEvent`] for `author` at `seq`.
+    fn signed_publication(
+        sk: &ed25519_dalek::SigningKey,
+        manifest: BlobHash,
+        version: &str,
+        seq: u64,
+    ) -> PublicationEvent {
+        use ed25519_dalek::Signer;
+        let mut ev = PublicationEvent {
+            manifest_hash: manifest,
+            version: version.to_string(),
+            publication_seq: seq,
+            signature: [0u8; 64],
+        };
+        ev.signature = sk.sign(&ev.signing_target()).to_bytes();
+        ev
+    }
+
+    /// B-12 spec §3.3 / §4.3: a verified+applied revocation is archived
+    /// into `revocation_archive[author][revocation_seq]` (the full signed
+    /// envelope), so this peer can later serve a backfill pull that the
+    /// signature-discarding pure-tier `RevocationLog` cannot reconstruct.
+    #[test]
+    fn revocation_archived_on_valid_apply() {
+        use ed25519_dalek::SigningKey;
+
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let author = AuthorPubkey::from_bytes(sk.verifying_key().to_bytes());
+        let revoked = BlobHash::from_bytes([0xAA; 32]);
+        let ev = signed_revocation(&sk, revoked, 1);
+
+        let mut rt = test_runtime();
+        rt.handle_revocation(author, &ev);
+
+        // The pure-tier log advanced (sanity — the archive write is gated
+        // on the same apply-Ok).
+        assert_eq!(
+            rt.revocation_logs.get(&author).unwrap().last_observed_seq,
+            1,
+        );
+        // The full signed envelope is in the archive at its seq.
+        let archived = rt
+            .revocation_archive
+            .get(&author)
+            .expect("author archive present after a valid revocation")
+            .get(&1)
+            .expect("seq-1 envelope archived");
+        assert_eq!(*archived, ev, "the exact signed envelope is retained");
+    }
+
+    /// B-12 spec §3.3 / §4.3: `publication_latest[author]` holds the
+    /// NEWER of two applied publications (latest-wins). Critically, the
+    /// envelope is cloned into the archive BEFORE `ev.version` is moved
+    /// onto `PublicationAnnounced`, so the archive carries the full
+    /// envelope (version included) for backfill.
+    #[test]
+    fn publication_latest_holds_newer_of_two() {
+        use ed25519_dalek::SigningKey;
+
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let author = AuthorPubkey::from_bytes(sk.verifying_key().to_bytes());
+
+        let ev1 = signed_publication(&sk, BlobHash::from_bytes([0x11; 32]), "1.0.0", 1);
+        let ev2 = signed_publication(&sk, BlobHash::from_bytes([0x22; 32]), "2.0.0", 2);
+
+        let mut rt = test_runtime();
+        rt.handle_publication(author, ev1);
+        rt.handle_publication(author, ev2.clone());
+
+        let latest = rt
+            .publication_latest
+            .get(&author)
+            .expect("author publication archived");
+        assert_eq!(
+            *latest, ev2,
+            "publication_latest must hold the newer (seq-2) envelope",
+        );
+        assert_eq!(latest.version, "2.0.0", "version retained for backfill");
+        assert_eq!(latest.publication_seq, 2);
+    }
 
     /// B-11 spec §4.2: `RevocationApplied` is the outward surface record
     /// the kernel pushes after a verified+applied revocation event. Pins
@@ -2598,6 +3592,214 @@ mod tests {
         assert!(
             matches!(received.1, GossipMessage::Revocation(got) if got == ev),
             "drainer must forward the exact Revocation envelope",
+        );
+    }
+
+    /// Drain a [`DistributionStream`] to exhaustion, collecting every
+    /// envelope the server streamed before clean EOF (`next` → `None`).
+    /// Bounded by a per-poll timeout so a serve-side hang fails the test
+    /// rather than hanging the suite.
+    async fn drain_stream(mut stream: DistributionStream) -> Vec<DistributionEnvelope> {
+        let mut out = Vec::new();
+        loop {
+            let item = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("distribution stream stalled (no item within timeout)");
+            match item {
+                Some(result) => out.push(result.expect("distribution stream errored")),
+                None => break, // clean EOF
+            }
+        }
+        out
+    }
+
+    /// Install a [`KernelDistributionHandler`] on `server_net` for
+    /// `installed_authors`, returning the mailbox receiver the runtime
+    /// task would drain. Mirrors the real `Runtime::start` wiring so the
+    /// author gate is exercised exactly as in production.
+    fn install_kernel_distribution_handler(
+        server_net: &myrhiza_network::MemNetwork,
+        installed_authors: Vec<AuthorPubkey>,
+    ) -> mpsc::Receiver<DistributionRequestCommand> {
+        use myrhiza_network::Network;
+        let (tx, rx) = mpsc::channel::<DistributionRequestCommand>(32);
+        server_net.install_distribution_handler(Arc::new(KernelDistributionHandler {
+            tx,
+            installed_authors,
+        }));
+        rx
+    }
+
+    /// B-12 spec §14.4: `serve_distribution_request` streams the
+    /// **contiguous range** `from_seq+1..=max` of archived revocation
+    /// envelopes back to a behind requester. Exercises the real
+    /// `KernelDistributionHandler` author gate + the real serve path + the
+    /// `MemNetwork` direct-stream round-trip: the requester dials, the
+    /// handler forwards a `DistributionRequestCommand`, the runtime serves
+    /// it, and the requester reads the exact envelopes off its stream.
+    #[tokio::test]
+    async fn serve_distribution_request_streams_revocation_range() {
+        use ed25519_dalek::SigningKey;
+        use myrhiza_network::{MemBus, MemNetwork, Network};
+
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let author = AuthorPubkey::from_bytes(sk.verifying_key().to_bytes());
+
+        // Server runtime with seqs 1..=3 archived.
+        let mut rt = test_runtime();
+        let revs: Vec<RevocationEvent> = [1u64, 2, 3]
+            .into_iter()
+            .map(|seq| {
+                let marker = u8::try_from(seq).expect("test seq fits in u8");
+                signed_revocation(&sk, BlobHash::from_bytes([marker; 32]), seq)
+            })
+            .collect();
+        for ev in &revs {
+            rt.handle_revocation(author, ev);
+        }
+
+        let bus = MemBus::new(64);
+        let server_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xB0; 32]));
+        let mut req_rx = install_kernel_distribution_handler(&server_net, vec![author]);
+
+        // Requester dials with from_seq=1 → expects seqs 2 and 3.
+        let client_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xC0; 32]));
+        let stream = client_net
+            .request_distribution(
+                server_net.peer_pubkey(),
+                DistributionBackfillRequest {
+                    author,
+                    kind: DistributionLogKind::Revocation,
+                    from_seq: 1,
+                },
+            )
+            .await
+            .expect("request_distribution");
+
+        // Serve the forwarded command on the runtime (the select arm's body).
+        let cmd = tokio::time::timeout(Duration::from_secs(2), req_rx.recv())
+            .await
+            .expect("handler forwarded a command within timeout")
+            .expect("mailbox open");
+        rt.serve_distribution_request(cmd).await;
+
+        let got = drain_stream(stream).await;
+        assert_eq!(
+            got.len(),
+            2,
+            "from_seq=1 over a 1..=3 archive yields seqs 2,3"
+        );
+        assert_eq!(
+            got,
+            vec![
+                DistributionEnvelope::Revocation(revs[1].clone()),
+                DistributionEnvelope::Revocation(revs[2].clone()),
+            ],
+            "exact signed envelopes, in ascending seq order",
+        );
+    }
+
+    /// B-12 spec §14.4: the publication serve path is latest-wins — it
+    /// streams the single newest envelope, and ONLY when its
+    /// `publication_seq` strictly exceeds the requester's `from_seq`. A
+    /// requester at-or-ahead of the latest gets a clean empty EOF.
+    #[tokio::test]
+    async fn serve_distribution_request_publication_latest_wins() {
+        use ed25519_dalek::SigningKey;
+        use myrhiza_network::{MemBus, MemNetwork, Network};
+
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let author = AuthorPubkey::from_bytes(sk.verifying_key().to_bytes());
+
+        let mut rt = test_runtime();
+        let pub1 = signed_publication(&sk, BlobHash::from_bytes([0x11; 32]), "1.0.0", 1);
+        let pub2 = signed_publication(&sk, BlobHash::from_bytes([0x22; 32]), "2.0.0", 2);
+        rt.handle_publication(author, pub1);
+        rt.handle_publication(author, pub2.clone());
+
+        let bus = MemBus::new(64);
+        let server_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xB1; 32]));
+        let mut req_rx = install_kernel_distribution_handler(&server_net, vec![author]);
+        let client_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xC1; 32]));
+
+        // Behind requester (from_seq=0) → gets the single latest (seq 2).
+        let stream = client_net
+            .request_distribution(
+                server_net.peer_pubkey(),
+                DistributionBackfillRequest {
+                    author,
+                    kind: DistributionLogKind::Publication,
+                    from_seq: 0,
+                },
+            )
+            .await
+            .expect("request_distribution");
+        let cmd = req_rx.recv().await.expect("command forwarded");
+        rt.serve_distribution_request(cmd).await;
+        let got = drain_stream(stream).await;
+        assert_eq!(
+            got,
+            vec![DistributionEnvelope::Publication(pub2.clone())],
+            "latest-wins: behind requester gets the single newest envelope",
+        );
+
+        // At-the-head requester (from_seq=2) → empty stream (seq 2 !> 2).
+        let stream = client_net
+            .request_distribution(
+                server_net.peer_pubkey(),
+                DistributionBackfillRequest {
+                    author,
+                    kind: DistributionLogKind::Publication,
+                    from_seq: 2,
+                },
+            )
+            .await
+            .expect("request_distribution");
+        let cmd = req_rx.recv().await.expect("command forwarded");
+        rt.serve_distribution_request(cmd).await;
+        let got = drain_stream(stream).await;
+        assert!(
+            got.is_empty(),
+            "at-or-ahead requester gets a clean empty EOF (seq must strictly exceed from_seq)",
+        );
+    }
+
+    /// B-12 spec §14.4: the `KernelDistributionHandler` author gate drops a
+    /// request for an author this peer does not serve — the requester sees
+    /// a clean empty EOF and the runtime mailbox receives nothing (the
+    /// serve path is never reached for an un-served author).
+    #[tokio::test]
+    async fn distribution_handler_drops_request_for_unserved_author() {
+        use myrhiza_network::{MemBus, MemNetwork, Network};
+
+        let served = AuthorPubkey::from_bytes([0x01; 32]);
+        let unserved = AuthorPubkey::from_bytes([0x02; 32]);
+
+        let bus = MemBus::new(64);
+        let server_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xB2; 32]));
+        let mut req_rx = install_kernel_distribution_handler(&server_net, vec![served]);
+        let client_net = MemNetwork::new(bus.clone(), PeerPubkey::from_bytes([0xC2; 32]));
+
+        let stream = client_net
+            .request_distribution(
+                server_net.peer_pubkey(),
+                DistributionBackfillRequest {
+                    author: unserved,
+                    kind: DistributionLogKind::Revocation,
+                    from_seq: 0,
+                },
+            )
+            .await
+            .expect("request_distribution");
+
+        // Clean empty EOF on the requester side.
+        let got = drain_stream(stream).await;
+        assert!(got.is_empty(), "un-served author yields an empty stream");
+
+        // And the runtime mailbox saw no command — the gate dropped it.
+        assert!(
+            req_rx.try_recv().is_err(),
+            "author gate must not forward a request for an un-served author",
         );
     }
 }

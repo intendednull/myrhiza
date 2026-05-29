@@ -43,6 +43,34 @@ Update 2026-05-26 (post-merge re-audit): item 14 (Bundle distribution) ❌→✅
 
 Update 2026-05-28 (B-11): the item-14 deferral — *"Kernel-tier runtime subscription wiring for revocation is deferred to a follow-up (see B-10 spec §10)"* — is **resolved**. B-11 wired the `crates/distribution` pure tier into the kernel `Runtime`: `Runtime::start(installed_authors)` auto-subscribes each installed author's revocation + publication topics; a sixth select-loop arm dispatches inbound gossip through `dispatch::verify_*` → `RevocationLog`/`PublicationLog::apply` → the `RuntimeHandle.{revocation_events,publication_events}` poll-log surface. `crates/kernel/tests/iroh_revocation.rs` (4 tests over real iroh-gossip) closes B-10 spec §6.4; `crates/kernel/tests/revocation.rs` adds the MemNetwork-tier acceptance set. The revocation mechanism is now operationally live, not just resident.
 
+Update 2026-05-29 (B-12 — closed via direct-stream pull): B-12 lands the
+append-only `GossipMessage` summary variants `RevocationHeads`(5)/`PublicationHeads`(6)
+(`crates/distribution/src/heads.rs`, wire-freeze-pinned), the kernel-side
+signed-envelope archive (`revocation_archive`/`publication_latest`), the on-start
++ periodic `distribution_sync_tick` advertise, and the 24h staleness surface
+(`RuntimeHandle::stale_authors`). The catch-up **transport** went through one
+correction: the original gossip-push design (B-12 spec §3.1/§3.4) was found by the
+iroh-tier test to be **structurally unable to catch up a late joiner over real
+iroh-gossip** — a freshly-joined peer's broadcasts do not reach established peers
+(Plumtree eager/lazy asymmetry) and identical summaries are content-deduplicated,
+the same reason the event DAG uses pull (`request_heads`), not re-broadcast, for
+late joiners (the finding is recorded in B-12 **spec §13**). The corrected
+transport (B-12 **spec §14**) is now **landed**: a behind peer hears the
+advertiser's above-its-head summary then **dials the advertiser** over a new
+direct-stream protocol (`request_distribution` / `DISTRIBUTION_REQUEST_ALPN`,
+additive `Network` methods, mirroring B-4.4 `request_heads`) and pulls the missing
+signed envelopes from the advertiser's archive, applying them through the existing
+`handle_revocation`/`handle_publication` path; push and the amplification
+rate-limit are removed, replaced by a per-advertiser dial-limit
+(`DISTRIBUTION_DIAL_DAILY_CAP`). The MemNetwork-tier acceptance suite
+(`crates/kernel/tests/stale_backfill.rs`: range catch-up, latest-wins publication,
+mismatched-author guard, dial-limit, staleness) is green, and the two iroh-tier
+tests (`crates/kernel/tests/iroh_stale_backfill.rs`) now pass over real
+iroh-gossip (no longer `#[ignore]`d). The *stale-network attack* mitigation in
+[`distribution.md` §10.7](../specs/2026-05-09-myrhiza-master-design/distribution.md)
+is therefore **closed**. See [spec B-12](../specs/2026-05-29-b-12-stale-network-backfill-design.md)
+(§13 finding, §14 corrected design) + [plan B-12 (corrected transport)](../plans/2026-05-29-b-12-direct-stream-pull.md).
+
 ## v1 acceptance criteria status
 
 Cross-checking against [mvp.md §15.1](../specs/2026-05-09-myrhiza-master-design/mvp.md):
