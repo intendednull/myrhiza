@@ -198,10 +198,21 @@ the DoS-asymmetry risk (`risks.md §19`), or any Wasmtime-LTS-bump migration pla
    facts (noting 9591 is Informational, not Standards-Track). Not corrected here
    — flagged for a spec edit.
 
-## Next step
+## Outcome
 
-The corpus has no remaining structural gap beyond these. Recommended order to
-research-and-author (each is a `researching-prior-art` deep dive): the
-`Storage & persistence` pair first (the only true structural hole) or
-`update-framework-trust-models` (strongest "spec is reinventing this uncited"
-evidence).
+All nine Tier-1 + Tier-2 folders were authored on 2026-05-29 via the
+`researching-prior-art` workflow (author → review → polish → second-review per
+folder) and are indexed in the catalog as `[active]`:
+`embedded-storage-engines`, `content-addressed-blockstore`,
+`update-framework-trust-models`, `matrix-state-resolution`,
+`capability-os-lineage`, `blockchain-wasm-metering`,
+`range-based-set-reconciliation`, `append-only-log-forks`,
+`local-first-sync-permissions` (the new **Storage & persistence** section plus
+additions under Sync protocols, Determinism, Capability tokens, App
+distribution).
+
+The two **maybes** were deliberately held: `failure-detectors` (SWIM) is gated
+on the unwritten B-4.6 peer-eviction spec, and `partial-replication-shapes`
+should land as a forward-note in `convergence.md §4.5` rather than a folder
+until the scaling ceiling is hit. The corpus has no remaining structural gap
+beyond those.
