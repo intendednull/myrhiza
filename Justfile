@@ -44,7 +44,12 @@ check:
 # `tests/fixtures/`. Output paths under `tests/fixtures/built/` are
 # unchanged so kernel + CLI consumers don't move.
 #
-# Tools required: rustup target wasm32-unknown-unknown, wasm-tools.
+# Tools required: rustup target wasm32-unknown-unknown, and
+# wasm-tools 1.248.0 EXACTLY — `component new` is not byte-stable
+# across releases, so a different version regenerates every
+# fixture and trips `build-fixtures-check`. CI pins the same
+# version (see .github/workflows/ci.yml). Install with:
+#   cargo install --locked --version 1.248.0 wasm-tools
 build-fixtures: \
     (_build-example "counter-state-apply" "state-apply" "state-apply") \
     (_build-example "counter-state-propose" "state-propose" "state-propose") \
