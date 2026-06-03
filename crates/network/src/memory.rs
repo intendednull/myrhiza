@@ -1,8 +1,13 @@
 //! [`MemBus`] + [`MemNetwork`] — in-process [`Network`] impl for tests.
 
+use crate::distribution_request::{
+    ArcDistributionHandler, DISTRIBUTION_STREAM_CHANNEL_CAPACITY, DistributionResponder,
+    DistributionStream,
+};
 use crate::request::ArcRequestHandler;
 use crate::request::{HEADS_STREAM_CHANNEL_CAPACITY, HeadsResponder, HeadsStream};
 use crate::{GossipMessage, NetError, Network, subscription::MemSubscription};
+use myrhiza_distribution::DistributionBackfillRequest;
 use myrhiza_types::{DirectHeadsRequest, PeerPubkey, Topic};
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
@@ -37,6 +42,11 @@ struct TopicState {
 pub struct MemBus {
     topics: Mutex<BTreeMap<Topic, TopicState>>,
     request_handlers: Mutex<BTreeMap<PeerPubkey, ArcRequestHandler>>,
+    /// Installed distribution-backfill handlers, keyed by the serving
+    /// peer's pubkey. Parallel to `request_handlers` but disjoint — the
+    /// distribution direct-stream protocol (B-12 §14.2) is separate from
+    /// the event-DAG `request_heads` protocol.
+    distribution_handlers: Mutex<BTreeMap<PeerPubkey, ArcDistributionHandler>>,
     capacity_per_topic: usize,
 }
 
@@ -49,6 +59,7 @@ impl MemBus {
         Arc::new(Self {
             topics: Mutex::new(BTreeMap::new()),
             request_handlers: Mutex::new(BTreeMap::new()),
+            distribution_handlers: Mutex::new(BTreeMap::new()),
             capacity_per_topic: capacity,
         })
     }
@@ -267,6 +278,46 @@ impl Network for MemNetwork {
         let mut handlers = self
             .bus
             .request_handlers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        handlers.insert(self.peer_pubkey, handler);
+    }
+
+    async fn request_distribution(
+        &self,
+        peer: PeerPubkey,
+        request: DistributionBackfillRequest,
+    ) -> Result<DistributionStream, NetError> {
+        let handler = {
+            let handlers = self
+                .bus
+                .distribution_handlers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            handlers.get(&peer).cloned()
+        };
+        let Some(handler) = handler else {
+            return Err(NetError::RequestFailed {
+                peer,
+                reason: "no distribution handler registered for target peer".to_string(),
+            });
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(DISTRIBUTION_STREAM_CHANNEL_CAPACITY);
+        let responder = DistributionResponder::new(tx);
+        let requester = self.peer_pubkey;
+        tokio::spawn(async move {
+            handler.handle(requester, request, responder).await;
+            // Responder drops here — closes the channel, yielding `None`
+            // from the next `DistributionStream::next` call on the
+            // requester side.
+        });
+        Ok(DistributionStream::new(rx))
+    }
+
+    fn install_distribution_handler(&self, handler: ArcDistributionHandler) {
+        let mut handlers = self
+            .bus
+            .distribution_handlers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         handlers.insert(self.peer_pubkey, handler);

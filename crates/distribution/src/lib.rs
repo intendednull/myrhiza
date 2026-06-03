@@ -15,8 +15,10 @@
 
 #![deny(missing_docs)]
 
+pub mod backfill;
 pub mod conversions;
 pub mod dispatch;
+pub mod heads;
 pub mod publication;
 pub mod revocation;
 pub mod signed_envelope;
@@ -25,7 +27,9 @@ pub mod topic;
 #[cfg(feature = "network-iroh")]
 pub mod blobs;
 
+pub use backfill::{DistributionBackfillRequest, DistributionEnvelope, DistributionLogKind};
 pub use dispatch::{DispatchReject, verify_publication, verify_revocation};
+pub use heads::{PublicationHeads, RevocationHeads};
 pub use publication::{
     DOMAIN_SEP_PUBLICATION, MAX_PUBLICATION_JUMP, MAX_VERSION_LEN, PublicationError,
     PublicationEvent, PublicationLog,

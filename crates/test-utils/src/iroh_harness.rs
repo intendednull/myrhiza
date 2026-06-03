@@ -11,7 +11,7 @@ use iroh::address_lookup::MemoryLookup;
 use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
 use myrhiza_kernel::runtime::{Runtime, RuntimeCfg};
 use myrhiza_kernel::state_apply::StateApplyHandle;
-use myrhiza_network::{HEADS_REQUEST_ALPN, IrohNetwork};
+use myrhiza_network::{DISTRIBUTION_REQUEST_ALPN, HEADS_REQUEST_ALPN, IrohNetwork};
 use myrhiza_types::{AuthorPubkey, BundleHash, PeerPubkey, Topic};
 
 use crate::harness::PeerHandle;
@@ -64,8 +64,15 @@ pub struct IrohPeerStack {
 /// `HeadsSummary`, which is `peer_key.public`).
 ///
 /// If `register_heads_alpn` is true, the Router also accepts
-/// `HEADS_REQUEST_ALPN` against `network.protocol_handler()`. Kernel-
-/// tier tests always need this, so the `IrohHarness` always passes true.
+/// `HEADS_REQUEST_ALPN` against `network.protocol_handler()` (the
+/// event-DAG direct-stream backfill) AND `DISTRIBUTION_REQUEST_ALPN`
+/// against `network.distribution_protocol_handler()` (the B-12 §14
+/// distribution-backfill pull). Both direct-stream serve surfaces are
+/// gated on the same flag because kernel-tier tests that exercise one
+/// generally need the other; the `IrohHarness` always passes true. Without
+/// the distribution ALPN registration a behind peer's `request_distribution`
+/// dial fails on ALPN mismatch, so the late-joiner pull (spec §10.7) can
+/// never complete over real iroh (plan T6).
 ///
 /// Mirrors `crates/network/tests/direct_streams_iroh.rs::spawn_iroh_peer`.
 /// Duplication accepted per spec §2 Choice A (avoiding `network →
@@ -104,7 +111,18 @@ pub async fn spawn_iroh_peer(
         .accept(iroh_gossip::ALPN, gossip.clone())
         .accept(iroh_blobs::ALPN, distribution.protocol_handler().clone());
     if register_heads_alpn {
-        builder = builder.accept(HEADS_REQUEST_ALPN, network.protocol_handler());
+        builder = builder
+            .accept(HEADS_REQUEST_ALPN, network.protocol_handler())
+            // B-12 §14.4 / plan T6: register the distribution-backfill serve
+            // ALPN alongside the heads ALPN so a behind peer's
+            // `request_distribution` dial reaches `serve_distribution_request`
+            // over real iroh-gossip. The MemNetwork tier installs this handler
+            // inside `Runtime::start`; the iroh router must accept the ALPN
+            // explicitly, exactly as it does for the heads protocol.
+            .accept(
+                DISTRIBUTION_REQUEST_ALPN,
+                network.distribution_protocol_handler(),
+            );
     }
     let router = builder.spawn();
     IrohPeerStack {

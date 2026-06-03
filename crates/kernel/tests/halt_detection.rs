@@ -36,6 +36,7 @@ fn halt_cfg(threshold: usize) -> RuntimeCfg {
         drift_min_interval: Duration::from_secs(0),
         drift_daily_cap: u32::MAX,
         heads_summary_tick: Duration::from_hours(1),
+        distribution_sync_tick: Duration::from_hours(1),
         pending_cfg: myrhiza_kernel::pending::PendingCfg::default(),
         broadcast_capacity: 256,
         kernel_fuel_table_version: 1,

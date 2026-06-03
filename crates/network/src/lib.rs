@@ -14,11 +14,15 @@
 
 #![doc(html_no_source)]
 
-use myrhiza_distribution::{PublicationEvent, RevocationEvent};
+use myrhiza_distribution::{
+    DistributionBackfillRequest, PublicationEvent, PublicationHeads, RevocationEvent,
+    RevocationHeads,
+};
 use myrhiza_types::{DirectHeadsRequest, DriftMessage, Event, HeadsSummary, PeerPubkey, Topic};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod distribution_request;
 pub mod memory;
 pub mod request;
 pub mod subscription;
@@ -26,6 +30,10 @@ pub mod subscription;
 #[cfg(feature = "network-iroh")]
 pub mod iroh_transport;
 
+pub use distribution_request::{
+    ArcDistributionHandler, DISTRIBUTION_REQUEST_ALPN, DistributionHandler, DistributionResponder,
+    DistributionStream, DistributionStreamError,
+};
 pub use memory::{MemBus, MemNetwork};
 pub use request::{
     ArcRequestHandler, HEADS_REQUEST_ALPN, HeadsResponder, HeadsStream, HeadsStreamError,
@@ -41,12 +49,15 @@ pub use iroh_transport::IrohNetwork;
 /// Variant tags are u32 fixint big-endian per the v1 canonical bincode
 /// options chain (determinism.md §5.4). Wire-frozen by snapshot tests
 /// in `crates/types/tests/wire_freeze.rs` (Task 11; B-11 adds the
-/// `Revocation`=3 / `Publication`=4 pins).
+/// `Revocation`=3 / `Publication`=4 pins; B-12 adds the
+/// `RevocationHeads`=5 / `PublicationHeads`=6 pins).
 ///
-/// **Wire-freeze (B-11 §3.1):** variants are append-only — new variants
-/// go AFTER the last existing one so canonical-bincode u32-BE tags never
-/// shift. `Event`=0 / `HeadsSummary`=1 / `Drift`=2 are frozen; the B-11
-/// `Revocation`=3 / `Publication`=4 ride the existing
+/// **Wire-freeze (B-11 §3.1, extended B-12 §3.2):** variants are
+/// append-only — new variants go AFTER the last existing one so
+/// canonical-bincode u32-BE tags never shift. `Event`=0 /
+/// `HeadsSummary`=1 / `Drift`=2 are frozen; the B-11 `Revocation`=3 /
+/// `Publication`=4 and the B-12 `RevocationHeads`=5 /
+/// `PublicationHeads`=6 all ride the existing
 /// `Network::subscribe`/`publish` path on per-author derived topics
 /// rather than widening the `Network` trait.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,6 +78,22 @@ pub enum GossipMessage {
     /// per-author publication topic (`derive_publication_topic`). Appended
     /// in B-11 at discriminant 4. Per B-11 spec §3.1.
     Publication(PublicationEvent),
+    /// Unsigned summary advertising a peer's `last_observed_seq` for an
+    /// author's revocation log, broadcast on the per-author revocation
+    /// topic. Appended in B-12 at discriminant 5 (append-only). A *behind*
+    /// peer hearing an above-its-head summary dials the advertiser
+    /// (`request_distribution`) to **pull** the missing `Revocation`
+    /// envelopes (contiguous range) from the advertiser's archive. Per
+    /// B-12 spec §14.1 (pull supersedes the original push — see §13).
+    RevocationHeads(RevocationHeads),
+    /// Unsigned summary advertising a peer's `last_observed_seq` for an
+    /// author's publication log, broadcast on the per-author publication
+    /// topic. Appended in B-12 at discriminant 6 (append-only). A *behind*
+    /// peer hearing an above-its-head summary dials the advertiser
+    /// (`request_distribution`) to **pull** the latest `Publication`
+    /// envelope (latest-wins) from the advertiser's archive. Per B-12 spec
+    /// §14.1.
+    PublicationHeads(PublicationHeads),
 }
 
 /// Errors returned by [`Network`] transport operations.
@@ -240,4 +267,53 @@ pub trait Network: Send + Sync + 'static {
     ///
     /// Per B-4.4 spec §3.2.
     fn install_request_handler(&self, handler: ArcRequestHandler);
+
+    /// Issue a direct-stream distribution-backfill request to a specific
+    /// peer (the advertiser whose summary revealed we are behind).
+    ///
+    /// Returns a [`DistributionStream`] that yields the missing signed
+    /// envelopes ([`myrhiza_distribution::DistributionEnvelope`]) as they
+    /// arrive. Stream terminates with `None` when the responder closes
+    /// cleanly, or with an `Err` for transport / decode failures.
+    ///
+    /// This is a NEW, parallel direct-stream protocol for the
+    /// distribution ledger (spec §14.2) — disjoint from
+    /// [`Network::request_heads`] (the event-DAG backfill), which is
+    /// untouched. A behind peer pulls over this protocol instead of
+    /// waiting for a gossip-push that cannot reach a late joiner (spec
+    /// §13).
+    ///
+    /// **Additive ABI** — added in B-12. Out-of-tree implementors must
+    /// add it; both in-tree impls ([`MemNetwork`], [`IrohNetwork`]) are
+    /// updated in this slice.
+    ///
+    /// Per B-12 spec §14.3.
+    ///
+    /// # Errors
+    /// Returns [`NetError::RequestFailed`] if the transport cannot dial
+    /// the peer or establish a request stream.
+    async fn request_distribution(
+        &self,
+        peer: PeerPubkey,
+        request: DistributionBackfillRequest,
+    ) -> Result<DistributionStream, NetError>;
+
+    /// Install a [`DistributionHandler`] for the accept side of
+    /// direct-stream distribution-backfill requests. Idempotent — last
+    /// call wins.
+    ///
+    /// Embedders construct the handler with whatever state it needs
+    /// (the signed-envelope archive, the served-author filter) and
+    /// install it at startup. Without an installed handler, inbound
+    /// distribution-backfill requests are silently rejected (clean EOF
+    /// to the requester).
+    ///
+    /// Mirrors [`Network::install_request_handler`]; disjoint from it
+    /// (the distribution protocol has its own ALPN + handler slot).
+    ///
+    /// **Additive ABI** — added in B-12. Out-of-tree implementors must
+    /// add it.
+    ///
+    /// Per B-12 spec §14.3.
+    fn install_distribution_handler(&self, handler: ArcDistributionHandler);
 }
