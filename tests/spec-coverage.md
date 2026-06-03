@@ -46,8 +46,8 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/attribution.rs:27
 - crates/kernel/tests/convergence.rs:144
 - crates/kernel/tests/convergence.rs:380
-- crates/kernel/tests/halt_detection.rs:139
-- crates/kernel/tests/halt_detection.rs:163
+- crates/kernel/tests/halt_detection.rs:140
+- crates/kernel/tests/halt_detection.rs:164
 - crates/kernel/tests/iroh_convergence.rs:182
 
 ## convergence.md §4.2 (deterministic variant per review M-9)
@@ -98,16 +98,16 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/attribution.rs:201
 - crates/kernel/tests/attribution.rs:386
 - crates/kernel/tests/coexistence.rs:77
-- crates/kernel/tests/halt_detection.rs:225
-- crates/kernel/tests/halt_detection.rs:316
-- crates/kernel/tests/halt_detection.rs:366
-- crates/kernel/tests/halt_detection.rs:477
+- crates/kernel/tests/halt_detection.rs:226
+- crates/kernel/tests/halt_detection.rs:317
+- crates/kernel/tests/halt_detection.rs:367
+- crates/kernel/tests/halt_detection.rs:478
 
 ## convergence.md §4.4 — User-visible contract: a single-peer
-- crates/kernel/tests/attribution.rs:486
+- crates/kernel/tests/attribution.rs:487
 
 ## convergence.md §4.4 — `dropped_at_apply` (review-finding M-4)
-- crates/kernel/tests/convergence.rs:855
+- crates/kernel/tests/convergence.rs:857
 
 ## convergence.md §4.4 — drain-count gate forces replay on multi-insert paths (B-2.1 §3.2)
 - crates/kernel/tests/perf_carryovers.rs:304
@@ -128,7 +128,7 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/convergence.rs:333
 
 ## convergence.md §4.4.1 + review-finding M-8
-- crates/kernel/tests/convergence.rs:661
+- crates/kernel/tests/convergence.rs:662
 
 ## convergence.md §4.6
 - crates/kernel/tests/attribution.rs:137
@@ -245,10 +245,10 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/coexistence.rs:507
 
 ## networking.md §11.1
-- crates/kernel/tests/attribution.rs:574
+- crates/kernel/tests/attribution.rs:576
 
 ## networking.md §11.1 — `IrohNetwork::publish` and the
-- crates/kernel/tests/attribution.rs:604
+- crates/kernel/tests/attribution.rs:606
 
 ## networking.md §11.1 — iroh's `NodeID` pubkey
 - crates/network/tests/iroh_skeleton.rs:15
@@ -284,4 +284,4 @@ Mapping: each spec section to the tests that prove it. Tests carry
 - crates/kernel/tests/perf_carryovers.rs:470
 
 ## verification.md §22.8 — `PeerHandle::await_digest` must NOT
-- crates/kernel/tests/convergence.rs:814
+- crates/kernel/tests/convergence.rs:816
