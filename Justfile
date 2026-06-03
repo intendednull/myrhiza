@@ -44,7 +44,12 @@ check:
 # `tests/fixtures/`. Output paths under `tests/fixtures/built/` are
 # unchanged so kernel + CLI consumers don't move.
 #
-# Tools required: rustup target wasm32-unknown-unknown, wasm-tools.
+# Tools required: rustup target wasm32-unknown-unknown, and
+# wasm-tools 1.248.0 EXACTLY — `component new` is not byte-stable
+# across releases, so a different version regenerates every
+# fixture and trips `build-fixtures-check`. CI pins the same
+# version (see .github/workflows/ci.yml). Install with:
+#   cargo install --locked --version 1.248.0 wasm-tools
 build-fixtures: \
     (_build-example "counter-state-apply" "state-apply" "state-apply") \
     (_build-example "counter-state-propose" "state-propose" "state-propose") \
@@ -106,6 +111,24 @@ _build-example slot feature world:
         tests/fixtures/built/{{slot}}.embed.wasm \
         -o tests/fixtures/built/{{slot}}.wasm
     rm tests/fixtures/built/{{slot}}.embed.wasm
+
+# Rebuild all wasm fixtures and fail if the committed
+# tests/fixtures/built/*.wasm differ from a fresh build. The committed
+# artifacts are the source of truth for contributors without a wasm
+# toolchain (`cargo test` loads them directly), so they must stay in
+# lockstep with the examples/counter/ + tests/fixtures/* sources.
+# Mirrors spec-coverage-check below; CI runs this instead of bare
+# build-fixtures.
+#
+# NOTE: build-fixtures cannot run from a git worktree created under
+# .claude/worktrees/ — the excluded standalone fixture crates walk past
+# the worktree root to the main repo's workspace, which does not list
+# the worktree-path copies. Run from the primary checkout.
+build-fixtures-check: build-fixtures
+    @if ! git diff --exit-code tests/fixtures/built/; then \
+        echo "tests/fixtures/built/*.wasm is stale. Run 'just build-fixtures' and commit."; \
+        exit 1; \
+    fi
 
 spec-coverage:
     ./scripts/spec-coverage.sh

@@ -280,6 +280,64 @@ fn gossip_message_drift_variant_tag_is_two_u32_be() {
 }
 
 // ---------------------------------------------------------------------------
+// B-11 GossipMessage revocation/publication variant wire-freeze
+// (spec §3.1 / §6.1).
+//
+// The B-11 wiring appends two variants AFTER `Drift` so the existing
+// Event=0/HeadsSummary=1/Drift=2 tags above stay frozen. These tests pin
+// the new tags at 3 (Revocation) and 4 (Publication) so an accidental
+// reorder — which would be a wire-incompatible change — fails CI loudly.
+//
+//   GossipMessage::Revocation  = 3
+//   GossipMessage::Publication = 4
+// ---------------------------------------------------------------------------
+
+fn sample_revocation_event() -> myrhiza_distribution::RevocationEvent {
+    myrhiza_distribution::RevocationEvent {
+        revoked_bundle_hash: myrhiza_types::BlobHash::ZERO,
+        reason: String::new(),
+        revoked_at: 0,
+        revocation_seq: 0,
+        signature: [0u8; 64],
+    }
+}
+
+fn sample_publication_event() -> myrhiza_distribution::PublicationEvent {
+    myrhiza_distribution::PublicationEvent {
+        manifest_hash: myrhiza_types::BlobHash::ZERO,
+        version: String::new(),
+        publication_seq: 0,
+        signature: [0u8; 64],
+    }
+}
+
+#[test]
+fn gossip_message_revocation_variant_tag_is_three_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::Revocation(sample_revocation_event());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x03],
+        "variant tag for GossipMessage::Revocation must be 3 (u32 BE)"
+    );
+}
+
+#[test]
+fn gossip_message_publication_variant_tag_is_four_u32_be() {
+    use myrhiza_network::GossipMessage;
+
+    let msg = GossipMessage::Publication(sample_publication_event());
+    let bytes = canonical_bincode().serialize(&msg).expect("encode");
+    assert_eq!(
+        &bytes[..4],
+        &[0x00, 0x00, 0x00, 0x04],
+        "variant tag for GossipMessage::Publication must be 4 (u32 BE)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // B-4.2 Signed-payload wire-freeze tests.
 //
 // Pin the canonical-bincode byte layout of HeadsSummarySignedPayload and

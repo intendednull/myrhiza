@@ -17,24 +17,40 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           # The wasm32-unknown-unknown target is required to compile
-          # the fixture crates under `tests/fixtures/*`. They land as
-          # core wasm modules and are wrapped into components by
-          # `wasm-tools` in `just build-fixtures`. See Justfile.
+          # the fixture sources: counter slots from `examples/counter/`
+          # (post-B-8 cutover) and the negative-test fixtures under
+          # `tests/fixtures/*`. They land as core wasm modules and are
+          # wrapped into components by `wasm-tools` in
+          # `just build-fixtures`. See Justfile.
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
-      # `wasm-tools` wraps fixture core modules into components.
-      # Pinned via `--locked` so dependency updates surface as a
-      # CI diff rather than silently changing the toolchain. The
-      # released binary is small, so a fresh install per run is
-      # acceptable; adopting a binary-cache action would be an
-      # optimization, not a correctness improvement.
-      - run: cargo install --locked wasm-tools
+      # `wasm-tools` wraps fixture core modules into components. The
+      # version is pinned EXACTLY because `wasm-tools component new`
+      # is not byte-stable across releases: `build-fixtures-check`
+      # (below) only passes when CI runs the same version the
+      # committed `tests/fixtures/built/*.wasm` were generated with.
+      # `--locked` alone is insufficient — it pins wasm-tools' own
+      # dependency graph, not the wasm-tools release — so an unpinned
+      # install silently drifts the component encoding and fails the
+      # freshness gate (e.g. 1.248.0 -> 1.251.0 re-encodes all 11
+      # fixtures). Bump this in lockstep with a `just build-fixtures`
+      # re-commit. The released binary is small, so a fresh install
+      # per run is acceptable.
+      - run: cargo install --locked --version 1.248.0 wasm-tools
       # Build the wasm fixtures *before* `cargo test` so the
       # acceptance tests under `crates/kernel/tests/acceptance.rs`
       # find their `tests/fixtures/built/*.wasm` artifacts. Without
       # this step, fixture-dependent tests would panic with the
       # "run `just build-fixtures`" message embedded in their setup.
-      - run: just build-fixtures
+      #
+      # `build-fixtures-check` additionally fails if the committed
+      # `tests/fixtures/built/*.wasm` drift from a fresh build. The
+      # committed artifacts are the source of truth for contributors
+      # without a wasm toolchain (`cargo test` loads them directly),
+      # so a stale commit must not pass silently. Builds in CI's
+      # canonical (non-worktree) checkout where fixture compilation
+      # is reproducible against the pinned 1.95.0 toolchain.
+      - run: just build-fixtures-check
       - run: just ci

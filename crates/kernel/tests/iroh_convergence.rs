@@ -29,11 +29,25 @@ async fn iroh_single_originator_single_receiver_converges() {
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
+        .spawn_peer(
+            1,
+            Some(1),
+            helpers::counter_handle(),
+            cfg.clone(),
+            vec![],
+            vec![],
+        )
         .await;
     let peer_a_pk = harness.peer_pubkey(0);
     let mut peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![peer_a_pk])
+        .spawn_peer(
+            2,
+            None,
+            helpers::counter_handle(),
+            cfg,
+            vec![peer_a_pk],
+            vec![],
+        )
         .await;
 
     // Allow the iroh-gossip swarm a moment to form before peer A starts
@@ -86,11 +100,25 @@ async fn iroh_concurrent_multi_author_converges() {
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     let mut peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
+        .spawn_peer(
+            1,
+            Some(1),
+            helpers::counter_handle(),
+            cfg.clone(),
+            vec![],
+            vec![],
+        )
         .await;
     let peer_a_pk = harness.peer_pubkey(0);
     let mut peer_b = harness
-        .spawn_peer(2, Some(2), helpers::counter_handle(), cfg, vec![peer_a_pk])
+        .spawn_peer(
+            2,
+            Some(2),
+            helpers::counter_handle(),
+            cfg,
+            vec![peer_a_pk],
+            vec![],
+        )
         .await;
 
     // Give the swarm time to settle before any author event. Three-peer
@@ -164,7 +192,14 @@ async fn iroh_late_joiner_backfills_via_heads_summary() {
     let mut harness = IrohHarness::new([0x33; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
+        .spawn_peer(
+            1,
+            Some(1),
+            helpers::counter_handle(),
+            cfg.clone(),
+            vec![],
+            vec![],
+        )
         .await;
 
     // A authors genesis + 5 increments BEFORE B joins.
@@ -190,7 +225,14 @@ async fn iroh_late_joiner_backfills_via_heads_summary() {
     // immediately and joins A's iroh-gossip swarm.
     let peer_a_pk = harness.peer_pubkey(0);
     let mut peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![peer_a_pk])
+        .spawn_peer(
+            2,
+            None,
+            helpers::counter_handle(),
+            cfg,
+            vec![peer_a_pk],
+            vec![],
+        )
         .await;
 
     // Expected: 0 + 5*1 = 5. The path is: A's

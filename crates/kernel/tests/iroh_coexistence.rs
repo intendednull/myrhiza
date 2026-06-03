@@ -83,7 +83,8 @@ async fn iroh_two_apps_coexist_no_event_crossing() {
         peer_key_counter,
         Some(AuthorKeypair::deterministic(501)),
         cfg.clone(),
-        vec![], // bootstrap — same-process; no peer to dial.
+        vec![], // bootstrap — same-process; no peer to dial.,
+        vec![],
     )
     .await
     .expect("runtime_counter start");
@@ -97,7 +98,8 @@ async fn iroh_two_apps_coexist_no_event_crossing() {
         peer_key_echo,
         Some(AuthorKeypair::deterministic(502)),
         cfg,
-        vec![], // bootstrap — same-process; no peer to dial.
+        vec![], // bootstrap — same-process; no peer to dial.,
+        vec![],
     )
     .await
     .expect("runtime_echo start");

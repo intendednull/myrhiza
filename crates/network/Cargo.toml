@@ -12,6 +12,13 @@ workspace = true
 
 [dependencies]
 myrhiza-types = { path = "../types" }
+# Pure-tier RevocationEvent / PublicationEvent carried by the
+# GossipMessage::{Revocation,Publication} variants (B-11 §3.1). Unconditional
+# because the variants exist in every build; distribution's pure tier has no
+# iroh dep, so this pulls no transport. distribution carries NO dep on network
+# (B-11 removed the lone blobs.rs use of network's iroh helper, inlining it as
+# `conversions::endpoint_id_from_peer_pubkey`), so this edge is acyclic.
+myrhiza-distribution = { path = "../distribution" }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 serde.workspace = true

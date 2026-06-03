@@ -260,6 +260,7 @@ async fn two_apps_coexist_no_event_crossing() {
         Some(AuthorKeypair::deterministic(501)), // seed MUST match kp_counter_author above.
         cfg.clone(),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_counter start");
@@ -277,6 +278,7 @@ async fn two_apps_coexist_no_event_crossing() {
         peer_key_for_echo,
         Some(AuthorKeypair::deterministic(502)), // seed MUST match kp_echo_author above.
         cfg,
+        vec![],
         vec![],
     )
     .await
@@ -577,6 +579,7 @@ async fn poll_and_counter_coexist_no_event_crossing() {
         Some(AuthorKeypair::deterministic(501)), // seed MUST match kp_counter_author above.
         cfg.clone(),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_counter start");
@@ -594,6 +597,7 @@ async fn poll_and_counter_coexist_no_event_crossing() {
         peer_key_for_poll,
         Some(AuthorKeypair::deterministic(503)), // seed MUST match kp_poll_author above.
         cfg,
+        vec![],
         vec![],
     )
     .await

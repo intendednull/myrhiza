@@ -67,6 +67,7 @@ async fn spawn_peer_runtime(
         None, // read-only — no author key
         halt_cfg(threshold),
         vec![],
+        vec![],
     )
     .await
     .expect("Runtime::start")

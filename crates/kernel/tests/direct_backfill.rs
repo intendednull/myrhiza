@@ -115,6 +115,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         Some(AuthorKeypair::deterministic(101)),
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -131,6 +132,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         kp_b,
         None,
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
+        vec![],
         vec![],
     )
     .await
@@ -219,6 +221,7 @@ async fn direct_backfill_target_peer_unreachable_logs_warning() {
         None,
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -297,6 +300,7 @@ async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
         kp_a,
         None,
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
+        vec![],
         vec![],
     )
     .await
@@ -411,6 +415,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         Some(AuthorKeypair::deterministic(601)),
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_a start");
@@ -431,6 +436,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         Some(AuthorKeypair::deterministic(602)),
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_b start");
@@ -447,6 +453,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         kp_c,
         None,
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
+        vec![],
         vec![],
     )
     .await

@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 myrhiza-types = { path = "../types" }
 myrhiza-manifest = { path = "../manifest" }
-myrhiza-network = { path = "../network" }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 serde.workspace = true
@@ -31,4 +30,11 @@ default = []
 # Default-off to keep `cargo test --workspace` fast; the iroh-acceptance
 # tests in crates/kernel/tests opt in via `network-iroh`.
 # Per B-10 spec §4.7.
-network-iroh = ["dep:iroh", "dep:iroh-blobs", "myrhiza-network/network-iroh"]
+#
+# No `myrhiza-network/network-iroh` propagation: B-11 inverts the crate
+# dependency so `crates/network` depends on `crates/distribution` (for the
+# GossipMessage::{Revocation,Publication} variants, B-11 §3.1). To keep the
+# package graph a DAG, distribution carries no network dep at all — the one
+# `PeerPubkey -> iroh::EndpointId` conversion blobs.rs needed is now a local
+# free fn in `conversions::endpoint_id_from_peer_pubkey`.
+network-iroh = ["dep:iroh", "dep:iroh-blobs"]

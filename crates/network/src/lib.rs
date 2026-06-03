@@ -14,6 +14,7 @@
 
 #![doc(html_no_source)]
 
+use myrhiza_distribution::{PublicationEvent, RevocationEvent};
 use myrhiza_types::{DirectHeadsRequest, DriftMessage, Event, HeadsSummary, PeerPubkey, Topic};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -38,8 +39,16 @@ pub use iroh_transport::IrohNetwork;
 /// Gossip message envelope — the only thing that crosses the wire.
 ///
 /// Variant tags are u32 fixint big-endian per the v1 canonical bincode
-/// options chain (determinism.md §5.4). Wire-frozen by a snapshot test
-/// in `crates/types/tests/wire_freeze.rs` (Task 11).
+/// options chain (determinism.md §5.4). Wire-frozen by snapshot tests
+/// in `crates/types/tests/wire_freeze.rs` (Task 11; B-11 adds the
+/// `Revocation`=3 / `Publication`=4 pins).
+///
+/// **Wire-freeze (B-11 §3.1):** variants are append-only — new variants
+/// go AFTER the last existing one so canonical-bincode u32-BE tags never
+/// shift. `Event`=0 / `HeadsSummary`=1 / `Drift`=2 are frozen; the B-11
+/// `Revocation`=3 / `Publication`=4 ride the existing
+/// `Network::subscribe`/`publish` path on per-author derived topics
+/// rather than widening the `Network` trait.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum GossipMessage {
     /// A canonical [`Event`] envelope broadcast on a topic.
@@ -50,6 +59,14 @@ pub enum GossipMessage {
     /// Equivocation / fork evidence broadcast by any peer that detects
     /// a chain violation for an author.
     Drift(DriftMessage),
+    /// Signed revocation envelope broadcast on the per-author revocation
+    /// topic (`derive_revocation_topic`). Appended in B-11 at discriminant
+    /// 3 (append-only — see the wire-freeze note above). Per B-11 spec §3.1.
+    Revocation(RevocationEvent),
+    /// Signed publication (release-announcement) envelope broadcast on the
+    /// per-author publication topic (`derive_publication_topic`). Appended
+    /// in B-11 at discriminant 4. Per B-11 spec §3.1.
+    Publication(PublicationEvent),
 }
 
 /// Errors returned by [`Network`] transport operations.

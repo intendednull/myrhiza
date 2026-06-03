@@ -19,10 +19,10 @@ async fn single_originator_single_receiver_converges() {
 
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
     let mut peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![])
         .await;
 
     // A authors genesis. `Runtime::author` wraps `payload` in the full
@@ -71,10 +71,10 @@ async fn concurrent_multi_author_converges() {
     let harness = InProcessHarness::new(256, [0x22; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
     let mut peer_b = harness
-        .spawn_peer(2, Some(2), helpers::counter_handle(), cfg)
+        .spawn_peer(2, Some(2), helpers::counter_handle(), cfg, vec![])
         .await;
 
     // Peer A authors genesis (founder = A).
@@ -147,7 +147,7 @@ async fn late_joiner_backfills_via_heads_summary() {
     let harness = InProcessHarness::new(256, [0x33; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
 
     // A authors genesis + 5 increments BEFORE B joins.
@@ -174,7 +174,7 @@ async fn late_joiner_backfills_via_heads_summary() {
 
     // Now B joins.
     let mut peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![])
         .await;
 
     // Expected: 0 + 5*1 = 5.
@@ -219,6 +219,7 @@ async fn coexistence_two_topics_no_event_crossing() {
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(1)),
         cfg.clone(),
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_a");
@@ -234,6 +235,7 @@ async fn coexistence_two_topics_no_event_crossing() {
         peer_key_2,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(2)),
         cfg,
+        vec![],
         vec![],
     )
     .await
@@ -274,11 +276,11 @@ async fn drift_detected_when_state_apply_corrupted() {
     let harness = InProcessHarness::new(256, [0x44; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
     // Peer B uses a corrupting state-apply that flips one digest byte at apply #3.
     let peer_b = harness
-        .spawn_peer(2, None, helpers::corrupting_counter_handle(3), cfg)
+        .spawn_peer(2, None, helpers::corrupting_counter_handle(3), cfg, vec![])
         .await;
 
     let kp_a = myrhiza_kernel::identity::AuthorKeypair::deterministic(1);
@@ -426,10 +428,10 @@ async fn lagged_broadcast_recovers_via_heads_summary() {
     let harness = InProcessHarness::new(64, [0x66; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let peer_a = harness
-        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::counter_handle(), cfg.clone(), vec![])
         .await;
     let mut peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![])
         .await;
 
     // Arm a single forced Lagged on B's topic BEFORE A publishes any
@@ -565,6 +567,7 @@ async fn pending_event_triggers_heads_summary_nudge_when_index_empty() {
         peer_key_b,
         None,
         cfg,
+        vec![],
         vec![],
     )
     .await
@@ -716,6 +719,7 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
         None,
         cfg,
         vec![],
+        vec![],
     )
     .await
     .expect("runtime_b");
@@ -830,7 +834,7 @@ async fn await_digest_does_not_return_on_stale_already_equal_state() {
     let harness = InProcessHarness::new(64, [0x99; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut peer_b = harness
-        .spawn_peer(2, None, helpers::counter_handle(), cfg)
+        .spawn_peer(2, None, helpers::counter_handle(), cfg, vec![])
         .await;
 
     // B has never received any event; its digest_watch holds the
@@ -927,6 +931,7 @@ async fn dropped_at_apply_records_rejected_events() {
         peer_key_b3,
         None,
         cfg,
+        vec![],
         vec![],
     )
     .await

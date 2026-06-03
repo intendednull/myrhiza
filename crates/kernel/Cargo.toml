@@ -16,6 +16,13 @@ myrhiza-manifest = { path = "../manifest" }
 myrhiza-backend = { path = "../backend" }
 myrhiza-wasmtime-backend = { path = "../wasmtime-backend" }
 myrhiza-network = { path = "../network" }
+# B-11 §3.6 / §7: unconditional dep. The pure tier (RevocationLog /
+# PublicationLog / dispatch::verify_* / derive_*_topic) compiles
+# iroh-free and the kernel holds per-author log state in NON-iroh builds
+# too, so this can no longer be gated behind `network-iroh`. The
+# `network-iroh` feature still forwards `myrhiza-distribution/network-iroh`
+# to unlock the blob tier (`BundleDistribution::fetch`).
+myrhiza-distribution = { path = "../distribution" }
 serde.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
@@ -38,19 +45,21 @@ async-trait.workspace = true
 # compiles the iroh-dependent tests in `tests/attribution.rs` (tests 11-12).
 # Mirrors the `network-iroh` feature on `myrhiza-network`.
 #
-# B-10 T8: adds `myrhiza-distribution` to the feature gate — this
-# crate's `BundleDistribution::fetch` is how the kernel embedder
-# materializes a `BundleAddress::IrohBlob` into a `Disk` variant for
-# `install::load`. The kernel itself does NOT take a direct
-# `iroh-blobs` dep (spec §4.6 dep direction: `kernel → distribution`,
-# distribution owns iroh-blobs).
+# `myrhiza-distribution` is an UNCONDITIONAL dep (see `[dependencies]`,
+# B-11 §3.6) — the kernel holds per-author RevocationLog / PublicationLog
+# state in non-iroh builds too. The feature only forwards
+# `myrhiza-distribution/network-iroh` to unlock that crate's blob tier:
+# `BundleDistribution::fetch` is how the kernel embedder materializes a
+# `BundleAddress::IrohBlob` into a `Disk` variant for `install::load`.
+# The kernel itself does NOT take a direct `iroh-blobs` dep (B-10 spec
+# §4.6 dep direction: `kernel → distribution`, distribution owns
+# iroh-blobs).
 network-iroh = [
     "myrhiza-network/network-iroh",
     "myrhiza-test-utils/network-iroh",
     "myrhiza-distribution/network-iroh",
     "dep:iroh",
     "dep:iroh-gossip",
-    "dep:myrhiza-distribution",
 ]
 
 [dependencies.iroh]
@@ -59,10 +68,6 @@ optional = true
 
 [dependencies.iroh-gossip]
 workspace = true
-optional = true
-
-[dependencies.myrhiza-distribution]
-path = "../distribution"
 optional = true
 
 [dev-dependencies]

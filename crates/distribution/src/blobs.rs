@@ -43,7 +43,7 @@
 //!   `impl<I: Into<Hash>, T: IntoIterator<Item = I>> SupportedRequest`
 //!   collides with iterables of `EndpointId`, so we convert
 //!   `&[PeerPubkey]` into a `Vec<EndpointId>` ourselves via
-//!   `myrhiza_network::iroh_transport::iroh_endpoint_id_from_peer_pubkey`).
+//!   [`crate::conversions::endpoint_id_from_peer_pubkey`]).
 //! - Empty `peers` list: `execute_get` in `iroh-blobs` iterates the
 //!   provider stream; an empty stream yields immediately with
 //!   "Unable to download" — i.e. the downloader cannot serve from the
@@ -55,9 +55,10 @@
 
 use bincode::Options;
 use myrhiza_manifest::schema::Manifest;
-use myrhiza_network::iroh_transport::iroh_endpoint_id_from_peer_pubkey;
 use myrhiza_types::{BlobHash, BundleAddress, PeerPubkey, canonical_bincode};
 use thiserror::Error;
+
+use crate::conversions::endpoint_id_from_peer_pubkey;
 
 use crate::conversions::{blob_hash_from_iroh, blob_hash_to_iroh};
 
@@ -609,8 +610,7 @@ fn peer_pubkeys_to_endpoint_ids(peers: &[PeerPubkey]) -> Result<Vec<iroh::Endpoi
         .iter()
         .copied()
         .map(|pk| {
-            iroh_endpoint_id_from_peer_pubkey(pk)
-                .map_err(|e| FetchError::InvalidPeer(e.to_string()))
+            endpoint_id_from_peer_pubkey(pk).map_err(|e| FetchError::InvalidPeer(e.to_string()))
         })
         .collect()
 }

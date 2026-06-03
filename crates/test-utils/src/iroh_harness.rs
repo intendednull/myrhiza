@@ -12,7 +12,7 @@ use myrhiza_kernel::identity::{AuthorKeypair, PeerKeypair};
 use myrhiza_kernel::runtime::{Runtime, RuntimeCfg};
 use myrhiza_kernel::state_apply::StateApplyHandle;
 use myrhiza_network::{HEADS_REQUEST_ALPN, IrohNetwork};
-use myrhiza_types::{BundleHash, PeerPubkey, Topic};
+use myrhiza_types::{AuthorPubkey, BundleHash, PeerPubkey, Topic};
 
 use crate::harness::PeerHandle;
 
@@ -204,6 +204,10 @@ impl IrohHarness {
     /// kernel-tier tests rely on `Runtime`'s `install_request_handler`
     /// call to wire the responder (spec §3.2 load-bearing detail).
     ///
+    /// `installed_authors` are the authors whose revocation + publication
+    /// topics this peer auto-subscribes (B-11 §3.3); pass `vec![]` for
+    /// the common case where the test does not exercise revocation.
+    ///
     /// # Panics
     /// Panics if `Runtime::start` fails. The iroh subscribe path can
     /// fail in principle (e.g. invalid bootstrap pubkey), but every
@@ -217,6 +221,7 @@ impl IrohHarness {
         handle: StateApplyHandle,
         cfg: RuntimeCfg,
         bootstrap: Vec<PeerPubkey>,
+        installed_authors: Vec<AuthorPubkey>,
     ) -> PeerHandle {
         // Recompute the same seed bytes that `PeerKeypair::deterministic`
         // uses internally (crates/kernel/src/identity/mod.rs:61-65). Both
@@ -247,6 +252,7 @@ impl IrohHarness {
             author_key,
             cfg,
             bootstrap,
+            installed_authors,
         )
         .await
         .expect("Runtime::start (iroh)");

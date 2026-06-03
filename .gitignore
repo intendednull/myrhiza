@@ -1,4 +1,8 @@
 /target
+# Wasm fixture crates under tests/fixtures/* are excluded from the
+# workspace (separate workspace roots), so each builds into its own
+# nested target/. Root-anchored /target above does not cover those.
+tests/fixtures/*/target/
 
 .claude/settings.local.json
 .claude/scheduled_tasks.lock

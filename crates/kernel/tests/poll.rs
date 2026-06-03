@@ -160,7 +160,7 @@ async fn poll_e2e_single_peer_full_lifecycle() {
     let harness = InProcessHarness::new(256, [0x11; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut alice = harness
-        .spawn_peer(1, Some(1), helpers::poll_handle(), cfg)
+        .spawn_peer(1, Some(1), helpers::poll_handle(), cfg, vec![])
         .await;
     let kp_alice = AuthorKeypair::deterministic(1);
 
@@ -310,13 +310,13 @@ async fn poll_multi_author_voting() {
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
 
     let mut alice = harness
-        .spawn_peer(1, Some(1), helpers::poll_handle(), cfg.clone())
+        .spawn_peer(1, Some(1), helpers::poll_handle(), cfg.clone(), vec![])
         .await;
     let mut bob = harness
-        .spawn_peer(2, Some(2), helpers::poll_handle(), cfg.clone())
+        .spawn_peer(2, Some(2), helpers::poll_handle(), cfg.clone(), vec![])
         .await;
     let mut carol = harness
-        .spawn_peer(3, Some(3), helpers::poll_handle(), cfg)
+        .spawn_peer(3, Some(3), helpers::poll_handle(), cfg, vec![])
         .await;
 
     let kp_alice = AuthorKeypair::deterministic(1);
@@ -483,7 +483,7 @@ async fn poll_unauthorized_end_poll_rejected_by_authority() {
     let harness = InProcessHarness::new(256, [0x33; 32]);
     let cfg = helpers::fast_cfg(helpers::FAST_GOSSIP_TICK);
     let mut alice = harness
-        .spawn_peer(1, Some(1), helpers::poll_handle(), cfg)
+        .spawn_peer(1, Some(1), helpers::poll_handle(), cfg, vec![])
         .await;
     let kp_alice = AuthorKeypair::deterministic(1);
     let kp_bob = AuthorKeypair::deterministic(2);
