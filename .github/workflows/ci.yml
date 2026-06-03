@@ -26,13 +26,19 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
-      # `wasm-tools` wraps fixture core modules into components.
-      # Pinned via `--locked` so dependency updates surface as a
-      # CI diff rather than silently changing the toolchain. The
-      # released binary is small, so a fresh install per run is
-      # acceptable; adopting a binary-cache action would be an
-      # optimization, not a correctness improvement.
-      - run: cargo install --locked wasm-tools
+      # `wasm-tools` wraps fixture core modules into components. The
+      # version is pinned EXACTLY because `wasm-tools component new`
+      # is not byte-stable across releases: `build-fixtures-check`
+      # (below) only passes when CI runs the same version the
+      # committed `tests/fixtures/built/*.wasm` were generated with.
+      # `--locked` alone is insufficient — it pins wasm-tools' own
+      # dependency graph, not the wasm-tools release — so an unpinned
+      # install silently drifts the component encoding and fails the
+      # freshness gate (e.g. 1.248.0 -> 1.251.0 re-encodes all 11
+      # fixtures). Bump this in lockstep with a `just build-fixtures`
+      # re-commit. The released binary is small, so a fresh install
+      # per run is acceptable.
+      - run: cargo install --locked --version 1.248.0 wasm-tools
       # Build the wasm fixtures *before* `cargo test` so the
       # acceptance tests under `crates/kernel/tests/acceptance.rs`
       # find their `tests/fixtures/built/*.wasm` artifacts. Without
