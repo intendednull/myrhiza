@@ -217,13 +217,13 @@ defense — the orthogonal admission layer it composes with).
 
 | System | Why close | What it adds |
 |---|---|---|
-| **OurGrid Extended Network of Favors (ExtNoF)** (HPDC 2004) | Token-free, local per-peer favor balances over **multiple heterogeneous services** (CPU/disk/bandwidth); peers swap cheap-for-them for scarce-for-them *because they value services differently* — `value_P = resource_vector·shadow_prices` in all but name | **The closest published realization.** Empirically marginalizes free-riders even when donation-cost ≈ utility-received; its open problem (deriving exchange rates / which service to offer) is exactly what replacement-cost crediting claims to answer. **Absent from the corpus.** |
-| **GNUnet excess-based economic model** (Grothoff 2003) | Private per-peer trust earned-by-replies / spent-by-requests, no global currency — near 1:1 match | The **excess rule** (charge only under load → dissolves newcomer problem); structural Sybil immunity (fresh identity gains nothing; damage bounded `d ≤ c + ε`); transitivity-by-delegation. **Absent from the corpus.** |
+| **OurGrid Extended Network of Favors (ExtNoF)** (HPDC 2004) | Token-free, local per-peer favor balances over **multiple heterogeneous services** (CPU/disk/bandwidth); peers swap cheap-for-them for scarce-for-them *because they value services differently* — `value_P = resource_vector·shadow_prices` in all but name | **The closest published realization.** Empirically marginalizes free-riders even when donation-cost ≈ utility-received; its open problem (deriving exchange rates / which service to offer) is exactly what replacement-cost crediting claims to answer. Now documented in [`p2p-resource-economics/ourgrid.md`](../../prior-art/p2p-resource-economics/ourgrid.md). |
+| **GNUnet excess-based economic model** (Grothoff 2003) | Private per-peer trust earned-by-replies / spent-by-requests, no global currency — near 1:1 match | The **excess rule** (charge only under load → dissolves newcomer problem); structural Sybil immunity (fresh identity gains nothing; damage bounded `d ≤ c + ε`); transitivity-by-delegation. Now documented in [`p2p-resource-economics/gnunet.md`](../../prior-art/p2p-resource-economics/gnunet.md). |
 | **IPFS Bitswap + BitTorrent choking** | Per-peer byte ledger / pairwise tit-for-tat; the debt-ratio probability curve *is* the grace-buffer gradient | Deployed lesson: "ledger exists ≠ ledger enforced" (`ipfs-bitswap.md:90`); optimistic unchoke as the newcomer escape valve |
 | **Tribler TrustChain + MeritRank** | Signed bilateral per-peer work records (= "cryptographically-attributed work for me"); personalized Sybil-tolerant trust | TrustChain = the tamper-evident record structure; MeritRank = transitive trust via ego-centric walks with decay knobs, no global consensus |
-| **Samsara** (Cox & Noble, SOSP 2003) | Closest precedent for **replacement-cost crediting** — prices received storage in units of the *same resource the recipient must give up*, token-free | But storage-for-storage only; it *destroys* specialization (the anti-comparative-advantage degenerate case) — shows the limit of replacement-cost crediting before heterogeneity. **Absent.** |
+| **Samsara** (Cox & Noble, SOSP 2003) | Closest precedent for **replacement-cost crediting** — prices received storage in units of the *same resource the recipient must give up*, token-free | But storage-for-storage only; it *destroys* specialization (the anti-comparative-advantage degenerate case) — shows the limit of replacement-cost crediting before heterogeneity. Now in [`p2p-resource-economics/samsara.md`](../../prior-art/p2p-resource-economics/samsara.md). |
 | **Credit networks** (Trustlines/Ripple, **Bazaar** NSDI 2011) + **image scoring** (Nowak & Sigmund, Nature 1998) | Token-free transitive trust as a graph of bilateral records | Shows the cost of going transitive (something must see >1 edge); Bazaar's third-party-verifiable *value* edge |
-| **Market-based control & pricing theory** (turn-9 lineage) | Subjective/marginal value (Menger), comparative advantage (Ricardo), shadow prices = LP-duals (Kelly NUM 1998), computational economies (Spawn 1992, Tycoon ~2004) | Legitimizes `value = resource_vector·shadow_prices` as a sound *local* Lagrangian cost — **but** mostly research-only (see model challenges), and DRF/Kelly bound how far it generalizes. BOINC credit is the contrast (normalizes hardware *out*; we keep it *in*). **Absent — now split into three candidate folders below.** |
+| **Market-based control & pricing theory** (turn-9 lineage) | Subjective/marginal value (Menger), comparative advantage (Ricardo), shadow prices = LP-duals (Kelly NUM 1998), computational economies (Spawn 1992, Tycoon ~2004) | Legitimizes `value = resource_vector·shadow_prices` as a sound *local* Lagrangian cost — **but** mostly research-only (see model challenges), and DRF/Kelly bound how far it generalizes. BOINC credit is the contrast (normalizes hardware *out*; we keep it *in*). Now documented across [`market-based-control/`](../../prior-art/market-based-control/) + [`resource-pricing-theory/`](../../prior-art/resource-pricing-theory/). |
 
 **Hard tensions any design must confront** (full detail in transcript /
 `sybil-resistance/`): newcomer/bootstrap, whitewashing via cheap
@@ -293,46 +293,28 @@ spec. The throughline: **use the dot-product only as a cost/credit
 
 ## Prior-art promotion candidates
 
-Flagged per `using-prior-art`; the user triages whether to spawn
-`researching-prior-art`. The market-based lens (2026-05-29) refined these
-into **three new folders + one extension**:
+Flagged per `using-prior-art`. **Items 1–4 were built and landed on
+2026-05-29** (this session) — they are now folders in the corpus, linked
+below. Items 5–6 remain open.
 
-1. 🔴 **NEW `prior-art/p2p-resource-economics/`** — token-free heterogeneous
-   reciprocity + replacement-cost precedents. **OurGrid ExtNoF** (priority-1,
-   closest realization), **Samsara** (SOSP 2003), **GNUnet** excess-model
-   (Grothoff 2003), with **Karma** (P2PEcon 2003) / **Maze** collusion /
-   **Dandelion** as global-scrip cautionaries. Where the leading model
-   actually lives.
-2. 🔴 **NEW `prior-art/market-based-control/`** — the computational-economy
-   paradigm `value_P` descends from + its deployment-failure evidence.
-   Miller & Drexler "Agoric Open Systems" (1988), Spawn (1992), Tycoon
-   (~2004), the **Mirage-vs-Bellagio** adoption post-mortems, SHARP (2003),
-   Clearwater (1996). **Explicitly NOT an extension of `agoric-endo/`** —
-   that folder uses "Agoric" for the SES company, not the market-control
-   paradigm; folding them conflates two distinct meanings. Cross-ref
-   `agoric-endo/history.md` for shared lineage and the tension with its
-   `governance.md:108` ("tokenomics are not a runtime concern").
-3. 🔴 **NEW `prior-art/resource-pricing-theory/`** — the formal soundness
-   *and* the load-bearing critique. Kelly NUM / proportional fairness (1998,
-   shadow-price = LP-dual), **DRF + the Asset-Fairness counterexample**
-   (NSDI 2011), Briscoe ConEx/re-ECN. Load-bearing if the model is specced.
-4. 🟡 **EXTEND `prior-art/sybil-resistance/`** — verification-of-self-
-   reported-cost: **BOINC** credit (cobblestone normalization +
-   replication/quorum + anomaly bounds), Folding@home, **Gridcoin** (the
-   72.4-coin unauthenticated-claim attack). The deepest evidence on stopping
-   a peer lying about self-measured cost.
-5. 🟡 **Indirect-reciprocity / credit networks** (from the first survey) —
-   TrustChain (FGCS 2020), MeritRank (BRAINS 2022, arXiv:2207.09950),
-   Trustlines, Bazaar (NSDI 2011), image scoring (Nature 1998). For the
-   transitive-contribution gap.
-6. 🟢 **Free-riding economics + REA/ValueFlows** (low) — Friedman & Resnick
-   "cheap pseudonyms" (2001) for the formal newcomer-distrust limit; REA as
-   the nearest ledger ontology if the per-peer ledger needs a schema.
+1. ✅ **LANDED — [`prior-art/p2p-resource-economics/`](../../prior-art/p2p-resource-economics/)** — token-free heterogeneous reciprocity + replacement-cost precedents. **OurGrid ExtNoF** (priority-1, closest realization), **Samsara** (SOSP 2003), **GNUnet** excess-model (Grothoff 2003), with **Karma** / **Maze** / **Dandelion** as global-scrip cautionaries. Where the leading model actually lives.
+2. ✅ **LANDED — [`prior-art/market-based-control/`](../../prior-art/market-based-control/)** — the computational-economy paradigm `value_P` descends from + its deployment-failure evidence (Sutherland 1968, Miller-Drexler 1988, Spawn 1992, Tycoon, Mirage-vs-Bellagio, SHARP, Clearwater). Kept **separate** from `agoric-endo/` (SES company ≠ market-control paradigm); sharpens the "tokenomics are not a runtime concern" tension.
+3. ✅ **LANDED — [`prior-art/resource-pricing-theory/`](../../prior-art/resource-pricing-theory/)** — the formal soundness *and* the load-bearing critique: Kelly NUM (shadow-price = LP-dual), **DRF + the Asset-Fairness counterexample** (read off the primary NSDI PDF), Briscoe ConEx.
+4. ✅ **LANDED — [`prior-art/sybil-resistance/self-reported-cost-verification.md`](../../prior-art/sybil-resistance/self-reported-cost-verification.md)** — verification-of-self-reported-cost: **BOINC** (cobblestone + replication/quorum + anomaly bounds), Folding@home, **Gridcoin** (the 72.4-coin unauthenticated-claim attack, verified verbatim).
+5. 🟡 **OPEN — Indirect-reciprocity / credit networks** — TrustChain (FGCS 2020), MeritRank (BRAINS 2022, arXiv:2207.09950), Trustlines, Bazaar (NSDI 2011), image scoring (Nature 1998). For the transitive-contribution gap. (Previewed in `p2p-resource-economics/` via GNUnet's delegation-with-margin + the EigenTrust cross-ref; no dedicated folder yet.)
+6. 🟢 **OPEN (low) — Free-riding economics + REA/ValueFlows** — Friedman & Resnick "cheap pseudonyms" (2001) for the formal newcomer-distrust limit; REA as the nearest ledger ontology if the per-peer ledger needs a schema.
 
-**Research-next order** (per the gap analysis): **GNUnet** first
-(highest-value missing system), then **ExtNoF** (closest realization), then
-read the **DRF Asset-Fairness** counterexample off the NSDI *PDF* (the HTML
-mirror garbled the wording/numbers) before quoting it anywhere.
+**Corrections the build surfaced** (2026-05-29, all verified off primary
+sources): the **DRF Asset-Fairness counterexample** was read off the primary
+NSDI PDF — the brainstorm/HTML-mirror had conflated the §5.1 `$6/$7` pricing
+illustration with the *separate* ⟨30,30⟩ Theorem-1 sharing-incentive proof;
+now correctly separated in `resource-pricing-theory/dominant-resource-fairness.md`.
+Other fixes: Karma's middle author is **Chandrakumar** (not "Chakravarty");
+**Dandelion** is server-mediated (not decentralized); DRFH authorship is
+**Wang/Liang/Li** (no "Liu"); Bellagio venue is **OASIS 2004**; ConEx is
+**IETF Experimental** (not deployed); GNUnet confirmed still maintained
+(0.27.0, 2026); Spawn's "sealed-bid second-price (Vickrey)" detail confirmed
+verbatim from IEEE TSE p.105.
 
 ## Cross-links
 
