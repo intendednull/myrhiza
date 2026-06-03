@@ -35,7 +35,7 @@ The SSB feed is the **direct ancestor** of Myrhiza's per-author chain. EBT
 | **SSB** | Secure Scuttlebutt; created by Dominic Tarr, 2014. Signed single-author append-only feeds; gossip replication; offline-first |
 | **SSB message crypto** | SHA-256 message IDs/links, Ed25519 detached signatures, canonical-JSON signing surface |
 | **SSB academic paper** | Tarr, Lavoie, Meyer, Tschudin, "Secure Scuttlebutt: An Identity-Centric Protocol…", ACM ICN 2019 |
-| **SSB status** | In decline / fragmenting; flagship clients (Patchwork deprecated; Manyverse / Planetary wound down 2024) — see [decline.md](decline.md) |
+| **SSB status** | In decline / fragmenting; flagship clients (Patchwork deprecated; Planetary pivoted to Nostr 2023; Manyverse active work ended 2024) — see [decline.md](decline.md) |
 | **EBT** | `epidemic-broadcast-trees` (Dominic Tarr); npm latest `9.0.4`, MIT, last published 2022. Adapts the Plumtree paper (Leitão/Pereira/Rodrigues, SRDS 2007) to log replication |
 | **Bamboo** | Aljoscha Meyer's single-writer append-only log with **lipmaa links** for verifiable partial replication; CC-BY-SA-4.0 spec |
 | **Meta-feeds** | SSB tree-of-subfeeds spec (`ssbc/ssb-meta-feeds-spec`) enabling selective partial replication |

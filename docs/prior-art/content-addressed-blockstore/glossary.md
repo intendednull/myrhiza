@@ -39,8 +39,9 @@ vocabulary.
 ## restic
 
 - **CDC** — content-defined chunking; restic uses a **Rabin fingerprint** rolling
-  hash over a 64-byte window, boundary when the low 21 bits are zero. Chunks
-  512 KiB–8 MiB, ~1 MiB average; files <512 KiB unsplit.
+  hash over a 64-byte window, boundary when the low **20 bits** are zero (chunker
+  source default; the 2015 blog said 21). Chunks 512 KiB–8 MiB, ~1 MiB average;
+  files <512 KiB unsplit.
 - **pack file** — bundle of encrypted blobs with header at the end.
 - **snapshot** — JSON doc referencing a root tree by hash; the *only* GC root.
 - **`forget`** — removes snapshot files (roots).
@@ -66,7 +67,8 @@ vocabulary.
 
 - **`.catar`** — linear serialization of a directory tree (tar-like).
 - **`.castr`** — the content-addressed chunk store (a directory of
-  hash-named, xz-compressed chunks).
+  hash-named, compressed `.cacnk` chunks; default hash **SHA512/256**, default
+  compression **zstd**, with SHA-256 / xz / gzip as alternatives).
 - **`.caidx` / `.caibx`** — chunk index files (filesystem-tree / blob-image),
   listing the ordered chunk hashes that reconstruct the original; the retention
   root.

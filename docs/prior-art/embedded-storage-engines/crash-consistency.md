@@ -60,10 +60,15 @@ always a consistent state. With **quick-repair** enabled, redb saves allocator
 state per commit and runs full 2-phase commit (the `two_phase_commit` flag), so
 the primary slot is provably valid without scanning checksums.
 
-Honest caveat from redb's own design notes: even with 2-phase commit, an
-attacker with enough control to crash the process at will can leave the god byte
-pointing at an invalid slot — a threat-model corner, not a normal-operation
-risk.
+Honest caveat from redb's own design notes: the cheaper **1PC+C**
+(one-phase-commit-plus-checksum) strategy relies on a *non-cryptographic*
+checksum (XXH3). redb's design.md warns that an attacker who can control page
+flush order, induce a crash during fsync, and forge a colliding checksum could
+make a partially-committed transaction appear fully committed — so *"users who
+need to accept malicious input are encouraged to use 2PC instead."* That is the
+mitigation, not a residual hole: full **2-phase commit** does not depend on the
+checksum and is not vulnerable to this attack. A threat-model corner of the fast
+path, not a normal-operation risk.
 
 ## Torn writes and tail corruption
 
