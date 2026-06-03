@@ -42,6 +42,7 @@ Each file is independent and can be skimmed standalone.
 - [**Whanau**](whanau.md) — Sybil-proof DHT routing (Lesniewski-Laas / Kaashoek, NSDI 2010). Uses a social graph to build the DHT routing tables themselves.
 - [**BitTorrent choking + PropShare**](bittorrent.md) — Cohen's tit-for-tat (P2PECON 2003) and the auction-theoretic improvement (Levin et al., SIGCOMM 2008). The deployed-at-scale reference point. Per-connection reciprocity, *not* Sybil defense.
 - [**IPFS Bitswap**](ipfs-bitswap.md) — ledger-based reciprocity for block exchange. Closer in spirit to BitTorrent than to a reputation system; the ledger as deployed is mostly informational, not enforced.
+- [**Verifying self-reported cost**](self-reported-cost-verification.md) — BOINC / Folding@home / Gridcoin: how volunteer-computing systems score (and get gamed on) *self-measured* contribution. The home of the credit-stuffing problem the reciprocity-economy brainstorm must solve — verify, bound, and sign-inside-the-event a self-attested cost. Cross-links the brainstorm report.
 
 **Synthesis**
 - [**Open problems**](open-problems.md) — what none of the above structurally solves; the gaps Myrhiza must accept or work around.
