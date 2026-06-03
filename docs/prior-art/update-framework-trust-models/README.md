@@ -31,7 +31,7 @@ A corpus-wide grep returns **zero** occurrences of "TUF" / "Uptane" / "update fr
 | python-tuf | **7.0.0** (2026-05-18), Apache-2.0 OR MIT, CNCF reference impl | PyPI `tuf` |
 | go-tuf | legacy v0.7.0 **deprecated**; **go-tuf/v2** (ex-`rdimitrov/go-tuf-metadata`) is the maintained line | theupdateframework/go-tuf |
 | tough (Rust TUF) | AWS `awslabs/tough`, built for Bottlerocket (2019) | awslabs/tough |
-| Uptane | first release IEEE-ISTO **6100.1.0.0**, **2019-07-31** (= Standard v1.0.0); current Standard **2.1.0** (2024-06-23); two-repository (Image + Director) model | uptane.org / GitHub releases |
+| Uptane | first release IEEE-ISTO **6100.1.0.0**, **2019-07-31** (= Standard v1.0.0); current Standard **2.1.0** (2023-06-23); two-repository (Image + Director) model | uptane.org / GitHub releases |
 | FROST | **RFC 9591**, June 2024, **Informational** (IRTF/CFRG stream), authors Connolly, Komlo, Goldberg, Wood | RFC 9591 |
 | FROST academic origin | Komlo & Goldberg, **SAC 2020** (LNCS 12804, pp. 34–65); IACR ePrint 2020/852 | eprint.iacr.org |
 | frost-ed25519 (Zcash Fn) | **3.0.0** (2026-04-23), MIT OR Apache-2.0, RFC 9591-conformant, partially NCC-audited | crates.io |

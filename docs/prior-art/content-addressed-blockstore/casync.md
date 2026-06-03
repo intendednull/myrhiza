@@ -21,9 +21,13 @@ content-addressed store looks like with *no online garbage collector at all*.
 
 casync serializes a directory tree into a linear `.catar` stream (like a tar),
 then chunks that stream and stores the chunks in a **`.castr`** chunk store — a
-flat directory of files each named by the SHA-256 of its (xz-compressed)
-contents. An **index file** (`.caidx` for filesystem trees, `.caibx` for blob
-images) lists the ordered chunk hashes that reconstruct the original. So:
+flat directory of files (`.cacnk`) each named by a strong hash of its contents
+and compressed. Per the [README](https://github.com/systemd/casync), the default
+hash is **SHA512/256** (truncated SHA-512, faster on 64-bit CPUs; plain SHA-256
+is an alternative) and the default compression is **zstd** (xz or gzip
+alternatives) — *not* SHA-256/xz as casync's earliest docs implied. An **index
+file** (`.caidx` for filesystem trees, `.caibx` for blob images) lists the
+ordered chunk hashes that reconstruct the original. So:
 
 - **chunk** = content-addressed, content-defined-sized unit; the dedup atom.
 - **`.castr`** = the content-addressed store (the "blockstore").

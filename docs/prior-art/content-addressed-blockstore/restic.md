@@ -19,8 +19,13 @@ events/snapshots rather than store each whole.
 
 restic splits file data into **variable-length chunks** at boundaries chosen by
 the content itself, using a **Rabin fingerprint** rolling hash over a 64-byte
-sliding window. A new chunk boundary is declared when "the lowest 21 bits [of
-the fingerprint] are zero." Verified bounds from the
+sliding window. A new chunk boundary is declared when the low bits of the
+fingerprint are zero; the [chunker
+source](https://github.com/restic/chunker/blob/master/chunker.go) pins this at
+**20 bits** by default (`splitmask: (1 << 20) - 1, // aim to create chunks of 20
+bits or about 1MiB on average`). (restic's original 2015 CDC blog post said "21
+bits"; the shipped default is 20 — cite the source, not the blog.) Verified
+bounds from the
 [design doc](https://github.com/restic/restic/blob/master/doc/design.rst):
 
 > "Files smaller than 512 KiB are not split, Blobs are of 512 KiB to 8 MiB in
@@ -104,7 +109,8 @@ deleted (write-ordering invariant; see [concurrency-and-locking.md](concurrency-
 ## Sources
 
 - [restic design document](https://github.com/restic/restic/blob/master/doc/design.rst)
+- [restic chunker source (`chunker.go`, splitmask = 20 bits)](https://github.com/restic/chunker/blob/master/chunker.go)
 - [restic forget/prune documentation](https://restic.readthedocs.io/en/stable/060_forget.html)
-- [restic Introducing CDC blog post](https://restic.net/blog/2015-09-12/restic-foundation1-cdc/)
+- [restic Introducing CDC blog post (2015; says "21 bits", superseded by 20-bit default)](https://restic.net/blog/2015-09-12/restic-foundation1-cdc/)
 - [restic releases](https://github.com/restic/restic/releases)
 - [restic LICENSE](https://github.com/restic/restic/blob/master/LICENSE)

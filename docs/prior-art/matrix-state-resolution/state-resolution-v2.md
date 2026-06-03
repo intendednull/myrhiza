@@ -8,7 +8,7 @@
 [convergence.md](../../specs/2026-05-09-myrhiza-master-design/convergence.md)
 §4.1 tie-break is the simplified, flat cousin of. StateRes v2 (MSC1442 "State
 Resolution: Reloaded", Erik Johnston, authored 2018-07-20; shipped with **room
-version 2** via MSC1759 around Matrix 1.0, 2019-06-10)
+version 2** via MSC1759 around Matrix 1.0, 2019-06-11)
 resolves *N* conflicting state maps into one. It is a **pure, deterministic
 function** of its inputs — same property Myrhiza requires of `state-apply`.
 

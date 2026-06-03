@@ -53,7 +53,7 @@ this failure mode is *subtle, recurring, and survives multiple "fixes"*:
 
 - **Room version 1** (2014–early 2019) had a state-resolution bug that could
   reset state; **room version 2** (StateRes v2; MSC1442 "Reloaded" authored
-  2018-07-20, room version 2 shipped via MSC1759 around Matrix 1.0, 2019-06-10)
+  2018-07-20, room version 2 shipped via MSC1759 around Matrix 1.0, 2019-06-11)
   was the headline fix — and the matrix.org guide is titled around explaining it.
 - Synapse issue **#1935** "Rejected events reset the room state" — mishandling
   *rejected* events (vs *soft-failed*, see [event-dag.md](event-dag.md)) as

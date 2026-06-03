@@ -45,7 +45,7 @@ hazard.
 |---|---|---|
 | Steward | **The Matrix.org Foundation** (CIC, UK; formed 2018, Matrix 1.0 in 2019). Spec curated by the **Spec Core Team** subcommittee. **Element** (formerly New Vector) is the primary commercial sponsor + Synapse author | matrix.org/foundation |
 | Algorithm in use | **State Resolution v2** (room versions 2–11); **State Resolution v2.1** (room version 12) | spec.matrix.org |
-| StateRes v2 origin | MSC1442 "State Resolution: Reloaded", Erik Johnston, **authored 2018-07-20**; **room version 2** (via MSC1759) shipped ~Matrix 1.0, **2019-06-10** | github MSC1442/1759 |
+| StateRes v2 origin | MSC1442 "State Resolution: Reloaded", Erik Johnston, **authored 2018-07-20**; **room version 2** (via MSC1759) shipped ~Matrix 1.0, **2019-06-11** | github MSC1442/1759 |
 | Current spec | **Matrix 1.16**, released **2025-09-17**; makes **room version 12 the default** (servers SHOULD keep using v11 "for a little while") | matrix.org v1.16 blog |
 | Project Hydra disclosure | Pre-disclosure **2025-07-16**, patches **2025-08-11**, full details + blog **2025-08-14** | Hydra blog |
 | StateRes v2.1 MSCs | **MSC4297** (StateRes v2.1), **MSC4289** (privilege room creators / infinite power level), **MSC4291** (room IDs as create-event hash), **MSC4304** (room version 12 default) | Hydra blog |

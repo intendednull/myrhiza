@@ -12,8 +12,8 @@ license **AGPL-3.0-only**. Authority sits on the server — another instance of 
 trusted-middlebox paradigm.
 
 **Ownership note (2025-10-08):** Triplit was acquired by **Supabase**;
-co-founder Matt Linkous joined Supabase to lead offline-first / third-party
-integrations. Supabase states Triplit "remains open source." This is a material
+co-founder Matt Linkous joined Supabase to expand its third-party integrations.
+Supabase states Triplit "remains largely open-source." This is a material
 maturity signal — the independent-startup framing below is superseded — though it
 does not change the technical authority model documented here. See **State**.
 
@@ -74,7 +74,8 @@ authority-on-the-server is incompatible with "no trusted middlebox." See
 AGPL-3.0 client; YC W21; small team. Active 1.x releases through 2025–2026. No
 specific funding amount verified beyond "YC-backed." **Acquired by Supabase on
 2025-10-08** (verified via Supabase's own announcement); co-founder Matt Linkous
-joined Supabase, project stated to remain open source. Treat Triplit as a
+joined Supabase to expand third-party integrations, project stated to remain
+"largely open-source." Treat Triplit as a
 Supabase-owned codebase going forward, not an independent startup.
 
 ## Sources

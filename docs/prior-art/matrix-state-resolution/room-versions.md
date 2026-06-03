@@ -25,7 +25,7 @@ without forcibly migrating every existing one — a property worth weighing.
 | Version | What it introduced (state-res relevant) |
 |---|---|
 | **v1** | Original algorithm; event IDs are server-assigned and *separate* from content hash. Had the original state-reset bug. Used 2014–early 2019. |
-| **v2** | **State Resolution v2** (MSC1442 "Reloaded", authored 2018-07-20; room version 2 shipped via MSC1759 around Matrix 1.0, 2019-06-10). Auth difference + power ordering + mainline ordering. The headline fix for the v1 reset bug. |
+| **v2** | **State Resolution v2** (MSC1442 "Reloaded", authored 2018-07-20; room version 2 shipped via MSC1759 around Matrix 1.0, 2019-06-11). Auth difference + power ordering + mainline ordering. The headline fix for the v1 reset bug. |
 | **v3** | Event IDs become the **reference hash** of the event (content-addressed), removing the server-assigned ID. Hardens against ID forgery. |
 | **v4** | URL-safe base64 for event IDs (cosmetic). |
 | **v5** | Enforced signing-key validity periods. (Matrix HQ, where issue #6774's reset occurred, was a v5 room — resets survived all of v2–v5.) |

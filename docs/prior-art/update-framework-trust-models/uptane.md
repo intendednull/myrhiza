@@ -8,7 +8,7 @@ Uptane is TUF adapted for **over-the-air software updates to ground vehicles** â
 
 ## Standardization status
 
-- **IEEE-ISTO 6100.1.0.0: Uptane Standard for Design and Implementation**, the first release, came out **2019-07-31** (= Standard v1.0.0). The standard has since iterated through 1.0.1, 1.1.0, 1.2.0, and 2.0.0; the **current version is 2.1.0** (released 2024-06-23, "primarily clarity and wording improvements"). Stewardship moved to the Linux Foundation's Joint Development Foundation (from v1.1.0 onward). The two-repository model and role structure described below are stable across all versions.
+- **IEEE-ISTO 6100.1.0.0: Uptane Standard for Design and Implementation**, the first release, came out **2019-07-31** (= Standard v1.0.0). The standard has since iterated through 1.0.1, 1.1.0, 1.2.0, and 2.0.0; the **current version is 2.1.0** (released 2023-06-23, "primarily clarity and wording improvements"). Stewardship moved to the Linux Foundation's Joint Development Foundation (from v1.1.0 onward). The two-repository model and role structure described below are stable across all versions.
 - Sits alongside the automotive software-update governance standards: **ISO 24089:2023** (Road vehicles â€” Software update engineering) and **ISO/SAE 21434** (cybersecurity engineering). Uptane is the *technical* update-security framework; ISO 24089 is the *process* standard it slots under. (Uptane is referenced by, not identical to, these ISO standards.)
 
 An update-security design that hardened into an IEEE/ISTO standard *and* underpins ISO-process-compliant automotive practice is evidence the TUF role model survives formalization and field deployment, not just academic publication.
