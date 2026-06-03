@@ -4,7 +4,7 @@
 
 # Lessons for Myrhiza — Sybil resistance + distributed maintenance
 
-Synthesis across [`bar-gossip.md`](bar-gossip.md), [`eigentrust.md`](eigentrust.md), [`sybilguard-sybillimit.md`](sybilguard-sybillimit.md), [`whanau.md`](whanau.md), [`bittorrent.md`](bittorrent.md), [`ipfs-bitswap.md`](ipfs-bitswap.md), [`algorithms.md`](algorithms.md), [`taxonomy.md`](taxonomy.md). Format: validates / avoid / borrow.
+Synthesis across [`bar-gossip.md`](bar-gossip.md), [`eigentrust.md`](eigentrust.md), [`sybilguard-sybillimit.md`](sybilguard-sybillimit.md), [`whanau.md`](whanau.md), [`bittorrent.md`](bittorrent.md), [`ipfs-bitswap.md`](ipfs-bitswap.md), [`self-reported-cost-verification.md`](self-reported-cost-verification.md), [`algorithms.md`](algorithms.md), [`taxonomy.md`](taxonomy.md). Format: validates / avoid / borrow.
 
 ## Validates
 
@@ -18,6 +18,10 @@ Synthesis across [`bar-gossip.md`](bar-gossip.md), [`eigentrust.md`](eigentrust.
 
 5. **Free-riding is the dominant historical failure mode.** Adar & Huberman (2000) found ~70% of Gnutella users contributed nothing. Every subsequent P2P system has had to address this. Designing Myrhiza assuming honest peers (no enforcement) replays the Gnutella failure. The lesson: ship enforcement primitives from v1, even if simple (BitTorrent-shaped). *Source: [`bittorrent.md`](bittorrent.md), [`ipfs-bitswap.md`](ipfs-bitswap.md).*
 
+6. **Self-reported cost is only trustworthy after re-execution, outlier-rejection, and bounding against history.** BOINC's twenty-year credit arms race converged on exactly this: replication + quorum cross-check ("top and bottom claimed credits dropped, average the rest"), claimed-vs-granted separation, and an anomaly cap (~10× the running average — the wiki's own hedged figure). For Myrhiza this validates re-running a candidate event through the existing `state-apply` dry-run as a verification quorum, and bounding any single self-favorable claim against the relationship's running standing. *Source: [`self-reported-cost-verification.md`](self-reported-cost-verification.md).*
+
+7. **"Normalize hardware variance out" vs "keep it in" is an objective choice, not an error.** BOINC's cobblestone deliberately *cancels* hardware differences so the same science earns the same credit on any box — the right call for a fair scientific scoreboard. The reciprocity model deliberately *keeps* hardware variance *in* (a peer's own scarcity is the cost signal that produces gains from trade). Cite BOINC as the canonical "normalize-out" pole so the "keep-in" decision is made consciously, not by accident. *Source: [`self-reported-cost-verification.md`](self-reported-cost-verification.md), [`reports/2026-05-29-reciprocity-economy-brainstorm/`](../../reports/2026-05-29-reciprocity-economy-brainstorm/README.md).*
+
 ## Avoid
 
 | Pitfall | Source | Mitigation |
@@ -30,6 +34,7 @@ Synthesis across [`bar-gossip.md`](bar-gossip.md), [`eigentrust.md`](eigentrust.
 | **Reputation systems are fragile.** Reputation can be gamed: collusion attacks, whitewashing (new identity for low-rep peer), front-running. Every reputation system has known attacks. | [`eigentrust.md`](eigentrust.md), [`taxonomy.md`](taxonomy.md) | Treat reputation as advisory, not authoritative. Authority decisions (cap-grants, kicks) belong to app-state-apply, not to a reputation aggregator. |
 | **Token-incentivized maintenance.** Filecoin and similar token-economies pay peers for work. Myrhiza is a peer-runtime, not a market. Adding a token shifts the project's center of gravity to investor incentives and introduces speculation-as-a-feature. | [`taxonomy.md`](taxonomy.md) | Don't add a token. Use intrinsic-motivation maintenance (peers run maintenance because they want their app to work) + reciprocity enforcement (peers who don't help don't get served). |
 | **Assuming the permission graph cannot be attacked.** SybilGuard's "sparse attack edges" assumption can be violated if the attacker compromises a high-trust peer. The permission graph is a strong signal *while* the graph is honest; recovery from a compromise is a separate problem. | [`sybilguard-sybillimit.md`](sybilguard-sybillimit.md) | Spec authors should document the permission-graph trust model explicitly. Account for compromise scenarios. Cross-ref MLS for analogous group-key compromise (PCS). |
+| **A spendable cost claim whose signature sits *outside* the hashed/committed event.** Gridcoin's DPOR paid out real token value on a claim whose signature "is not part of the Merkle tree" — so anyone could copy a stranger's public BOINC credentials and redirect the payout, minting 72.4 GRC for zero work. *(Figures verified against the discoverers' RUB writeup.)* | [`self-reported-cost-verification.md`](self-reported-cost-verification.md) | Sign any cost claim that becomes standing *inside* the hashed event, bound to the producing peer; never value standing off unbounded, replay-able external history. |
 
 ## Borrow
 
