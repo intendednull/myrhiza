@@ -82,6 +82,7 @@ async fn iroh_two_apps_coexist_no_event_crossing() {
         helpers::counter_handle(),
         peer_key_counter,
         Some(AuthorKeypair::deterministic(501)),
+        None, // B-13: propose handle (None = no propose component)
         cfg.clone(),
         vec![], // bootstrap — same-process; no peer to dial.,
         vec![],
@@ -97,6 +98,7 @@ async fn iroh_two_apps_coexist_no_event_crossing() {
         helpers::echo_handle(),
         peer_key_echo,
         Some(AuthorKeypair::deterministic(502)),
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![], // bootstrap — same-process; no peer to dial.,
         vec![],

@@ -41,6 +41,7 @@ use crate::drift::{
 use crate::identity::{AuthorKeypair, PeerKeypair};
 use crate::pending::{PendingBuffer, PendingCfg};
 use crate::state_apply::{ApplyError, ApplyOutcome, StateApplyHandle};
+use crate::state_propose::{ProposeError, StateProposeHandle};
 
 /// Per-topic runtime configuration knobs.
 ///
@@ -143,11 +144,41 @@ pub enum RuntimeError {
     /// keypair.
     #[error("runtime is read-only (no author key configured)")]
     ReadOnly,
+
+    /// `propose_and_author` issued on a runtime started without a
+    /// state-propose component (`propose: None`). Per B-13 spec §4.4.
+    #[error("runtime has no propose component installed")]
+    NoProposeComponent,
+
+    /// The state-propose component rejected the intent
+    /// (`ProposeError::Rejected`). Distinct from `PreCheckRejected`: this
+    /// is the app's own propose logic declining to produce a payload, not
+    /// the kernel's state-apply dry-run rejecting the produced payload.
+    /// Per B-13 spec §4.4.
+    #[error("propose rejected: {0}")]
+    ProposeRejected(String),
 }
 
 impl From<bincode::Error> for RuntimeError {
     fn from(e: bincode::Error) -> Self {
         RuntimeError::Canonical(e.to_string())
+    }
+}
+
+impl From<ProposeError> for RuntimeError {
+    /// Map a state-propose failure into the runtime error surface (B-13
+    /// spec §4.4). The component's explicit `Err(msg)`
+    /// (`ProposeError::Rejected`) becomes [`RuntimeError::ProposeRejected`]
+    /// carrying `msg` verbatim — not the `Display` string, which would
+    /// double-prefix "propose rejected:". A backend trap / fuel exhaustion
+    /// (`ProposeError::Backend`) has no dedicated runtime variant; it is
+    /// surfaced through the same `ProposeRejected` channel with its
+    /// diagnostic string (no event is authored either way).
+    fn from(e: ProposeError) -> Self {
+        match e {
+            ProposeError::Rejected(msg) => RuntimeError::ProposeRejected(msg),
+            ProposeError::Backend(b) => RuntimeError::ProposeRejected(b.to_string()),
+        }
     }
 }
 
@@ -339,6 +370,19 @@ pub enum AuthorCommand {
         deps: BTreeSet<EventHash>,
         /// One-shot reply channel: hash of the published event, or
         /// the error that aborted authoring.
+        reply: oneshot::Sender<Result<EventHash, RuntimeError>>,
+    },
+
+    /// Drive the installed state-propose component on `intent`, then
+    /// author + publish the produced payload through the existing
+    /// [`Runtime::author`] engine (sign + pre-check + insert + broadcast).
+    /// Per B-13 spec §4.1. The private key stays kernel-side; propose
+    /// never signs.
+    ProposeAndAuthor {
+        /// App-internal intent bytes (propose-component-defined schema).
+        intent: Vec<u8>,
+        /// One-shot reply channel: hash of the published event, or the
+        /// error that aborted propose / authoring.
         reply: oneshot::Sender<Result<EventHash, RuntimeError>>,
     },
 
@@ -620,6 +664,33 @@ impl RuntimeHandle {
             .copied()
             .collect()
     }
+
+    /// Drive the runtime's state-propose component on `intent`, author the
+    /// produced payload, and return the published event's hash. Per B-13
+    /// spec §4.1 / §4.2.
+    ///
+    /// Sends [`AuthorCommand::ProposeAndAuthor`] into the runtime task and
+    /// awaits the one-shot reply — the same mpsc+oneshot round-trip shape
+    /// as the author path. The runtime signs with its single installed
+    /// `author_key`; propose never sees the key.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError::ReadOnly`] (no author key),
+    /// [`RuntimeError::NoProposeComponent`] (no propose component),
+    /// [`RuntimeError::ProposeRejected`] (propose declined / trapped),
+    /// [`RuntimeError::PreCheckRejected`] (produced payload failed the
+    /// state-apply dry-run), or any other error [`Runtime::author`]
+    /// surfaces. Returns [`RuntimeError::Canonical`] if the runtime task
+    /// has shut down (command channel closed or reply dropped).
+    pub async fn propose_and_author(&self, intent: Vec<u8>) -> Result<EventHash, RuntimeError> {
+        let (reply, rx) = oneshot::channel();
+        self.author_tx
+            .send(AuthorCommand::ProposeAndAuthor { intent, reply })
+            .await
+            .map_err(|e| RuntimeError::Canonical(format!("runtime task closed: {e}")))?;
+        rx.await
+            .map_err(|e| RuntimeError::Canonical(format!("runtime reply dropped: {e}")))?
+    }
 }
 
 /// Bounded count of peers tracked per author in the
@@ -675,6 +746,11 @@ pub struct Runtime {
     pending: PendingBuffer,
     /// State-apply ABI handle.
     handle: StateApplyHandle,
+    /// Optional state-propose ABI handle. `Some` when the embedder
+    /// installed a propose component for this app, enabling
+    /// [`Self::propose_and_author`]; `None` for runtimes that only apply
+    /// (consume) events. Per B-13 spec §4.2.
+    propose: Option<StateProposeHandle>,
     /// Latest replayed state bytes.
     state: Vec<u8>,
     /// Cached topo order corresponding to `self.state`. Per
@@ -910,6 +986,7 @@ impl Runtime {
         handle: StateApplyHandle,
         peer_key: PeerKeypair,
         author_key: Option<AuthorKeypair>,
+        propose: Option<StateProposeHandle>,
         cfg: RuntimeCfg,
         bootstrap: Vec<PeerPubkey>,
         installed_authors: Vec<AuthorPubkey>,
@@ -989,6 +1066,7 @@ impl Runtime {
             dag,
             pending,
             handle,
+            propose,
             state: Vec::new(),
             last_topo_order: Vec::new(),
             peer_key,
@@ -1083,6 +1161,13 @@ impl Runtime {
                         let r = self.author(payload, deps).await;
                         // oneshot send fails only if the caller dropped
                         // the receiver; nothing to do in that case.
+                        let _ = reply.send(r);
+                    }
+                    // B-13 §4.1: run the propose component on the intent,
+                    // then author the produced payload. Mirrors the Author
+                    // arm above (same oneshot-drop tolerance).
+                    Some(AuthorCommand::ProposeAndAuthor { intent, reply }) => {
+                        let r = self.propose_and_author(intent).await;
                         let _ = reply.send(r);
                     }
                     Some(AuthorCommand::Shutdown) | None => return Ok(()),
@@ -2580,6 +2665,52 @@ impl Runtime {
         Ok(event.wire_hash())
     }
 
+    /// Drive the installed state-propose component on `intent`, then
+    /// author the produced payload through [`Self::author`]. Per B-13
+    /// spec §4.1.
+    ///
+    /// The flow is `propose → deps → author`: the propose component turns
+    /// the app-internal `intent` into a candidate payload, and the
+    /// existing [`Self::author`] engine signs, pre-checks (state-apply
+    /// dry-run), inserts, replays, and broadcasts it. The private key
+    /// never reaches propose — the kernel signs on its behalf (spec §2 /
+    /// §6). A buggy or malicious propose cannot get an invalid event
+    /// applied: `author`'s pre-check still gates (spec §4.4).
+    ///
+    /// # Errors
+    /// - [`RuntimeError::ReadOnly`] when no author keypair is configured.
+    ///   Checked *before* running propose (short-circuit — don't spend a
+    ///   WASM call we can't act on; spec §4.4).
+    /// - [`RuntimeError::NoProposeComponent`] when no propose component is
+    ///   installed (`propose: None`).
+    /// - [`RuntimeError::ProposeRejected`] when the propose component
+    ///   declines the intent (`ProposeError::Rejected`) or its backend
+    ///   traps (`ProposeError::Backend`).
+    /// - Anything [`Self::author`] can return (e.g.
+    ///   [`RuntimeError::PreCheckRejected`]) once the payload is produced.
+    async fn propose_and_author(&mut self, intent: Vec<u8>) -> Result<EventHash, RuntimeError> {
+        // Short-circuit a read-only runtime before spending a propose
+        // call we could not act on (spec §4.4).
+        if self.author_key.is_none() {
+            return Err(RuntimeError::ReadOnly);
+        }
+        let propose = self
+            .propose
+            .as_mut()
+            .ok_or(RuntimeError::NoProposeComponent)?;
+        let payload = propose.propose(&self.state, &intent)?;
+
+        // deps = current applied frontier. No global DAG frontier accessor
+        // exists yet (dag.rs exposes per-author heads via `author_heads`,
+        // not a global sink set); the per-author `prev`/`seq` chain computed
+        // inside `author()` already orders same-author events for
+        // correctness. Cross-author `deps` is a convergence-speed
+        // optimization only (spec §4.3).
+        // B-13: cross-author deps optimization — frontier accessor TODO.
+        let deps = BTreeSet::new();
+        self.author(payload, deps).await
+    }
+
     /// Fast-path-then-fallback wrapper for [`Self::replay_full`]. Per
     /// plan-B-2.1 spec §3.2.
     ///
@@ -3352,6 +3483,7 @@ mod tests {
             dag,
             pending,
             handle: StateApplyHandle::tombstone(),
+            propose: None,
             state: Vec::new(),
             last_topo_order: Vec::new(),
             peer_key: PeerKeypair::deterministic(1),

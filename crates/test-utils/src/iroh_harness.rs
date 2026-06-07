@@ -268,6 +268,7 @@ impl IrohHarness {
             handle,
             peer_key,
             author_key,
+            None, // B-13: propose handle (None = no propose component)
             cfg,
             bootstrap,
             installed_authors,

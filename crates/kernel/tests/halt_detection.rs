@@ -66,6 +66,7 @@ async fn spawn_peer_runtime(
         helpers::counter_handle(),
         peer_key,
         None, // read-only — no author key
+        None, // B-13: propose handle (None = no propose component)
         halt_cfg(threshold),
         vec![],
         vec![],
