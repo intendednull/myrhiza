@@ -217,6 +217,7 @@ async fn coexistence_two_topics_no_event_crossing() {
         helpers::counter_handle(),
         peer_key_1,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(1)),
+        None, // B-13: propose handle (None = no propose component)
         cfg.clone(),
         vec![],
         vec![],
@@ -234,6 +235,7 @@ async fn coexistence_two_topics_no_event_crossing() {
         helpers::counter_handle(),
         peer_key_2,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(2)),
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],
@@ -567,6 +569,7 @@ async fn pending_event_triggers_heads_summary_nudge_when_index_empty() {
         helpers::counter_handle(),
         peer_key_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],
@@ -719,6 +722,7 @@ async fn equivocation_via_membus_surfaces_in_peer_warnings() {
         helpers::counter_handle(),
         peer_key_b2,
         None,
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],
@@ -933,6 +937,7 @@ async fn dropped_at_apply_records_rejected_events() {
         helpers::pre_check_rejector_handle(),
         peer_key_b3,
         None,
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],

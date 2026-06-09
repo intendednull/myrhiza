@@ -258,6 +258,7 @@ async fn two_apps_coexist_no_event_crossing() {
         helpers::counter_handle(),
         peer_key_for_counter,
         Some(AuthorKeypair::deterministic(501)), // seed MUST match kp_counter_author above.
+        None, // B-13: propose handle (None = no propose component)
         cfg.clone(),
         vec![],
         vec![],
@@ -277,6 +278,7 @@ async fn two_apps_coexist_no_event_crossing() {
         helpers::echo_handle(),
         peer_key_for_echo,
         Some(AuthorKeypair::deterministic(502)), // seed MUST match kp_echo_author above.
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],
@@ -577,6 +579,7 @@ async fn poll_and_counter_coexist_no_event_crossing() {
         helpers::counter_handle(),
         peer_key_for_counter,
         Some(AuthorKeypair::deterministic(501)), // seed MUST match kp_counter_author above.
+        None, // B-13: propose handle (None = no propose component)
         cfg.clone(),
         vec![],
         vec![],
@@ -596,6 +599,7 @@ async fn poll_and_counter_coexist_no_event_crossing() {
         helpers::poll_handle(),
         peer_key_for_poll,
         Some(AuthorKeypair::deterministic(503)), // seed MUST match kp_poll_author above.
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],

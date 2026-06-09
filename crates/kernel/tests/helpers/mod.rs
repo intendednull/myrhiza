@@ -21,10 +21,10 @@ use std::time::Duration;
 use myrhiza_backend::{Backend, ComponentInstance};
 use myrhiza_kernel::pending::PendingCfg;
 use myrhiza_kernel::runtime::RuntimeCfg;
-use myrhiza_kernel::{BundleAddress, StateApplyHandle, install};
+use myrhiza_kernel::{BundleAddress, StateApplyHandle, StateProposeHandle, install};
 use myrhiza_test_utils::bundle::{
-    TestBundle, build_signed_counter_bundle, build_signed_echo_bundle, build_signed_poll_bundle,
-    write_bundle,
+    TestBundle, build_signed_counter_bundle, build_signed_counter_bundle_three_components,
+    build_signed_echo_bundle, build_signed_poll_bundle, write_bundle,
 };
 use myrhiza_test_utils::manifest::{
     deterministic_signing_key, helpers_only_state_apply_manifest, sign_manifest,
@@ -83,6 +83,38 @@ pub fn fast_cfg(heads_summary_tick: Duration) -> RuntimeCfg {
 pub fn counter_handle() -> StateApplyHandle {
     let inner = counter_component_instance();
     StateApplyHandle::new(inner)
+}
+
+/// Install + instantiate the counter-state-propose fixture and return a
+/// fresh `StateProposeHandle`. Each call returns an independent wasmtime
+/// instance with its own Store.
+///
+/// B-13: the propose twin of [`counter_handle`]. Mirrors that helper but
+/// loads the three-component counter bundle (state-apply + state-propose +
+/// interaction) and instantiates the `state-propose` slot via
+/// `WasmtimeBackend::instantiate_state_propose`. The runtime drives this
+/// through `propose_and_author`; the produced payload (8-byte BE i64
+/// delta) is the same shape `counter-state-apply` consumes as a
+/// non-genesis increment.
+///
+/// # Panics
+/// Panics if the bundle is missing its `state-propose` slot — which only
+/// occurs if `build_signed_counter_bundle_three_components` or the
+/// fixture build regressed (the counter bundle always declares all three
+/// components).
+#[must_use]
+pub fn counter_propose_handle() -> StateProposeHandle {
+    let (_bundle, addr) = build_signed_counter_bundle_three_components();
+    let loaded = install::load(&addr).expect("install::load");
+    let propose_bytes = loaded
+        .state_propose_bytes
+        .as_deref()
+        .expect("counter bundle must carry a state-propose component");
+    let backend = WasmtimeBackend::new().expect("WasmtimeBackend::new");
+    let instance = backend
+        .instantiate_state_propose(propose_bytes, &loaded.manifest)
+        .expect("instantiate_state_propose");
+    StateProposeHandle::new(instance)
 }
 
 /// Install + instantiate the echo-state-apply fixture and return a

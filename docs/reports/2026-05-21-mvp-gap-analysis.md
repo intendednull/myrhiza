@@ -71,6 +71,27 @@ iroh-gossip (no longer `#[ignore]`d). The *stale-network attack* mitigation in
 is therefore **closed**. See [spec B-12](../specs/2026-05-29-b-12-stale-network-backfill-design.md)
 (§13 finding, §14 corrected design) + [plan B-12 (corrected transport)](../plans/2026-05-29-b-12-direct-stream-pull.md).
 
+Update 2026-06-03 (B-13 — kernel-mediated authoring): B-13 lands the
+**produce-events half** of the gap-analysis M1 milestone (app-facing I/O surface).
+Apps now emit events through the runtime via their own real WASM `state-propose`:
+`Runtime` holds an optional `StateProposeHandle`, and a new
+`AuthorCommand::ProposeAndAuthor { intent, reply }` /
+`RuntimeHandle::propose_and_author(intent)` runs `propose` against current state
+then reuses `Runtime::author` **verbatim** (sign + pre-check + DAG insert + replay
++ broadcast). The signing key stays kernel-side — this is **explicitly NOT**
+`host.author-event` (`architecture.md §3.5`: propose never sees a key; the
+`crates/wasmtime-backend/src/gating.rs` invariant rejecting `author-event` for
+`StatePropose` stays green). Purely additive `crates/kernel` Rust: no new host
+import, no WIT change, no `GossipMessage`/wire change. New
+`RuntimeError::{NoProposeComponent, ProposeRejected}`; a buggy/malicious propose
+still cannot bypass the kernel's `state-apply` dry-run. Acceptance:
+`crates/kernel/tests/propose_author.rs` (MemNetwork tier) +
+`crates/kernel/tests/iroh_propose_author.rs` (one real-iroh smoke test). See
+[spec B-13](../specs/2026-06-03-b-13-kernel-mediated-authoring-design.md) +
+[plan B-13](../plans/2026-06-03-b-13-kernel-mediated-authoring.md). The
+**consume** half — `host.subscribe` + the kernel→interaction push bridge (M1b) —
+remains open.
+
 ## v1 acceptance criteria status
 
 Cross-checking against [mvp.md §15.1](../specs/2026-05-09-myrhiza-master-design/mvp.md):

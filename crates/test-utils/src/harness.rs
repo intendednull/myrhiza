@@ -427,6 +427,7 @@ impl InProcessHarness {
             handle,
             peer_key,
             author_key,
+            None, // B-13: propose handle (None = no propose component)
             cfg,
             vec![],
             installed_authors,

@@ -140,6 +140,7 @@ async fn index_populated_by_heads_summary_receipt() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(101)),
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -177,6 +178,7 @@ async fn index_populated_by_heads_summary_receipt() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -289,6 +291,7 @@ async fn index_move_to_front_on_repeated_observation() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         RuntimeCfg {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
@@ -436,6 +439,7 @@ async fn index_caps_at_8_peers_per_author() {
         helpers::counter_handle(),
         kp_c,
         None,
+        None, // B-13: propose handle (None = no propose component)
         RuntimeCfg {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
@@ -567,6 +571,7 @@ async fn pending_event_with_known_author_uses_direct_stream() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(401)),
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -611,6 +616,7 @@ async fn pending_event_with_known_author_uses_direct_stream() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -674,6 +680,7 @@ async fn pending_event_with_unknown_author_publishes_heads_summary_nudge() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         RuntimeCfg {
             // Very long tick so no HeadsSummary from B is sent during the test.
             heads_summary_tick: Duration::from_secs(3600),
@@ -784,6 +791,7 @@ async fn invalid_chain_uses_direct_stream_when_index_populated() {
         helpers::counter_handle(),
         kp_a_for_runtime,
         Some(AuthorKeypair::deterministic(601)),
+        None, // B-13: propose handle (None = no propose component)
         // Long tick — A should not interfere with B's index via its own
         // HeadsSummary during the test; B's index is seeded manually below.
         RuntimeCfg {
@@ -816,6 +824,7 @@ async fn invalid_chain_uses_direct_stream_when_index_populated() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         RuntimeCfg {
             heads_summary_tick: Duration::from_secs(3600),
             ..RuntimeCfg::default()
