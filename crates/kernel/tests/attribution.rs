@@ -232,6 +232,7 @@ async fn runtime_drops_heads_summary_with_bad_signature() {
         helpers::counter_handle(),
         peer_kp_b_t7,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
         vec![],
         vec![],
@@ -322,6 +323,7 @@ async fn runtime_drops_drift_with_bad_signature() {
         helpers::counter_handle(),
         peer_kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
         vec![],
         vec![],
@@ -430,6 +432,7 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         helpers::counter_handle(),
         kp_a_for_runtime,
         Some(myrhiza_kernel::identity::AuthorKeypair::deterministic(15)),
+        None, // B-13: propose handle (None = no propose component)
         cfg_a,
         vec![],
         vec![],
@@ -448,6 +451,7 @@ async fn runtime_accepts_heads_summary_with_good_signature() {
         helpers::counter_handle(),
         kp_for_b_runtime,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::BACKGROUND_QUIET_TICK),
         vec![],
         vec![],
@@ -536,6 +540,7 @@ async fn runtime_loopback_filter_skips_own_heads_summary_verify() {
         helpers::counter_handle(),
         peer_kp_t10,
         None,
+        None, // B-13: propose handle (None = no propose component)
         cfg,
         vec![],
         vec![],

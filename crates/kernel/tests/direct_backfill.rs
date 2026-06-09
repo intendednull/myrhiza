@@ -113,6 +113,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(101)),
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -131,6 +132,7 @@ async fn direct_backfill_two_peer_convergence_over_mem() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -219,6 +221,7 @@ async fn direct_backfill_target_peer_unreachable_logs_warning() {
         helpers::counter_handle(),
         kp_b,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -299,6 +302,7 @@ async fn direct_backfill_handler_topic_validation_drops_wrong_topic() {
         helpers::counter_handle(),
         kp_a,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -396,6 +400,10 @@ async fn author_chain(
 /// equals the digest produced after applying BOTH chains' events
 /// proves both backfill paths landed events.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "three-peer concurrent-backfill scenario; B-13 added a None propose arg to each Runtime::start literal, nudging it one line over"
+)]
 async fn direct_backfill_multiple_concurrent_backfills_converge() {
     let bus = MemBus::new(256);
     let t = topic();
@@ -413,6 +421,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         helpers::counter_handle(),
         kp_a,
         Some(AuthorKeypair::deterministic(601)),
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -434,6 +443,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         helpers::counter_handle(),
         kp_b,
         Some(AuthorKeypair::deterministic(602)),
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
@@ -452,6 +462,7 @@ async fn direct_backfill_multiple_concurrent_backfills_converge() {
         helpers::counter_handle(),
         kp_c,
         None,
+        None, // B-13: propose handle (None = no propose component)
         helpers::fast_cfg(helpers::FASTER_GOSSIP_TICK),
         vec![],
         vec![],
